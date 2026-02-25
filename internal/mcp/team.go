@@ -12,9 +12,11 @@ import (
 
 func (s *PortainerMCPServer) AddTeamFeatures() {
 	s.addToolIfExists(ToolListTeams, s.HandleGetTeams())
+	s.addToolIfExists(ToolGetTeam, s.HandleGetTeam())
 
 	if !s.readOnly {
 		s.addToolIfExists(ToolCreateTeam, s.HandleCreateTeam())
+		s.addToolIfExists(ToolDeleteTeam, s.HandleDeleteTeam())
 		s.addToolIfExists(ToolUpdateTeamName, s.HandleUpdateTeamName())
 		s.addToolIfExists(ToolUpdateTeamMembers, s.HandleUpdateTeamMembers())
 	}
@@ -51,6 +53,47 @@ func (s *PortainerMCPServer) HandleGetTeams() server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleGetTeam() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		id, err := parser.GetInt("id", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+
+		team, err := s.cli.GetTeam(id)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to get team", err), nil
+		}
+
+		data, err := json.Marshal(team)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to marshal team", err), nil
+		}
+
+		return mcp.NewToolResultText(string(data)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleDeleteTeam() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		id, err := parser.GetInt("id", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+
+		err = s.cli.DeleteTeam(id)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to delete team", err), nil
+		}
+
+		return mcp.NewToolResultText("Team deleted successfully"), nil
 	}
 }
 

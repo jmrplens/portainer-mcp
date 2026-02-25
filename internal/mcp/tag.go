@@ -15,6 +15,7 @@ func (s *PortainerMCPServer) AddTagFeatures() {
 
 	if !s.readOnly {
 		s.addToolIfExists(ToolCreateEnvironmentTag, s.HandleCreateEnvironmentTag())
+		s.addToolIfExists(ToolDeleteEnvironmentTag, s.HandleDeleteEnvironmentTag())
 	}
 }
 
@@ -49,5 +50,23 @@ func (s *PortainerMCPServer) HandleCreateEnvironmentTag() server.ToolHandlerFunc
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Environment tag created successfully with ID: %d", id)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleDeleteEnvironmentTag() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		id, err := parser.GetInt("id", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+
+		err = s.cli.DeleteEnvironmentTag(id)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to delete environment tag", err), nil
+		}
+
+		return mcp.NewToolResultText("Environment tag deleted successfully"), nil
 	}
 }

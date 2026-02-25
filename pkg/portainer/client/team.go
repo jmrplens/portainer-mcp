@@ -31,6 +31,44 @@ func (c *PortainerClient) GetTeams() ([]models.Team, error) {
 	return teams, nil
 }
 
+// GetTeam retrieves a single team by ID from the Portainer server.
+//
+// Parameters:
+//   - id: The ID of the team to retrieve
+//
+// Returns:
+//   - A Team object containing team information
+//   - An error if the operation fails
+func (c *PortainerClient) GetTeam(id int) (models.Team, error) {
+	portainerTeam, err := c.cli.GetTeam(int64(id))
+	if err != nil {
+		return models.Team{}, fmt.Errorf("failed to get team: %w", err)
+	}
+
+	memberships, err := c.cli.ListTeamMemberships()
+	if err != nil {
+		return models.Team{}, fmt.Errorf("failed to list team memberships: %w", err)
+	}
+
+	return models.ConvertToTeam(portainerTeam, memberships), nil
+}
+
+// DeleteTeam deletes a team from the Portainer server.
+//
+// Parameters:
+//   - id: The ID of the team to delete
+//
+// Returns:
+//   - An error if the operation fails
+func (c *PortainerClient) DeleteTeam(id int) error {
+	err := c.cli.DeleteTeam(int64(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete team: %w", err)
+	}
+
+	return nil
+}
+
 // UpdateTeamName updates the name of a team.
 //
 // Parameters:

@@ -473,6 +473,19 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
+  - name: deleteEnvironmentTag
+    description: Delete an environment tag by ID
+    parameters:
+      - name: id
+        description: The ID of the environment tag to delete
+        type: number
+        required: true
+    annotations:
+      title: Delete Environment Tag
+      readOnlyHint: false
+      destructiveHint: true
+      idempotentHint: true
+      openWorldHint: false
   ## Teams
   ## ------------------------------------------------------------
   - name: createTeam
@@ -494,6 +507,32 @@ tools:
       title: List Teams
       readOnlyHint: true
       destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: getTeam
+    description: Get details of a specific team by ID
+    parameters:
+      - name: id
+        description: The ID of the team to retrieve
+        type: number
+        required: true
+    annotations:
+      title: Get Team
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: deleteTeam
+    description: Delete a team by ID
+    parameters:
+      - name: id
+        description: The ID of the team to delete
+        type: number
+        required: true
+    annotations:
+      title: Delete Team
+      readOnlyHint: false
+      destructiveHint: true
       idempotentHint: true
       openWorldHint: false
   - name: updateTeamName
@@ -546,6 +585,57 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
+  - name: getUser
+    description: Get details of a specific user by ID
+    parameters:
+      - name: id
+        description: The ID of the user to retrieve
+        type: number
+        required: true
+    annotations:
+      title: Get User
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: createUser
+    description: Create a new user
+    parameters:
+      - name: username
+        description: The username of the new user
+        type: string
+        required: true
+      - name: password
+        description: The password of the new user
+        type: string
+        required: true
+      - name: role
+        description: The role of the user. Can be admin, user or edge_admin
+        type: string
+        required: true
+        enum:
+          - admin
+          - user
+          - edge_admin
+    annotations:
+      title: Create User
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: false
+      openWorldHint: false
+  - name: deleteUser
+    description: Delete a user by ID
+    parameters:
+      - name: id
+        description: The ID of the user to delete
+        type: number
+        required: true
+    annotations:
+      title: Delete User
+      readOnlyHint: false
+      destructiveHint: true
+      idempotentHint: true
+      openWorldHint: false
   - name: updateUserRole
     description: Update an existing user
     parameters:
@@ -564,6 +654,17 @@ tools:
     annotations:
       title: Update User Role
       readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+
+  ## System
+  ## ------------------------------------------------------------
+  - name: getSystemStatus
+    description: Get the system status of the Portainer instance, including version and instance ID
+    annotations:
+      title: Get System Status
+      readOnlyHint: true
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false

@@ -27,15 +27,22 @@ type PortainerAPIClient interface {
 	GetSettings() (*apimodels.PortainereeSettings, error)
 	ListTags() ([]*apimodels.PortainerTag, error)
 	CreateTag(name string) (int64, error)
+	DeleteTag(id int64) error
 	ListTeams() ([]*apimodels.PortainerTeam, error)
+	GetTeam(id int64) (*apimodels.PortainerTeam, error)
 	ListTeamMemberships() ([]*apimodels.PortainerTeamMembership, error)
 	CreateTeam(name string) (int64, error)
 	UpdateTeamName(id int, name string) error
+	DeleteTeam(id int64) error
 	DeleteTeamMembership(id int) error
 	CreateTeamMembership(teamId int, userId int) error
 	ListUsers() ([]*apimodels.PortainereeUser, error)
+	CreateUser(username, password string, role int64) (int64, error)
+	GetUser(id int) (*apimodels.PortainereeUser, error)
+	DeleteUser(id int64) error
 	UpdateUserRole(id int, role int64) error
 	GetVersion() (string, error)
+	GetSystemStatus() (*apimodels.GithubComPortainerPortainerEeAPIHTTPHandlerSystemStatus, error)
 	ProxyDockerRequest(environmentId int, opts client.ProxyRequestOptions) (*http.Response, error)
 	ProxyKubernetesRequest(environmentId int, opts client.ProxyRequestOptions) (*http.Response, error)
 }
@@ -82,6 +89,6 @@ func NewPortainerClient(serverURL string, token string, opts ...ClientOption) *P
 	}
 
 	return &PortainerClient{
-		cli: client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(options.skipTLSVerify)),
+		cli: newPortainerAPIAdapter(serverURL, token, options.skipTLSVerify),
 	}
 }

@@ -182,6 +182,12 @@ func (m *MockPortainerAPI) CreateTag(name string) (int64, error) {
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// DeleteTag mocks the DeleteTag method
+func (m *MockPortainerAPI) DeleteTag(id int64) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
 // ListTeams mocks the ListTeams method
 func (m *MockPortainerAPI) ListTeams() ([]*apimodels.PortainerTeam, error) {
 	args := m.Called()
@@ -204,6 +210,21 @@ func (m *MockPortainerAPI) ListTeamMemberships() ([]*apimodels.PortainerTeamMemb
 func (m *MockPortainerAPI) CreateTeam(name string) (int64, error) {
 	args := m.Called(name)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+// GetTeam mocks the GetTeam method
+func (m *MockPortainerAPI) GetTeam(id int64) (*apimodels.PortainerTeam, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainerTeam), args.Error(1)
+}
+
+// DeleteTeam mocks the DeleteTeam method
+func (m *MockPortainerAPI) DeleteTeam(id int64) error {
+	args := m.Called(id)
+	return args.Error(0)
 }
 
 // UpdateTeamName mocks the UpdateTeamName method
@@ -237,6 +258,36 @@ func (m *MockPortainerAPI) ListUsers() ([]*apimodels.PortainereeUser, error) {
 func (m *MockPortainerAPI) UpdateUserRole(id int, role int64) error {
 	args := m.Called(id, role)
 	return args.Error(0)
+}
+
+// CreateUser mocks the CreateUser method
+func (m *MockPortainerAPI) CreateUser(username, password string, role int64) (int64, error) {
+	args := m.Called(username, password, role)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+// GetUser mocks the GetUser method
+func (m *MockPortainerAPI) GetUser(id int) (*apimodels.PortainereeUser, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeUser), args.Error(1)
+}
+
+// DeleteUser mocks the DeleteUser method
+func (m *MockPortainerAPI) DeleteUser(id int64) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
+// GetSystemStatus mocks the GetSystemStatus method
+func (m *MockPortainerAPI) GetSystemStatus() (*apimodels.GithubComPortainerPortainerEeAPIHTTPHandlerSystemStatus, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.GithubComPortainerPortainerEeAPIHTTPHandlerSystemStatus), args.Error(1)
 }
 
 // GetVersion mocks the GetVersion method

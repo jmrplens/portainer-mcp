@@ -24,6 +24,7 @@ type PortainerClient interface {
 	// Tag methods
 	GetEnvironmentTags() ([]models.EnvironmentTag, error)
 	CreateEnvironmentTag(name string) (int, error)
+	DeleteEnvironmentTag(id int) error
 
 	// Environment methods
 	GetEnvironments() ([]models.Environment, error)
@@ -55,12 +56,17 @@ type PortainerClient interface {
 
 	// Team methods
 	CreateTeam(name string) (int, error)
+	GetTeam(id int) (models.Team, error)
 	GetTeams() ([]models.Team, error)
+	DeleteTeam(id int) error
 	UpdateTeamName(id int, name string) error
 	UpdateTeamMembers(id int, userIds []int) error
 
 	// User methods
+	CreateUser(username, password, role string) (int, error)
+	GetUser(id int) (models.User, error)
 	GetUsers() ([]models.User, error)
+	DeleteUser(id int) error
 	UpdateUserRole(id int, role string) error
 
 	// Settings methods
@@ -74,6 +80,9 @@ type PortainerClient interface {
 
 	// Kubernetes Proxy methods
 	ProxyKubernetesRequest(opts models.KubernetesProxyRequestOptions) (*http.Response, error)
+
+	// System methods
+	GetSystemStatus() (models.SystemStatus, error)
 }
 
 // PortainerMCPServer is the main server that handles MCP protocol communication

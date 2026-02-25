@@ -368,3 +368,181 @@ func TestHandleUpdateTeamMembers(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleGetTeam(t *testing.T) {
+tests := []struct {
+name        string
+inputID     int
+mockTeam    models.Team
+mockError   error
+expectError bool
+setupParams func(request *mcp.CallToolRequest)
+}{
+{
+name:    "successful team retrieval",
+inputID: 1,
+mockTeam: models.Team{
+ID:        1,
+Name:      "test-team",
+MemberIDs: []int{1, 2},
+},
+mockError:   nil,
+expectError: false,
+setupParams: func(request *mcp.CallToolRequest) {
+request.Params.Arguments = map[string]any{
+"id": float64(1),
+}
+},
+},
+{
+name:        "api error",
+inputID:     1,
+mockTeam:    models.Team{},
+mockError:   fmt.Errorf("api error"),
+expectError: true,
+setupParams: func(request *mcp.CallToolRequest) {
+request.Params.Arguments = map[string]any{
+"id": float64(1),
+}
+},
+},
+{
+name:        "missing id parameter",
+inputID:     0,
+mockTeam:    models.Team{},
+mockError:   nil,
+expectError: true,
+setupParams: func(request *mcp.CallToolRequest) {
+// No parameters
+},
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockClient := &MockPortainerClient{}
+if !tt.expectError || tt.mockError != nil {
+mockClient.On("GetTeam", tt.inputID).Return(tt.mockTeam, tt.mockError)
+}
+
+server := &PortainerMCPServer{
+cli: mockClient,
+}
+
+request := CreateMCPRequest(map[string]any{})
+tt.setupParams(&request)
+
+handler := server.HandleGetTeam()
+result, err := handler(context.Background(), request)
+
+if tt.expectError {
+assert.NoError(t, err)
+assert.NotNil(t, result)
+assert.True(t, result.IsError, "result.IsError should be true for expected errors")
+assert.Len(t, result.Content, 1)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok, "Result content should be mcp.TextContent for errors")
+if tt.mockError != nil {
+assert.Contains(t, textContent.Text, tt.mockError.Error())
+} else {
+assert.NotEmpty(t, textContent.Text, "Error message should not be empty for parameter errors")
+}
+} else {
+assert.NoError(t, err)
+assert.Len(t, result.Content, 1)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+
+var team models.Team
+err = json.Unmarshal([]byte(textContent.Text), &team)
+assert.NoError(t, err)
+assert.Equal(t, tt.mockTeam, team)
+}
+
+mockClient.AssertExpectations(t)
+})
+}
+}
+
+func TestHandleDeleteTeam(t *testing.T) {
+tests := []struct {
+name        string
+inputID     int
+mockError   error
+expectError bool
+setupParams func(request *mcp.CallToolRequest)
+}{
+{
+name:        "successful team deletion",
+inputID:     1,
+mockError:   nil,
+expectError: false,
+setupParams: func(request *mcp.CallToolRequest) {
+request.Params.Arguments = map[string]any{
+"id": float64(1),
+}
+},
+},
+{
+name:        "api error",
+inputID:     1,
+mockError:   fmt.Errorf("api error"),
+expectError: true,
+setupParams: func(request *mcp.CallToolRequest) {
+request.Params.Arguments = map[string]any{
+"id": float64(1),
+}
+},
+},
+{
+name:        "missing id parameter",
+inputID:     0,
+mockError:   nil,
+expectError: true,
+setupParams: func(request *mcp.CallToolRequest) {
+// No parameters
+},
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockClient := &MockPortainerClient{}
+if !tt.expectError || tt.mockError != nil {
+mockClient.On("DeleteTeam", tt.inputID).Return(tt.mockError)
+}
+
+server := &PortainerMCPServer{
+cli: mockClient,
+}
+
+request := CreateMCPRequest(map[string]any{})
+tt.setupParams(&request)
+
+handler := server.HandleDeleteTeam()
+result, err := handler(context.Background(), request)
+
+if tt.expectError {
+assert.NoError(t, err)
+assert.NotNil(t, result)
+assert.True(t, result.IsError, "result.IsError should be true for expected errors")
+assert.Len(t, result.Content, 1)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok, "Result content should be mcp.TextContent for errors")
+if tt.mockError != nil {
+assert.Contains(t, textContent.Text, tt.mockError.Error())
+} else {
+assert.NotEmpty(t, textContent.Text, "Error message should not be empty for parameter errors")
+}
+} else {
+assert.NoError(t, err)
+assert.Len(t, result.Content, 1)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.Contains(t, textContent.Text, "successfully")
+}
+
+mockClient.AssertExpectations(t)
+})
+}
+}

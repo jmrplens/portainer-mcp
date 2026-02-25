@@ -19,12 +19,18 @@ const (
 	ToolListStacks                         = "listStacks"
 	ToolUpdateStack                        = "updateStack"
 	ToolCreateEnvironmentTag               = "createEnvironmentTag"
+	ToolDeleteEnvironmentTag               = "deleteEnvironmentTag"
 	ToolListEnvironmentTags                = "listEnvironmentTags"
 	ToolCreateTeam                         = "createTeam"
+	ToolGetTeam                            = "getTeam"
+	ToolDeleteTeam                         = "deleteTeam"
 	ToolListTeams                          = "listTeams"
 	ToolUpdateTeamName                     = "updateTeamName"
 	ToolUpdateTeamMembers                  = "updateTeamMembers"
 	ToolListUsers                          = "listUsers"
+	ToolCreateUser                         = "createUser"
+	ToolGetUser                            = "getUser"
+	ToolDeleteUser                         = "deleteUser"
 	ToolUpdateUserRole                     = "updateUserRole"
 	ToolGetSettings                        = "getSettings"
 	ToolUpdateAccessGroupName              = "updateAccessGroupName"
@@ -39,6 +45,7 @@ const (
 	ToolDockerProxy                        = "dockerProxy"
 	ToolKubernetesProxy                    = "kubernetesProxy"
 	ToolKubernetesProxyStripped            = "getKubernetesResourceStripped"
+	ToolGetSystemStatus                    = "getSystemStatus"
 )
 
 // Access levels for users and teams

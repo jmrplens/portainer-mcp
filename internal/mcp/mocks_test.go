@@ -59,6 +59,11 @@ func (m *MockPortainerClient) CreateEnvironmentTag(name string) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockPortainerClient) DeleteEnvironmentTag(id int) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
 // Environment methods
 
 func (m *MockPortainerClient) GetEnvironments() ([]models.Environment, error) {
@@ -186,6 +191,19 @@ func (m *MockPortainerClient) CreateTeam(name string) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockPortainerClient) GetTeam(id int) (models.Team, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return models.Team{}, args.Error(1)
+	}
+	return args.Get(0).(models.Team), args.Error(1)
+}
+
+func (m *MockPortainerClient) DeleteTeam(id int) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
 func (m *MockPortainerClient) GetTeams() ([]models.Team, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
@@ -217,6 +235,34 @@ func (m *MockPortainerClient) GetUsers() ([]models.User, error) {
 func (m *MockPortainerClient) UpdateUserRole(id int, role string) error {
 	args := m.Called(id, role)
 	return args.Error(0)
+}
+
+func (m *MockPortainerClient) CreateUser(username, password, role string) (int, error) {
+	args := m.Called(username, password, role)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockPortainerClient) GetUser(id int) (models.User, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return models.User{}, args.Error(1)
+	}
+	return args.Get(0).(models.User), args.Error(1)
+}
+
+func (m *MockPortainerClient) DeleteUser(id int) error {
+	args := m.Called(id)
+	return args.Error(0)
+}
+
+// System methods
+
+func (m *MockPortainerClient) GetSystemStatus() (models.SystemStatus, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return models.SystemStatus{}, args.Error(1)
+	}
+	return args.Get(0).(models.SystemStatus), args.Error(1)
 }
 
 // Settings methods

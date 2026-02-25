@@ -338,3 +338,111 @@ func TestUpdateTeamMembers(t *testing.T) {
 		})
 	}
 }
+
+func TestGetTeam(t *testing.T) {
+tests := []struct {
+name            string
+teamID          int
+mockTeam        *apimodels.PortainerTeam
+mockMemberships []*apimodels.PortainerTeamMembership
+mockTeamError   error
+mockMemberError error
+expected        models.Team
+expectedError   bool
+}{
+{
+name:   "successful retrieval",
+teamID: 1,
+mockTeam: &apimodels.PortainerTeam{
+ID:   1,
+Name: "test-team",
+},
+mockMemberships: []*apimodels.PortainerTeamMembership{
+{ID: 1, UserID: 100, TeamID: 1},
+{ID: 2, UserID: 101, TeamID: 1},
+{ID: 3, UserID: 102, TeamID: 2},
+},
+expected: models.Team{
+ID:        1,
+Name:      "test-team",
+MemberIDs: []int{100, 101},
+},
+},
+{
+name:          "get team error",
+teamID:        1,
+mockTeamError: errors.New("team not found"),
+expectedError: true,
+},
+{
+name:   "list memberships error",
+teamID: 1,
+mockTeam: &apimodels.PortainerTeam{
+ID:   1,
+Name: "test-team",
+},
+mockMemberError: errors.New("failed to list memberships"),
+expectedError:   true,
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockAPI := new(MockPortainerAPI)
+mockAPI.On("GetTeam", int64(tt.teamID)).Return(tt.mockTeam, tt.mockTeamError)
+if tt.mockTeamError == nil {
+mockAPI.On("ListTeamMemberships").Return(tt.mockMemberships, tt.mockMemberError)
+}
+
+client := &PortainerClient{cli: mockAPI}
+
+team, err := client.GetTeam(tt.teamID)
+
+if tt.expectedError {
+assert.Error(t, err)
+return
+}
+assert.NoError(t, err)
+assert.Equal(t, tt.expected, team)
+mockAPI.AssertExpectations(t)
+})
+}
+}
+
+func TestDeleteTeam(t *testing.T) {
+tests := []struct {
+name          string
+teamID        int
+mockError     error
+expectedError bool
+}{
+{
+name:   "successful deletion",
+teamID: 1,
+},
+{
+name:          "delete error",
+teamID:        1,
+mockError:     errors.New("failed to delete team"),
+expectedError: true,
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockAPI := new(MockPortainerAPI)
+mockAPI.On("DeleteTeam", int64(tt.teamID)).Return(tt.mockError)
+
+client := &PortainerClient{cli: mockAPI}
+
+err := client.DeleteTeam(tt.teamID)
+
+if tt.expectedError {
+assert.Error(t, err)
+return
+}
+assert.NoError(t, err)
+mockAPI.AssertExpectations(t)
+})
+}
+}

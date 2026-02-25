@@ -43,3 +43,19 @@ func (c *PortainerClient) CreateEnvironmentTag(name string) (int, error) {
 
 	return int(id), nil
 }
+
+// DeleteEnvironmentTag deletes an environment tag from the Portainer server.
+//
+// Parameters:
+//   - id: The ID of the environment tag to delete
+//
+// Returns:
+//   - An error if the operation fails
+func (c *PortainerClient) DeleteEnvironmentTag(id int) error {
+	err := c.cli.DeleteTag(int64(id))
+	if err != nil {
+		return fmt.Errorf("failed to delete environment tag: %w", err)
+	}
+
+	return nil
+}

@@ -168,3 +168,86 @@ func TestHandleCreateEnvironmentTag(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleDeleteEnvironmentTag(t *testing.T) {
+	tests := []struct {
+		name        string
+		inputID     int
+		mockError   error
+		expectError bool
+		setupParams func(request *mcp.CallToolRequest)
+	}{
+		{
+			name:        "successful tag deletion",
+			inputID:     1,
+			mockError:   nil,
+			expectError: false,
+			setupParams: func(request *mcp.CallToolRequest) {
+				request.Params.Arguments = map[string]any{
+					"id": float64(1),
+				}
+			},
+		},
+		{
+			name:        "api error",
+			inputID:     1,
+			mockError:   fmt.Errorf("api error"),
+			expectError: true,
+			setupParams: func(request *mcp.CallToolRequest) {
+				request.Params.Arguments = map[string]any{
+					"id": float64(1),
+				}
+			},
+		},
+		{
+			name:        "missing id parameter",
+			inputID:     0,
+			mockError:   nil,
+			expectError: true,
+			setupParams: func(request *mcp.CallToolRequest) {
+				// No parameters
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := &MockPortainerClient{}
+			if !tt.expectError || tt.mockError != nil {
+				mockClient.On("DeleteEnvironmentTag", tt.inputID).Return(tt.mockError)
+			}
+
+			server := &PortainerMCPServer{
+				cli: mockClient,
+			}
+
+			request := CreateMCPRequest(map[string]any{})
+			tt.setupParams(&request)
+
+			handler := server.HandleDeleteEnvironmentTag()
+			result, err := handler(context.Background(), request)
+
+			if tt.expectError {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.True(t, result.IsError, "result.IsError should be true for expected errors")
+				assert.Len(t, result.Content, 1)
+				textContent, ok := result.Content[0].(mcp.TextContent)
+				assert.True(t, ok, "Result content should be mcp.TextContent for errors")
+				if tt.mockError != nil {
+					assert.Contains(t, textContent.Text, tt.mockError.Error())
+				} else {
+					assert.NotEmpty(t, textContent.Text, "Error message should not be empty for parameter errors")
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, result.Content, 1)
+				textContent, ok := result.Content[0].(mcp.TextContent)
+				assert.True(t, ok)
+				assert.Contains(t, textContent.Text, "successfully")
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
