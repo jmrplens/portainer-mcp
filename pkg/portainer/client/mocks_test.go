@@ -637,3 +637,93 @@ func (m *MockPortainerAPI) GetHelmReleaseHistory(environmentId int64, name strin
 	}
 	return args.Get(0).([]*apimodels.ReleaseRelease), args.Error(1)
 }
+
+func (m *MockPortainerAPI) GetDockerDashboard(environmentId int64) (*apimodels.DockerDashboardResponse, error) {
+	args := m.Called(environmentId)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.DockerDashboardResponse), args.Error(1)
+}
+
+func (m *MockPortainerAPI) GetKubernetesConfig(environmentId int64) (interface{}, error) {
+	args := m.Called(environmentId)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0), args.Error(1)
+}
+
+func (m *MockPortainerAPI) GetKubernetesDashboard(environmentId int64) ([]*apimodels.ModelsK8sDashboard, error) {
+	args := m.Called(environmentId)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*apimodels.ModelsK8sDashboard), args.Error(1)
+}
+
+func (m *MockPortainerAPI) GetKubernetesNamespaces(environmentId int64) ([]*apimodels.PortainerK8sNamespaceInfo, error) {
+	args := m.Called(environmentId)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*apimodels.PortainerK8sNamespaceInfo), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackInspect(id int64) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackDelete(id int64, endpointID int64, removeVolumes bool) error {
+	args := m.Called(id, endpointID, removeVolumes)
+	return args.Error(0)
+}
+
+func (m *MockPortainerAPI) StackFileInspect(id int64) (string, error) {
+	args := m.Called(id)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackUpdateGit(id int64, endpointID int64, body *apimodels.StacksStackGitUpdatePayload) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id, endpointID, body)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackGitRedeploy(id int64, endpointID int64, body *apimodels.StacksStackGitRedployPayload) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id, endpointID, body)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackStart(id int64, endpointID int64) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id, endpointID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackStop(id int64, endpointID int64) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id, endpointID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}
+
+func (m *MockPortainerAPI) StackMigrate(id int64, endpointID int64, body *apimodels.StacksStackMigratePayload) (*apimodels.PortainereeStack, error) {
+	args := m.Called(id, endpointID, body)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apimodels.PortainereeStack), args.Error(1)
+}

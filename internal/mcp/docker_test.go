@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -295,6 +297,90 @@ func TestHandleDockerProxy_ClientInteraction(t *testing.T) {
 				textContent, ok := result.Content[0].(mcp.TextContent)
 				assert.True(t, ok)
 				assert.Equal(t, tc.expect.resultText, textContent.Text)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandleGetDockerDashboard(t *testing.T) {
+	tests := []struct {
+		name          string
+		inputParams   map[string]any
+		mockDashboard models.DockerDashboard
+		mockError     error
+		expectError   bool
+	}{
+		{
+			name: "successful dashboard retrieval",
+			inputParams: map[string]any{
+				"environmentId": float64(1),
+			},
+			mockDashboard: models.DockerDashboard{
+				Containers: models.DockerContainerStats{
+					Healthy:   2,
+					Running:   5,
+					Stopped:   3,
+					Total:     8,
+					Unhealthy: 1,
+				},
+				Images: models.DockerImagesCounters{
+					Size:  1024000,
+					Total: 10,
+				},
+				Networks: 3,
+				Services: 2,
+				Stacks:   4,
+				Volumes:  6,
+			},
+			mockError:   nil,
+			expectError: false,
+		},
+		{
+			name: "api error",
+			inputParams: map[string]any{
+				"environmentId": float64(1),
+			},
+			mockDashboard: models.DockerDashboard{},
+			mockError:     fmt.Errorf("api error"),
+			expectError:   true,
+		},
+		{
+			name:        "missing environmentId",
+			inputParams: map[string]any{},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := &MockPortainerClient{}
+			if _, ok := tt.inputParams["environmentId"]; ok {
+				mockClient.On("GetDockerDashboard", int(tt.inputParams["environmentId"].(float64))).Return(tt.mockDashboard, tt.mockError)
+			}
+
+			server := &PortainerMCPServer{
+				cli: mockClient,
+			}
+
+			handler := server.HandleGetDockerDashboard()
+			result, err := handler(context.Background(), CreateMCPRequest(tt.inputParams))
+
+			if tt.expectError {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.True(t, result.IsError, "result.IsError should be true for errors")
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, result.Content, 1)
+				textContent, ok := result.Content[0].(mcp.TextContent)
+				assert.True(t, ok)
+
+				var dashboard models.DockerDashboard
+				err = json.Unmarshal([]byte(textContent.Text), &dashboard)
+				assert.NoError(t, err)
+				assert.Equal(t, tt.mockDashboard, dashboard)
 			}
 
 			mockClient.AssertExpectations(t)

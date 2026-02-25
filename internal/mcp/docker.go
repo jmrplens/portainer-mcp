@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -13,6 +14,8 @@ import (
 )
 
 func (s *PortainerMCPServer) AddDockerProxyFeatures() {
+	s.addToolIfExists(ToolGetDockerDashboard, s.HandleGetDockerDashboard())
+
 	if !s.readOnly {
 		s.addToolIfExists(ToolDockerProxy, s.HandleDockerProxy())
 	}
@@ -89,5 +92,28 @@ func (s *PortainerMCPServer) HandleDockerProxy() server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(responseBody)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleGetDockerDashboard() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		environmentId, err := parser.GetInt("environmentId", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+
+		dashboard, err := s.cli.GetDockerDashboard(environmentId)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to get docker dashboard", err), nil
+		}
+
+		data, err := json.Marshal(dashboard)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to marshal docker dashboard", err), nil
+		}
+
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }

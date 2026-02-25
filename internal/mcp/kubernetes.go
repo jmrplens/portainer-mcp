@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -149,5 +150,84 @@ func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 		}
 
 		return mcp.NewToolResultText(string(responseBody)), nil
+	}
+}
+
+func (s *PortainerMCPServer) AddKubernetesNativeFeatures() {
+	s.addToolIfExists(ToolGetKubernetesDashboard, s.HandleGetKubernetesDashboard())
+	s.addToolIfExists(ToolListKubernetesNamespaces, s.HandleListKubernetesNamespaces())
+	s.addToolIfExists(ToolGetKubernetesConfig, s.HandleGetKubernetesConfig())
+}
+
+func (s *PortainerMCPServer) HandleGetKubernetesDashboard() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		environmentId, err := parser.GetInt("environmentId", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+
+		dashboard, err := s.cli.GetKubernetesDashboard(environmentId)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to get kubernetes dashboard", err), nil
+		}
+
+		jsonData, err := json.Marshal(dashboard)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes dashboard", err), nil
+		}
+
+		return mcp.NewToolResultText(string(jsonData)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleListKubernetesNamespaces() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		environmentId, err := parser.GetInt("environmentId", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+
+		namespaces, err := s.cli.GetKubernetesNamespaces(environmentId)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to get kubernetes namespaces", err), nil
+		}
+
+		jsonData, err := json.Marshal(namespaces)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes namespaces", err), nil
+		}
+
+		return mcp.NewToolResultText(string(jsonData)), nil
+	}
+}
+
+func (s *PortainerMCPServer) HandleGetKubernetesConfig() server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		parser := toolgen.NewParameterParser(request)
+
+		environmentId, err := parser.GetInt("environmentId", true)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+
+		config, err := s.cli.GetKubernetesConfig(environmentId)
+		if err != nil {
+			return mcp.NewToolResultErrorFromErr("failed to get kubernetes config", err), nil
+		}
+
+		switch v := config.(type) {
+		case string:
+			return mcp.NewToolResultText(v), nil
+		default:
+			jsonData, err := json.Marshal(config)
+			if err != nil {
+				return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes config", err), nil
+			}
+			return mcp.NewToolResultText(string(jsonData)), nil
+		}
 	}
 }

@@ -503,6 +503,164 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
+  ## Regular Stacks
+  ## ------------------------------------------------------------
+  - name: getStack
+    description: Get a specific stack by ID. Returns detailed information about a regular (non-edge) stack including name, type, status, and environment.
+    parameters:
+      - name: id
+        description: The ID of the stack to inspect
+        type: number
+        required: true
+    annotations:
+      title: Get Stack
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: deleteStack
+    description: Delete a regular (non-edge) stack permanently. This removes the stack and all its associated containers from the environment.
+    parameters:
+      - name: id
+        description: The ID of the stack to delete
+        type: number
+        required: true
+      - name: environmentId
+        description: The ID of the environment where the stack is deployed
+        type: number
+        required: true
+      - name: removeVolumes
+        description: Whether to remove associated volumes when deleting the stack
+        type: boolean
+        required: false
+    annotations:
+      title: Delete Stack
+      readOnlyHint: false
+      destructiveHint: true
+      idempotentHint: false
+      openWorldHint: false
+  - name: inspectStackFile
+    description: Get the compose file content for a specific regular (non-edge) stack by its ID. Returns the raw compose file as text.
+    parameters:
+      - name: id
+        description: The ID of the stack to get the compose file for
+        type: number
+        required: true
+    annotations:
+      title: Inspect Stack File
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: updateStackGit
+    description: Update the git configuration of a regular (non-edge) stack. Allows changing the git reference (branch/tag) and prune settings.
+    parameters:
+      - name: id
+        description: The ID of the stack to update
+        type: number
+        required: true
+      - name: environmentId
+        description: The ID of the environment where the stack is deployed
+        type: number
+        required: true
+      - name: referenceName
+        description: The git reference name (branch or tag) to use
+        type: string
+        required: false
+      - name: prune
+        description: Whether to prune services that are no longer in the compose file
+        type: boolean
+        required: false
+    annotations:
+      title: Update Stack Git
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: redeployStackGit
+    description: Trigger a git-based redeployment of a regular (non-edge) stack. Pulls the latest changes from the git repository and redeploys the stack.
+    parameters:
+      - name: id
+        description: The ID of the stack to redeploy
+        type: number
+        required: true
+      - name: environmentId
+        description: The ID of the environment where the stack is deployed
+        type: number
+        required: true
+      - name: pullImage
+        description: Whether to pull the latest images before redeploying
+        type: boolean
+        required: false
+      - name: prune
+        description: Whether to prune services that are no longer in the compose file
+        type: boolean
+        required: false
+    annotations:
+      title: Redeploy Stack Git
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: false
+      openWorldHint: false
+  - name: startStack
+    description: Start a stopped regular (non-edge) stack. Brings up all containers defined in the stack's compose file.
+    parameters:
+      - name: id
+        description: The ID of the stack to start
+        type: number
+        required: true
+      - name: environmentId
+        description: The ID of the environment where the stack is deployed
+        type: number
+        required: true
+    annotations:
+      title: Start Stack
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: stopStack
+    description: Stop a running regular (non-edge) stack. Stops all containers defined in the stack's compose file.
+    parameters:
+      - name: id
+        description: The ID of the stack to stop
+        type: number
+        required: true
+      - name: environmentId
+        description: The ID of the environment where the stack is deployed
+        type: number
+        required: true
+    annotations:
+      title: Stop Stack
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: migrateStack
+    description: Migrate a regular (non-edge) stack to another environment. Moves the stack from one environment to another, optionally renaming it.
+    parameters:
+      - name: id
+        description: The ID of the stack to migrate
+        type: number
+        required: true
+      - name: environmentId
+        description: The current environment ID where the stack is deployed
+        type: number
+        required: true
+      - name: targetEnvironmentId
+        description: The target environment ID to migrate the stack to
+        type: number
+        required: true
+      - name: name
+        description: Optional new name for the migrated stack
+        type: string
+        required: false
+    annotations:
+      title: Migrate Stack
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: false
+      openWorldHint: false
   ## Tags
   ## ------------------------------------------------------------
   - name: createEnvironmentTag
@@ -786,6 +944,23 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
+  ## Docker Dashboard
+  ## ------------------------------------------------------------
+  - name: getDockerDashboard
+    description: Get Docker dashboard data for a specific Portainer environment.
+      Returns container, image, network, volume, stack, and service counts and status summary.
+    parameters:
+      - name: environmentId
+        description: The ID of the environment to get Docker dashboard data for
+        type: number
+        required: true
+    annotations:
+      title: Get Docker Dashboard
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+
   ## Kubernetes Proxy
   ## ------------------------------------------------------------
   - name: kubernetesProxy
@@ -897,6 +1072,57 @@ tools:
               description: The value of the header
     annotations:
       title: Get Kubernetes Resource (Stripped)
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+
+  ## Kubernetes Native Operations
+
+  - name: getKubernetesDashboard
+    description: >-
+      Get a summary dashboard for a Kubernetes environment showing counts of key resources
+      including applications, config maps, ingresses, namespaces, secrets, services, and volumes.
+    parameters:
+      - name: environmentId
+        description: The ID of the Kubernetes environment to get the dashboard for
+        type: number
+        required: true
+    annotations:
+      title: Get Kubernetes Dashboard
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+
+  - name: listKubernetesNamespaces
+    description: >-
+      List all Kubernetes namespaces in a specific environment.
+      Returns namespace details including name, creation date, owner, and whether the namespace
+      is a default or system namespace.
+    parameters:
+      - name: environmentId
+        description: The ID of the Kubernetes environment to list namespaces for
+        type: number
+        required: true
+    annotations:
+      title: List Kubernetes Namespaces
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+
+  - name: getKubernetesConfig
+    description: >-
+      Get the kubeconfig for a specific Kubernetes environment.
+      Returns the kubeconfig content that can be used to connect to the cluster.
+    parameters:
+      - name: environmentId
+        description: The ID of the Kubernetes environment to get the kubeconfig for
+        type: number
+        required: true
+    annotations:
+      title: Get Kubernetes Config
       readOnlyHint: true
       destructiveHint: false
       idempotentHint: true

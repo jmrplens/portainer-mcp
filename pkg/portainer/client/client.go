@@ -90,6 +90,18 @@ type PortainerAPIClient interface {
 	ListHelmReleases(environmentId int64, namespace *string, filter *string, selector *string) ([]*apimodels.ReleaseReleaseElement, error)
 	DeleteHelmRelease(environmentId int64, release string, namespace *string) error
 	GetHelmReleaseHistory(environmentId int64, name string, namespace *string) ([]*apimodels.ReleaseRelease, error)
+	GetDockerDashboard(environmentId int64) (*apimodels.DockerDashboardResponse, error)
+	GetKubernetesDashboard(environmentId int64) ([]*apimodels.ModelsK8sDashboard, error)
+	GetKubernetesNamespaces(environmentId int64) ([]*apimodels.PortainerK8sNamespaceInfo, error)
+	GetKubernetesConfig(environmentId int64) (interface{}, error)
+	StackInspect(id int64) (*apimodels.PortainereeStack, error)
+	StackDelete(id int64, endpointID int64, removeVolumes bool) error
+	StackFileInspect(id int64) (string, error)
+	StackUpdateGit(id int64, endpointID int64, body *apimodels.StacksStackGitUpdatePayload) (*apimodels.PortainereeStack, error)
+	StackGitRedeploy(id int64, endpointID int64, body *apimodels.StacksStackGitRedployPayload) (*apimodels.PortainereeStack, error)
+	StackStart(id int64, endpointID int64) (*apimodels.PortainereeStack, error)
+	StackStop(id int64, endpointID int64) (*apimodels.PortainereeStack, error)
+	StackMigrate(id int64, endpointID int64, body *apimodels.StacksStackMigratePayload) (*apimodels.PortainereeStack, error)
 }
 
 // PortainerClient is a wrapper around the Portainer SDK client

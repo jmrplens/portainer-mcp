@@ -204,6 +204,64 @@ func (m *MockPortainerClient) UpdateStack(id int, file string, environmentGroupI
 	return args.Error(0)
 }
 
+func (m *MockPortainerClient) InspectStack(id int) (models.RegularStack, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
+func (m *MockPortainerClient) DeleteStack(id int, endpointID int, removeVolumes bool) error {
+	args := m.Called(id, endpointID, removeVolumes)
+	return args.Error(0)
+}
+
+func (m *MockPortainerClient) InspectStackFile(id int) (string, error) {
+	args := m.Called(id)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockPortainerClient) UpdateStackGit(id int, endpointID int, referenceName string, prune bool) (models.RegularStack, error) {
+	args := m.Called(id, endpointID, referenceName, prune)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
+func (m *MockPortainerClient) RedeployStackGit(id int, endpointID int, pullImage bool, prune bool) (models.RegularStack, error) {
+	args := m.Called(id, endpointID, pullImage, prune)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
+func (m *MockPortainerClient) StartStack(id int, endpointID int) (models.RegularStack, error) {
+	args := m.Called(id, endpointID)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
+func (m *MockPortainerClient) StopStack(id int, endpointID int) (models.RegularStack, error) {
+	args := m.Called(id, endpointID)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
+func (m *MockPortainerClient) MigrateStack(id int, endpointID int, targetEndpointID int, name string) (models.RegularStack, error) {
+	args := m.Called(id, endpointID, targetEndpointID, name)
+	if args.Get(0) == nil {
+		return models.RegularStack{}, args.Error(1)
+	}
+	return args.Get(0).(models.RegularStack), args.Error(1)
+}
+
 // Team methods
 
 func (m *MockPortainerClient) CreateTeam(name string) (int, error) {
@@ -351,6 +409,11 @@ func (m *MockPortainerClient) ProxyDockerRequest(opts models.DockerProxyRequestO
 	return args.Get(0).(*http.Response), args.Error(1)
 }
 
+func (m *MockPortainerClient) GetDockerDashboard(environmentId int) (models.DockerDashboard, error) {
+	args := m.Called(environmentId)
+	return args.Get(0).(models.DockerDashboard), args.Error(1)
+}
+
 // Kubernetes Proxy methods
 func (m *MockPortainerClient) ProxyKubernetesRequest(opts models.KubernetesProxyRequestOptions) (*http.Response, error) {
 	args := m.Called(opts)
@@ -358,6 +421,24 @@ func (m *MockPortainerClient) ProxyKubernetesRequest(opts models.KubernetesProxy
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*http.Response), args.Error(1)
+}
+
+func (m *MockPortainerClient) GetKubernetesDashboard(environmentId int) (models.KubernetesDashboard, error) {
+	args := m.Called(environmentId)
+	return args.Get(0).(models.KubernetesDashboard), args.Error(1)
+}
+
+func (m *MockPortainerClient) GetKubernetesNamespaces(environmentId int) ([]models.KubernetesNamespace, error) {
+	args := m.Called(environmentId)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]models.KubernetesNamespace), args.Error(1)
+}
+
+func (m *MockPortainerClient) GetKubernetesConfig(environmentId int) (interface{}, error) {
+	args := m.Called(environmentId)
+	return args.Get(0), args.Error(1)
 }
 
 // Custom Template methods

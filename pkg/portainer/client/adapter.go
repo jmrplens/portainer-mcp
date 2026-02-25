@@ -13,13 +13,16 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/client/auth"
 	"github.com/portainer/client-api-go/v2/pkg/client/backup"
 	"github.com/portainer/client-api-go/v2/pkg/client/custom_templates"
+	"github.com/portainer/client-api-go/v2/pkg/client/docker"
 	"github.com/portainer/client-api-go/v2/pkg/client/edge_jobs"
+	"github.com/portainer/client-api-go/v2/pkg/client/kubernetes"
 	"github.com/portainer/client-api-go/v2/pkg/client/edge_update_schedules"
 	"github.com/portainer/client-api-go/v2/pkg/client/endpoints"
 	"github.com/portainer/client-api-go/v2/pkg/client/helm"
 	"github.com/portainer/client-api-go/v2/pkg/client/motd"
 	"github.com/portainer/client-api-go/v2/pkg/client/settings"
 	"github.com/portainer/client-api-go/v2/pkg/client/ssl"
+	"github.com/portainer/client-api-go/v2/pkg/client/stacks"
 	"github.com/portainer/client-api-go/v2/pkg/client/templates"
 	"github.com/portainer/client-api-go/v2/pkg/client/registries"
 	"github.com/portainer/client-api-go/v2/pkg/client/roles"
@@ -569,6 +572,126 @@ func (a *portainerAPIAdapter) GetHelmReleaseHistory(environmentId int64, name st
 	resp, err := a.swagger.Helm.HelmGetHistory(params, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release history: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// GetDockerDashboard retrieves the Docker dashboard data for a specific environment.
+func (a *portainerAPIAdapter) GetDockerDashboard(environmentId int64) (*apimodels.DockerDashboardResponse, error) {
+	params := docker.NewDockerDashboardParams().WithEnvironmentID(environmentId)
+	resp, err := a.swagger.Docker.DockerDashboard(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get docker dashboard: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// GetKubernetesDashboard retrieves the Kubernetes dashboard data for a specific environment.
+func (a *portainerAPIAdapter) GetKubernetesDashboard(environmentId int64) ([]*apimodels.ModelsK8sDashboard, error) {
+	params := kubernetes.NewGetKubernetesDashboardParams().WithID(environmentId)
+	resp, err := a.swagger.Kubernetes.GetKubernetesDashboard(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes dashboard: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// GetKubernetesNamespaces retrieves the Kubernetes namespaces for a specific environment.
+func (a *portainerAPIAdapter) GetKubernetesNamespaces(environmentId int64) ([]*apimodels.PortainerK8sNamespaceInfo, error) {
+	params := kubernetes.NewGetKubernetesNamespacesParams().WithID(environmentId)
+	resp, err := a.swagger.Kubernetes.GetKubernetesNamespaces(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes namespaces: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// GetKubernetesConfig retrieves the Kubernetes config for a specific environment.
+func (a *portainerAPIAdapter) GetKubernetesConfig(environmentId int64) (interface{}, error) {
+	params := kubernetes.NewGetKubernetesConfigParams().WithIds([]int64{environmentId})
+	resp, err := a.swagger.Kubernetes.GetKubernetesConfig(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubernetes config: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackInspect retrieves details of a specific stack by ID.
+func (a *portainerAPIAdapter) StackInspect(id int64) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackInspectParams().WithID(id)
+	resp, err := a.swagger.Stacks.StackInspect(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect stack: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackDelete removes a stack by ID.
+func (a *portainerAPIAdapter) StackDelete(id int64, endpointID int64, removeVolumes bool) error {
+	params := stacks.NewStackDeleteParams().WithID(id).WithEndpointID(endpointID).WithRemoveVolumes(&removeVolumes)
+	_, err := a.swagger.Stacks.StackDelete(params, nil)
+	if err != nil {
+		return fmt.Errorf("failed to delete stack: %w", err)
+	}
+	return nil
+}
+
+// StackFileInspect retrieves the compose file content for a stack.
+func (a *portainerAPIAdapter) StackFileInspect(id int64) (string, error) {
+	params := stacks.NewStackFileInspectParams().WithID(id)
+	resp, err := a.swagger.Stacks.StackFileInspect(params, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect stack file: %w", err)
+	}
+	return resp.Payload.StackFileContent, nil
+}
+
+// StackUpdateGit updates the git configuration of a stack.
+func (a *portainerAPIAdapter) StackUpdateGit(id int64, endpointID int64, body *apimodels.StacksStackGitUpdatePayload) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackUpdateGitParams().WithID(id).WithEndpointID(&endpointID).WithBody(body)
+	resp, err := a.swagger.Stacks.StackUpdateGit(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update stack git: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackGitRedeploy triggers a git-based redeployment of a stack.
+func (a *portainerAPIAdapter) StackGitRedeploy(id int64, endpointID int64, body *apimodels.StacksStackGitRedployPayload) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackGitRedeployParams().WithID(id).WithEndpointID(&endpointID).WithBody(body)
+	resp, err := a.swagger.Stacks.StackGitRedeploy(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to redeploy stack: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackStart starts a stopped stack.
+func (a *portainerAPIAdapter) StackStart(id int64, endpointID int64) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackStartParams().WithID(id).WithEndpointID(endpointID)
+	resp, err := a.swagger.Stacks.StackStart(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start stack: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackStop stops a running stack.
+func (a *portainerAPIAdapter) StackStop(id int64, endpointID int64) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackStopParams().WithID(id).WithEndpointID(endpointID)
+	resp, err := a.swagger.Stacks.StackStop(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stop stack: %w", err)
+	}
+	return resp.Payload, nil
+}
+
+// StackMigrate migrates a stack to another environment.
+func (a *portainerAPIAdapter) StackMigrate(id int64, endpointID int64, body *apimodels.StacksStackMigratePayload) (*apimodels.PortainereeStack, error) {
+	params := stacks.NewStackMigrateParams().WithID(id).WithEndpointID(&endpointID).WithBody(body)
+	resp, err := a.swagger.Stacks.StackMigrate(params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to migrate stack: %w", err)
 	}
 	return resp.Payload, nil
 }

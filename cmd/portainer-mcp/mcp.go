@@ -76,6 +76,7 @@ func main() {
 	server.AddAccessGroupFeatures()
 	server.AddDockerProxyFeatures()
 	server.AddKubernetesProxyFeatures()
+	server.AddKubernetesNativeFeatures()
 	server.AddSystemFeatures()
 	server.AddWebhookFeatures()
 	server.AddCustomTemplateFeatures()

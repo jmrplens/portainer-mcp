@@ -58,6 +58,16 @@ type PortainerClient interface {
 	CreateStack(name string, file string, environmentGroupIds []int) (int, error)
 	UpdateStack(id int, file string, environmentGroupIds []int) error
 
+	// Regular stack methods
+	InspectStack(id int) (models.RegularStack, error)
+	DeleteStack(id int, endpointID int, removeVolumes bool) error
+	InspectStackFile(id int) (string, error)
+	UpdateStackGit(id int, endpointID int, referenceName string, prune bool) (models.RegularStack, error)
+	RedeployStackGit(id int, endpointID int, pullImage bool, prune bool) (models.RegularStack, error)
+	StartStack(id int, endpointID int) (models.RegularStack, error)
+	StopStack(id int, endpointID int) (models.RegularStack, error)
+	MigrateStack(id int, endpointID int, targetEndpointID int, name string) (models.RegularStack, error)
+
 	// Team methods
 	CreateTeam(name string) (int, error)
 	GetTeam(id int) (models.Team, error)
@@ -91,9 +101,15 @@ type PortainerClient interface {
 
 	// Docker Proxy methods
 	ProxyDockerRequest(opts models.DockerProxyRequestOptions) (*http.Response, error)
+	GetDockerDashboard(environmentId int) (models.DockerDashboard, error)
 
 	// Kubernetes Proxy methods
 	ProxyKubernetesRequest(opts models.KubernetesProxyRequestOptions) (*http.Response, error)
+
+	// Kubernetes Native methods
+	GetKubernetesDashboard(environmentId int) (models.KubernetesDashboard, error)
+	GetKubernetesNamespaces(environmentId int) ([]models.KubernetesNamespace, error)
+	GetKubernetesConfig(environmentId int) (interface{}, error)
 
 	GetWebhooks() ([]models.Webhook, error)
 	CreateWebhook(resourceId string, endpointId int, webhookType int) (int, error)

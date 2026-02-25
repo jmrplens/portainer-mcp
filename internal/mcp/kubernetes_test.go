@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -605,4 +606,226 @@ func TestHandleKubernetesProxyStripped_ClientInteraction(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestHandleGetKubernetesDashboard(t *testing.T) {
+tests := []struct {
+name             string
+inputParams      map[string]any
+mockDashboard    models.KubernetesDashboard
+mockErr          error
+expectedErrorMsg string
+expectedResult   string
+}{
+{
+name:             "missing environmentId",
+inputParams:      map[string]any{},
+expectedErrorMsg: "environmentId is required",
+},
+{
+name:        "successful dashboard retrieval",
+inputParams: map[string]any{"environmentId": float64(1)},
+mockDashboard: models.KubernetesDashboard{
+ApplicationsCount: 5,
+ConfigMapsCount:   10,
+IngressesCount:    3,
+NamespacesCount:   4,
+SecretsCount:      8,
+ServicesCount:     6,
+VolumesCount:      2,
+},
+expectedResult: `{"applicationsCount":5,"configMapsCount":10,"ingressesCount":3,"namespacesCount":4,"secretsCount":8,"servicesCount":6,"volumesCount":2}`,
+},
+{
+name:             "client error",
+inputParams:      map[string]any{"environmentId": float64(1)},
+mockErr:          errors.New("connection refused"),
+expectedErrorMsg: "failed to get kubernetes dashboard: connection refused",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockClient := new(MockPortainerClient)
+
+if _, ok := tt.inputParams["environmentId"]; ok {
+mockClient.On("GetKubernetesDashboard", int(tt.inputParams["environmentId"].(float64))).
+Return(tt.mockDashboard, tt.mockErr)
+}
+
+server := &PortainerMCPServer{cli: mockClient}
+request := CreateMCPRequest(tt.inputParams)
+handler := server.HandleGetKubernetesDashboard()
+result, err := handler(context.Background(), request)
+
+assert.NoError(t, err)
+assert.NotNil(t, result)
+
+if tt.expectedErrorMsg != "" {
+assert.True(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.Contains(t, textContent.Text, tt.expectedErrorMsg)
+} else {
+assert.False(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.JSONEq(t, tt.expectedResult, textContent.Text)
+}
+
+mockClient.AssertExpectations(t)
+})
+}
+}
+
+func TestHandleListKubernetesNamespaces(t *testing.T) {
+tests := []struct {
+name             string
+inputParams      map[string]any
+mockNamespaces   []models.KubernetesNamespace
+mockErr          error
+expectedErrorMsg string
+expectedResult   string
+}{
+{
+name:             "missing environmentId",
+inputParams:      map[string]any{},
+expectedErrorMsg: "environmentId is required",
+},
+{
+name:        "successful namespace listing",
+inputParams: map[string]any{"environmentId": float64(1)},
+mockNamespaces: []models.KubernetesNamespace{
+{
+ID:             "1",
+Name:           "default",
+CreationDate:   "2024-01-01T00:00:00Z",
+NamespaceOwner: "",
+IsDefault:      true,
+IsSystem:       false,
+},
+{
+ID:             "2",
+Name:           "kube-system",
+CreationDate:   "2024-01-01T00:00:00Z",
+NamespaceOwner: "",
+IsDefault:      false,
+IsSystem:       true,
+},
+},
+expectedResult: `[{"id":"1","name":"default","creationDate":"2024-01-01T00:00:00Z","namespaceOwner":"","isDefault":true,"isSystem":false},{"id":"2","name":"kube-system","creationDate":"2024-01-01T00:00:00Z","namespaceOwner":"","isDefault":false,"isSystem":true}]`,
+},
+{
+name:             "client error",
+inputParams:      map[string]any{"environmentId": float64(1)},
+mockErr:          errors.New("connection refused"),
+expectedErrorMsg: "failed to get kubernetes namespaces: connection refused",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockClient := new(MockPortainerClient)
+
+if _, ok := tt.inputParams["environmentId"]; ok {
+mockClient.On("GetKubernetesNamespaces", int(tt.inputParams["environmentId"].(float64))).
+Return(tt.mockNamespaces, tt.mockErr)
+}
+
+server := &PortainerMCPServer{cli: mockClient}
+request := CreateMCPRequest(tt.inputParams)
+handler := server.HandleListKubernetesNamespaces()
+result, err := handler(context.Background(), request)
+
+assert.NoError(t, err)
+assert.NotNil(t, result)
+
+if tt.expectedErrorMsg != "" {
+assert.True(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.Contains(t, textContent.Text, tt.expectedErrorMsg)
+} else {
+assert.False(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.JSONEq(t, tt.expectedResult, textContent.Text)
+}
+
+mockClient.AssertExpectations(t)
+})
+}
+}
+
+func TestHandleGetKubernetesConfig(t *testing.T) {
+tests := []struct {
+name             string
+inputParams      map[string]any
+mockConfig       interface{}
+mockErr          error
+expectedErrorMsg string
+expectedResult   string
+}{
+{
+name:             "missing environmentId",
+inputParams:      map[string]any{},
+mockConfig:       nil,
+expectedErrorMsg: "environmentId is required",
+},
+{
+name:           "successful config retrieval as string",
+inputParams:    map[string]any{"environmentId": float64(1)},
+mockConfig:     "apiVersion: v1\nclusters: []\n",
+expectedResult: "apiVersion: v1\nclusters: []\n",
+},
+{
+name:        "successful config retrieval as map",
+inputParams: map[string]any{"environmentId": float64(1)},
+mockConfig: map[string]interface{}{
+"apiVersion": "v1",
+"kind":       "Config",
+},
+expectedResult: `{"apiVersion":"v1","kind":"Config"}`,
+},
+{
+name:             "client error",
+inputParams:      map[string]any{"environmentId": float64(1)},
+mockConfig:       nil,
+mockErr:          errors.New("connection refused"),
+expectedErrorMsg: "failed to get kubernetes config: connection refused",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+mockClient := new(MockPortainerClient)
+
+if _, ok := tt.inputParams["environmentId"]; ok {
+mockClient.On("GetKubernetesConfig", int(tt.inputParams["environmentId"].(float64))).
+Return(tt.mockConfig, tt.mockErr)
+}
+
+server := &PortainerMCPServer{cli: mockClient}
+request := CreateMCPRequest(tt.inputParams)
+handler := server.HandleGetKubernetesConfig()
+result, err := handler(context.Background(), request)
+
+assert.NoError(t, err)
+assert.NotNil(t, result)
+
+if tt.expectedErrorMsg != "" {
+assert.True(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.Contains(t, textContent.Text, tt.expectedErrorMsg)
+} else {
+assert.False(t, result.IsError)
+textContent, ok := result.Content[0].(mcp.TextContent)
+assert.True(t, ok)
+assert.Equal(t, tt.expectedResult, textContent.Text)
+}
+
+mockClient.AssertExpectations(t)
+})
+}
 }
