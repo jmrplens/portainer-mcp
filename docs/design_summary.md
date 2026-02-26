@@ -14,6 +14,7 @@ This document provides a summary of key design decisions for the Portainer MCP p
 | [202504-3](design/202504-3-portainer-version-compatibility.md) | Pinning compatibility to a specific Portainer version | 08/04/2025 | Binds each release to a specific Portainer version for guaranteed compatibility |
 | [202504-4](design/202504-4-read-only-mode.md) | Read-only mode for enhanced security | 09/04/2025 | Provides a read-only mode to restrict modification capabilities for security |
 | [202602-1](design/202602-1-security-considerations.md) | Security considerations | 02/2025 | Documents proxy, settings, credential handling, and TLS security considerations |
+| [202507-1](design/202507-1-meta-tools.md) | Meta-tools — Grouped tool interface for LLMs | 07/2025 | Groups 98 granular tools into 15 domain-based meta-tools for better LLM tool selection |
 
 ## How to Add a New Design Decision
 

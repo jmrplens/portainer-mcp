@@ -140,11 +140,45 @@ Go to **Cursor Settings → MCP** and add:
 | `-token` | Portainer API token | **Yes** | — |
 | `-tools` | Path to custom tools.yaml | No | Embedded |
 | `-read-only` | Disable all write/delete operations | No | `false` |
+| `-granular-tools` | Register all 98 individual tools instead of 15 grouped meta-tools | No | `false` |
 | `-disable-version-check` | Skip Portainer version validation | No | `false` |
+| `-skip-tls-verify` | Skip TLS certificate verification | No | `false` |
+
+### Meta-Tools (Default Mode)
+
+By default the server registers **15 grouped meta-tools** instead of the 98 individual granular tools. Each meta-tool covers a functional domain and exposes an `action` parameter (enum) that routes to the appropriate handler under the hood.
+
+This dramatically reduces the tool-selection surface for LLMs while preserving 100% of the underlying functionality.
+
+| Meta-Tool | Actions | Description |
+|-----------|---------|-------------|
+| `manage_environments` | 16 | Environments, environment groups, tags |
+| `manage_stacks` | 13 | Regular and compose stacks |
+| `manage_access_groups` | 7 | Access group CRUD and user/team access policies |
+| `manage_users` | 5 | User CRUD and role management |
+| `manage_teams` | 6 | Teams and team membership |
+| `manage_docker` | 2 | Docker proxy and dashboard |
+| `manage_kubernetes` | 5 | Kubernetes proxy, namespaces, config, dashboard |
+| `manage_helm` | 8 | Helm repos, charts, releases |
+| `manage_registries` | 5 | Container registry management |
+| `manage_templates` | 7 | Custom and app templates |
+| `manage_backups` | 5 | Backup, restore, S3 settings |
+| `manage_webhooks` | 3 | Webhook CRUD |
+| `manage_edge` | 6 | Edge jobs and update schedules |
+| `manage_settings` | 5 | Server settings and SSL |
+| `manage_system` | 5 | Version, status, MOTD, roles, auth |
+
+To use the original 98 individual tools, pass `--granular-tools`:
+
+```json
+{
+  "args": ["-server", "...", "-token", "...", "-granular-tools"]
+}
+```
 
 ### Read-Only Mode
 
-Run with `-read-only` to restrict to 46 read-only tools. All write, update, and delete operations are disabled — ideal for monitoring and observation.
+Run with `-read-only` to restrict to read-only operations. All write, update, and delete actions are disabled — ideal for monitoring and observation. This works with both meta-tools (default) and granular tools modes.
 
 ```json
 {

@@ -195,6 +195,7 @@ type ServerOption func(*serverOptions)
 type serverOptions struct {
 	client              PortainerClient
 	readOnly            bool
+	granularTools       bool
 	disableVersionCheck bool
 	skipTLSVerify       bool
 }
@@ -212,6 +213,14 @@ func WithClient(client PortainerClient) ServerOption {
 func WithReadOnly(readOnly bool) ServerOption {
 	return func(opts *serverOptions) {
 		opts.readOnly = readOnly
+	}
+}
+
+// WithGranularTools enables granular tool mode, registering all ~98 individual
+// tools instead of the default ~15 grouped meta-tools.
+func WithGranularTools(granular bool) ServerOption {
+	return func(opts *serverOptions) {
+		opts.granularTools = granular
 	}
 }
 
