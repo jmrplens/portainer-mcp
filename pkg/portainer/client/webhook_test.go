@@ -1,3 +1,5 @@
+// Tests for webhook management client methods (GetWebhooks, CreateWebhook, DeleteWebhook).
+// Run: go test ./pkg/portainer/client/ -run TestWebhook -v
 package client
 
 import (

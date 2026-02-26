@@ -1,3 +1,5 @@
+// Tests for application template client methods (GetAppTemplates, GetAppTemplateFile).
+// Run: go test ./pkg/portainer/client/ -run TestGetAppTemplate -v
 package client
 
 import (

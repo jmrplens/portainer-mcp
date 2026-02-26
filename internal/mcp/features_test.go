@@ -1,3 +1,5 @@
+// Tests for MCP server feature registration (AddXxxFeatures functions) and server options.
+// Run: go test ./internal/mcp/ -run "TestAdd.*Features|TestServer" -v
 package mcp
 
 import (

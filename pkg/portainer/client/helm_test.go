@@ -1,3 +1,5 @@
+// Tests for Helm release management client methods covering all 8 helm operations.
+// Run: go test ./pkg/portainer/client/ -run TestHelm -v
 package client
 
 import (

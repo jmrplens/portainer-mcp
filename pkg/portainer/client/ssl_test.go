@@ -1,3 +1,5 @@
+// Tests for SSL settings client methods (GetSSLSettings, UpdateSSLSettings).
+// Run: go test ./pkg/portainer/client/ -run TestSSL -v
 package client
 
 import (
