@@ -159,7 +159,7 @@ func isValidUserRole(role string) bool {
 
 // isValidHTTPMethod checks if a given string is a valid HTTP method for proxy requests
 func isValidHTTPMethod(method string) bool {
-	validMethods := []string{"GET", "POST", "PUT", "DELETE", "HEAD"}
+	validMethods := []string{"GET", "POST", "PUT", "DELETE", "HEAD", "PATCH"}
 	return slices.Contains(validMethods, method)
 }
 

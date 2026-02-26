@@ -39,7 +39,7 @@ func NewTestEnv(t *testing.T, opts ...containers.PortainerContainerOption) *Test
 		client.WithSkipTLSVerify(true),
 	)
 
-	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, portainer.GetAPIToken(), ToolsPath)
+	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, portainer.GetAPIToken(), ToolsPath, mcp.WithSkipTLSVerify(true))
 	require.NoError(t, err, "Failed to create MCP server")
 
 	return &TestEnv{

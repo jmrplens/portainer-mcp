@@ -17,6 +17,8 @@ const (
 	MinimumToolsVersion = "1.0"
 	// SupportedPortainerVersion is the version of Portainer that is supported by this tool
 	SupportedPortainerVersion = "2.31.2"
+	// maxProxyResponseSize is the maximum allowed response body size (10MB) for Docker/K8s proxy calls
+	maxProxyResponseSize = 10 * 1024 * 1024
 )
 
 // PortainerClient defines the interface for the wrapper client used by the MCP server
@@ -188,6 +190,7 @@ type serverOptions struct {
 	client              PortainerClient
 	readOnly            bool
 	disableVersionCheck bool
+	skipTLSVerify       bool
 }
 
 // WithClient sets a custom client for the server.
@@ -211,6 +214,14 @@ func WithReadOnly(readOnly bool) ServerOption {
 func WithDisableVersionCheck(disable bool) ServerOption {
 	return func(opts *serverOptions) {
 		opts.disableVersionCheck = disable
+	}
+}
+
+// WithSkipTLSVerify skips TLS certificate verification when connecting to Portainer.
+// This should only be used for development/testing with self-signed certificates.
+func WithSkipTLSVerify(skip bool) ServerOption {
+	return func(opts *serverOptions) {
+		opts.skipTLSVerify = skip
 	}
 }
 
@@ -249,7 +260,7 @@ func NewPortainerMCPServer(serverURL, token, toolsPath string, options ...Server
 	if opts.client != nil {
 		portainerClient = opts.client
 	} else {
-		portainerClient = client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(true))
+		portainerClient = client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(opts.skipTLSVerify))
 	}
 
 	if !opts.disableVersionCheck {

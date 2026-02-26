@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -81,6 +82,10 @@ func (s *PortainerMCPServer) HandleCreateEdgeJob() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("invalid cronExpression parameter", err), nil
 		}
 
+		if !isValidCronExpression(cronExpression) {
+			return mcp.NewToolResultErrorFromErr("invalid cronExpression parameter", fmt.Errorf("cron expression must have 5 fields (minute hour day month weekday)")), nil
+		}
+
 		fileContent, err := parser.GetString("fileContent", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid fileContent parameter", err), nil
@@ -116,6 +121,13 @@ func (s *PortainerMCPServer) HandleDeleteEdgeJob() server.ToolHandlerFunc {
 
 		return mcp.NewToolResultText("Edge job deleted successfully"), nil
 	}
+}
+
+// isValidCronExpression performs basic validation of a cron expression.
+// It checks that the expression has exactly 5 fields (minute hour day month weekday).
+func isValidCronExpression(expr string) bool {
+	fields := strings.Fields(strings.TrimSpace(expr))
+	return len(fields) == 5
 }
 
 func (s *PortainerMCPServer) AddEdgeUpdateScheduleFeatures() {

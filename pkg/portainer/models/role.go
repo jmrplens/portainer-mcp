@@ -19,8 +19,9 @@ func ConvertToRole(raw *apimodels.PortainereeRole) Role {
 		return Role{}
 	}
 
-	role := Role{
-		Authorizations: map[string]bool(raw.Authorizations),
+	role := Role{}
+	if raw.Authorizations != nil {
+		role.Authorizations = map[string]bool(raw.Authorizations)
 	}
 
 	if raw.ID != nil {

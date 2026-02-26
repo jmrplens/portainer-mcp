@@ -31,6 +31,13 @@ func (s *PortainerMCPServer) HandleGetSettings() server.ToolHandlerFunc {
 
 // HandleUpdateSettings handles the updateSettings tool call.
 // It accepts a JSON string parameter containing the settings fields to update.
+//
+// SECURITY NOTE: This handler passes the JSON settings map directly to the Portainer
+// API without validating or restricting which fields can be modified. This means the
+// caller can change any Portainer setting including authentication methods, edge compute
+// features, and other security-sensitive configuration. Access control relies on the
+// Portainer API token permissions. Consider restricting allowed fields in the future
+// if a more granular access model is needed.
 func (s *PortainerMCPServer) HandleUpdateSettings() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)

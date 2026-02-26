@@ -138,7 +138,7 @@ func TestIsValidHTTPMethod(t *testing.T) {
 		{"Valid DELETE", "DELETE", true},
 		{"Valid HEAD", "HEAD", true},
 		{"Invalid lowercase get", "get", false},
-		{"Invalid PATCH", "PATCH", false},
+		{"Valid PATCH", "PATCH", true},
 		{"Invalid OPTIONS", "OPTIONS", false},
 		{"Invalid Empty", "", false},
 		{"Invalid Random", "RANDOM", false},

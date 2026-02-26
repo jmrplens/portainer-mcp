@@ -20,6 +20,15 @@ func (s *PortainerMCPServer) AddDockerProxyFeatures() {
 	}
 }
 
+// HandleDockerProxy proxies arbitrary Docker API requests to a Portainer environment.
+//
+// SECURITY NOTE: This handler allows the caller to invoke any Docker Engine API endpoint
+// (e.g. /containers, /exec, /volumes, /networks, /swarm) on the target environment.
+// There is no allowlist restricting which API paths are permitted. The only validation
+// performed is that the path starts with "/" and the HTTP method is one of the supported
+// set. Access control relies entirely on the Portainer API token permissions and the
+// read-only mode flag. Operators should be aware that this effectively grants full Docker
+// API access to whoever holds the MCP server's Portainer token.
 func (s *PortainerMCPServer) HandleDockerProxy() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -86,7 +95,7 @@ func (s *PortainerMCPServer) HandleDockerProxy() server.ToolHandlerFunc {
 		}
 		defer response.Body.Close()
 
-		responseBody, err := io.ReadAll(response.Body)
+		responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxProxyResponseSize))
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to read Docker API response", err), nil
 		}

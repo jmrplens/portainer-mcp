@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -53,6 +55,23 @@ func (s *PortainerMCPServer) HandleUpdateSSLSettings() server.ToolHandlerFunc {
 					return mcp.NewToolResultErrorFromErr("invalid httpEnabled parameter", fmt.Errorf("httpEnabled must be a boolean")), nil
 				}
 				httpEnabled = &boolVal
+			}
+		}
+
+		if cert != "" {
+			block, _ := pem.Decode([]byte(cert))
+			if block == nil {
+				return mcp.NewToolResultErrorFromErr("invalid cert parameter", fmt.Errorf("certificate is not valid PEM format")), nil
+			}
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+				return mcp.NewToolResultErrorFromErr("invalid cert parameter", fmt.Errorf("certificate is not a valid X.509 certificate: %w", err)), nil
+			}
+		}
+
+		if key != "" {
+			block, _ := pem.Decode([]byte(key))
+			if block == nil {
+				return mcp.NewToolResultErrorFromErr("invalid key parameter", fmt.Errorf("key is not valid PEM format")), nil
 			}
 		}
 
