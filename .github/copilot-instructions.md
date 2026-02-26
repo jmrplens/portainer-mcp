@@ -1,0 +1,35 @@
+---
+applyTo: "**"
+---
+- This is a Go project (1.24+). Build with `make build`, test with `go test ./...`.
+- Module: `github.com/portainer/portainer-mcp`. MCP SDK: `github.com/mark3labs/mcp-go` v0.32.0.
+- CGO_ENABLED=0 — produces a statically linked binary.
+- Use `gofmt -s` for formatting. Run `go vet ./...` before committing.
+- Error wrapping: `fmt.Errorf("context: %w", err)` — always provide operation context.
+- Logging: `github.com/rs/zerolog` — use structured fields, never `fmt.Println`.
+- Two model layers: Raw API models (aliased `apimodels`) → Local models (`models`) with `ConvertXxx()`.
+- Import alias convention: `apimodels "github.com/portainer/client-api-go/v2/pkg/models"` for raw, default `models` for local.
+- All tool handlers follow the pattern: `func (s *PortainerMCPServer) HandleXxx() server.ToolHandlerFunc { return func(...) {} }`.
+- Parameters are parsed with `toolgen.NewParameterParser(request)`, using `GetString`, `GetInt`, `GetBool` with required flag.
+- Tool names are string constants in `internal/mcp/schema.go` — always add new tools there first.
+- Tool definitions are YAML-driven (`tools.yaml`). Keep the YAML and Go handler in sync.
+- The meta-tool system in `metatool_registry.go` groups 98 tools into 15 categories. New tools must be added to the appropriate group.
+- Read-only mode: write handlers are excluded at registration time. Mark `readOnly: true/false` in metatool actions.
+- Commit messages follow conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
+- Documentation site uses Starlight/Astro in `docs/`, managed with `pnpm` (not npm).
+
+---
+applyTo: "**/*_test.go"
+---
+- Use table-driven tests with `tests := []struct{ name string; ... }` and `t.Run(tt.name, ...)`.
+- Mock the `PortainerClient` interface using `MockPortainerClient` from `mocks_test.go` (testify/mock).
+- Mock setup: `mockClient.On("MethodName", args...).Return(result, error)`.
+- Always call `mockClient.AssertExpectations(t)` at the end of each test case.
+- Create server with `&PortainerMCPServer{cli: mockClient}` — no real HTTP needed.
+- Use `testify/assert` for assertions: `assert.NoError`, `assert.Equal`, `assert.Contains`, `assert.True`.
+- For error cases: verify `result.IsError == true` and check error message in `result.Content[0].(mcp.TextContent).Text`.
+- For success cases: unmarshal `result.Content[0].(mcp.TextContent).Text` as JSON and compare to expected models.
+- For write operations: also verify the handler returns a success message string (e.g., "created successfully").
+- Test both success and error paths. Minimum test cases: success, API error, invalid parameter.
+- Parameter validation tests: cover required missing params, invalid IDs (<= 0), invalid enum values.
+- Integration tests (in `tests/integration/`) use real Docker containers — do not run in CI without Docker.
