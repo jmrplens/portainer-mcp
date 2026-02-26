@@ -4,6 +4,7 @@ import (
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// AccessGroup represents a Portainer endpoint group used to manage access to multiple environments.
 type AccessGroup struct {
 	ID             int            `json:"id"`
 	Name           string         `json:"name"`
@@ -12,6 +13,8 @@ type AccessGroup struct {
 	TeamAccesses   map[int]string `json:"team_accesses"`
 }
 
+// ConvertEndpointGroupToAccessGroup converts a raw Portainer endpoint group and its associated
+// endpoints into a simplified AccessGroup model.
 func ConvertEndpointGroupToAccessGroup(rawGroup *apimodels.PortainerEndpointGroup, rawEndpoints []*apimodels.PortainereeEndpoint) AccessGroup {
 	if rawGroup == nil {
 		return AccessGroup{}

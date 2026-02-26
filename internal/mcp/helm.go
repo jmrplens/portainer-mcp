@@ -54,6 +54,10 @@ func (s *PortainerMCPServer) HandleAddHelmRepository() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
 		}
 
+		if err := validateURL(url); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
+		}
+
 		repo, err := s.cli.CreateHelmRepository(userId, url)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to add helm repository", err), nil
@@ -95,6 +99,10 @@ func (s *PortainerMCPServer) HandleSearchHelmCharts() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("invalid repo parameter", err), nil
 		}
 
+		if err := validateURL(repo); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
+		}
+
 		chart, err := parser.GetString("chart", false)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid chart parameter", err), nil
@@ -131,6 +139,10 @@ func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 		repo, err := parser.GetString("repo", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid repo parameter", err), nil
+		}
+
+		if err := validateURL(repo); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
 		}
 
 		namespace, err := parser.GetString("namespace", false)

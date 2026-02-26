@@ -4,6 +4,7 @@ import (
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// Registry represents a container image registry configured in Portainer.
 type Registry struct {
 	ID             int    `json:"id"`
 	Name           string `json:"name"`
@@ -14,6 +15,7 @@ type Registry struct {
 	Username       string `json:"username"`
 }
 
+// ConvertRawRegistryToRegistry converts a raw Portainer registry into a simplified Registry model.
 func ConvertRawRegistryToRegistry(rawRegistry *apimodels.PortainereeRegistry) Registry {
 	if rawRegistry == nil {
 		return Registry{}

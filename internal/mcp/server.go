@@ -1,9 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -290,9 +294,23 @@ func NewPortainerMCPServer(serverURL, token, toolsPath string, options ...Server
 }
 
 // Start begins listening for MCP protocol messages on standard input/output.
-// This is a blocking call that will run until the connection is closed.
+// It handles SIGINT and SIGTERM for graceful shutdown.
 func (s *PortainerMCPServer) Start() error {
-	return server.ServeStdio(s.srv)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeStdio(s.srv)
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		log.Info().Msg("Received shutdown signal, stopping server")
+		return nil
+	}
 }
 
 // addToolIfExists adds a tool to the server if it exists in the tools map

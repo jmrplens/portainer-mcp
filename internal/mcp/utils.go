@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -29,6 +30,21 @@ func validateName(name string) error {
 func validatePositiveID(name string, id int) error {
 	if id <= 0 {
 		return fmt.Errorf("%s must be a positive integer, got %d", name, id)
+	}
+	return nil
+}
+
+// validateURL checks that a string is a valid absolute URL with http or https scheme.
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "oci" {
+		return fmt.Errorf("URL must use http, https, or oci scheme, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
 	}
 	return nil
 }

@@ -6,12 +6,14 @@ import (
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// EnvironmentTag represents a tag used to categorize Portainer environments.
 type EnvironmentTag struct {
 	ID             int    `json:"id"`
 	Name           string `json:"name"`
 	EnvironmentIds []int  `json:"environment_ids"`
 }
 
+// ConvertTagToEnvironmentTag converts a raw Portainer tag into a simplified EnvironmentTag model.
 func ConvertTagToEnvironmentTag(rawTag *apimodels.PortainerTag) EnvironmentTag {
 	if rawTag == nil {
 		return EnvironmentTag{}

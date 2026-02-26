@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -72,6 +73,13 @@ func (s *PortainerMCPServer) HandleCreateRegistry() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
 		}
 
+		// Registry URLs like "docker.io" may not have a scheme; only validate if scheme is present
+		if strings.Contains(url, "://") {
+			if err := validateURL(url); err != nil {
+				return mcp.NewToolResultErrorFromErr("invalid registry URL", err), nil
+			}
+		}
+
 		authentication, err := parser.GetBoolean("authentication", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid authentication parameter", err), nil
@@ -115,6 +123,11 @@ func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 			v, err := parser.GetString("url", false)
 			if err != nil {
 				return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
+			}
+			if strings.Contains(v, "://") {
+				if err := validateURL(v); err != nil {
+					return mcp.NewToolResultErrorFromErr("invalid registry URL", err), nil
+				}
 			}
 			url = &v
 		}

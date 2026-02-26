@@ -5,6 +5,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
 )
 
+// Group represents a Portainer edge group used to organize edge environments.
 type Group struct {
 	ID             int    `json:"id"`
 	Name           string `json:"name"`
@@ -12,6 +13,7 @@ type Group struct {
 	TagIds         []int  `json:"tag_ids"`
 }
 
+// ConvertEdgeGroupToGroup converts a raw Portainer edge group into a simplified Group model.
 func ConvertEdgeGroupToGroup(rawEdgeGroup *apimodels.EdgegroupsDecoratedEdgeGroup) Group {
 	if rawEdgeGroup == nil {
 		return Group{}

@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
 )
 
+// Stack represents a Portainer edge stack deployed via edge groups.
 type Stack struct {
 	ID                  int    `json:"id"`
 	Name                string `json:"name"`
@@ -14,6 +15,7 @@ type Stack struct {
 	EnvironmentGroupIds []int  `json:"group_ids"`
 }
 
+// ConvertEdgeStackToStack converts a raw Portainer edge stack into a simplified Stack model.
 func ConvertEdgeStackToStack(rawEdgeStack *apimodels.PortainereeEdgeStack) Stack {
 	if rawEdgeStack == nil {
 		return Stack{}

@@ -4,6 +4,7 @@ import (
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// User represents a Portainer user account.
 type User struct {
 	ID       int    `json:"id"`
 	Username string `json:"username"`
@@ -25,6 +26,7 @@ const (
 	UserRoleIDEdgeAdmin int64 = 3
 )
 
+// ConvertToUser converts a raw Portainer user into a simplified User model.
 func ConvertToUser(rawUser *apimodels.PortainereeUser) User {
 	if rawUser == nil {
 		return User{}

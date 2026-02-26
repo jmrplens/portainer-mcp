@@ -2,6 +2,7 @@ package models
 
 import apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 
+// PortainerSettings represents the global Portainer instance settings.
 type PortainerSettings struct {
 	Authentication struct {
 		Method string `json:"method"`
@@ -22,6 +23,7 @@ const (
 	AuthenticationMethodUnknown  = "unknown"
 )
 
+// ConvertSettingsToPortainerSettings converts raw Portainer settings into a simplified PortainerSettings model.
 func ConvertSettingsToPortainerSettings(rawSettings *apimodels.PortainereeSettings) PortainerSettings {
 	if rawSettings == nil {
 		return PortainerSettings{}
