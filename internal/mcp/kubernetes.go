@@ -29,6 +29,9 @@ func (s *PortainerMCPServer) HandleKubernetesProxyStripped() server.ToolHandlerF
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		kubernetesAPIPath, err := parser.GetString("kubernetesAPIPath", true)
 		if err != nil {
@@ -92,6 +95,9 @@ func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		method, err := parser.GetString("method", true)
@@ -174,6 +180,9 @@ func (s *PortainerMCPServer) HandleGetKubernetesDashboard() server.ToolHandlerFu
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		dashboard, err := s.cli.GetKubernetesDashboard(environmentId)
 		if err != nil {
@@ -192,6 +201,9 @@ func (s *PortainerMCPServer) HandleListKubernetesNamespaces() server.ToolHandler
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		namespaces, err := s.cli.GetKubernetesNamespaces(environmentId)
 		if err != nil {
@@ -209,6 +221,9 @@ func (s *PortainerMCPServer) HandleGetKubernetesConfig() server.ToolHandlerFunc 
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		config, err := s.cli.GetKubernetesConfig(environmentId)

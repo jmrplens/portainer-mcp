@@ -41,6 +41,9 @@ func (s *PortainerMCPServer) HandleGetEnvironment() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		environment, err := s.cli.GetEnvironment(id)
 		if err != nil {
@@ -59,6 +62,9 @@ func (s *PortainerMCPServer) HandleDeleteEnvironment() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		err = s.cli.DeleteEnvironment(id)
 		if err != nil {
@@ -76,6 +82,9 @@ func (s *PortainerMCPServer) HandleSnapshotEnvironment() server.ToolHandlerFunc 
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.SnapshotEnvironment(id)
@@ -106,6 +115,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentTags() server.ToolHandlerFun
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		tagIds, err := parser.GetArrayOfIntegers("tagIds", true)
 		if err != nil {
@@ -128,6 +140,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentUserAccesses() server.ToolHa
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		userAccesses, err := parser.GetArrayOfObjects("userAccesses", true)
@@ -156,6 +171,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentTeamAccesses() server.ToolHa
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		teamAccesses, err := parser.GetArrayOfObjects("teamAccesses", true)

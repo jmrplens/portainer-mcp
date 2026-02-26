@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"gopkg.in/yaml.v3"
 )
 
 // jsonResult marshals the given object to JSON and returns it as an MCP tool result.
@@ -45,6 +46,19 @@ func validateURL(rawURL string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// validateComposeYAML checks that the content is valid YAML. This catches syntax
+// errors before sending the file to the Portainer API, providing better error messages.
+func validateComposeYAML(content string) error {
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("compose file content cannot be empty")
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(content), &parsed); err != nil {
+		return fmt.Errorf("invalid YAML syntax: %w", err)
 	}
 	return nil
 }

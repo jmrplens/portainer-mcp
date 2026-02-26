@@ -30,6 +30,9 @@ func (s *PortainerMCPServer) HandleListHelmRepositories() server.ToolHandlerFunc
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
 		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		repos, err := s.cli.GetHelmRepositories(userId)
 		if err != nil {
@@ -47,6 +50,9 @@ func (s *PortainerMCPServer) HandleAddHelmRepository() server.ToolHandlerFunc {
 		userId, err := parser.GetInt("userId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
+		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		url, err := parser.GetString("url", true)
@@ -75,10 +81,16 @@ func (s *PortainerMCPServer) HandleRemoveHelmRepository() server.ToolHandlerFunc
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
 		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		repositoryId, err := parser.GetInt("repositoryId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid repositoryId parameter", err), nil
+		}
+		if err := validatePositiveID("repositoryId", repositoryId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteHelmRepository(userId, repositoryId)
@@ -124,6 +136,9 @@ func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		chart, err := parser.GetString("chart", true)
@@ -177,6 +192,9 @@ func (s *PortainerMCPServer) HandleListHelmReleases() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		namespace, err := parser.GetString("namespace", false)
 		if err != nil {
@@ -210,6 +228,9 @@ func (s *PortainerMCPServer) HandleDeleteHelmRelease() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		release, err := parser.GetString("release", true)
 		if err != nil {
@@ -237,6 +258,9 @@ func (s *PortainerMCPServer) HandleGetHelmReleaseHistory() server.ToolHandlerFun
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		name, err := parser.GetString("name", true)

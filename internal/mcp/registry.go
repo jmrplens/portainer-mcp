@@ -40,6 +40,9 @@ func (s *PortainerMCPServer) HandleGetRegistry() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		registry, err := s.cli.GetRegistry(id)
 		if err != nil {
@@ -105,6 +108,9 @@ func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		args := request.GetArguments()
@@ -184,6 +190,9 @@ func (s *PortainerMCPServer) HandleDeleteRegistry() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteRegistry(id)

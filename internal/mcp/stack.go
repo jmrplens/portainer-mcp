@@ -58,6 +58,9 @@ func (s *PortainerMCPServer) HandleGetStackFile() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		stackFile, err := s.cli.GetStackFile(id)
 		if err != nil {
@@ -76,10 +79,16 @@ func (s *PortainerMCPServer) HandleCreateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid name parameter", err), nil
 		}
+		if err := validateName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		file, err := parser.GetString("file", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid file parameter", err), nil
+		}
+		if err := validateComposeYAML(file); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		environmentGroupIds, err := parser.GetArrayOfIntegers("environmentGroupIds", true)
@@ -104,10 +113,16 @@ func (s *PortainerMCPServer) HandleUpdateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		file, err := parser.GetString("file", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid file parameter", err), nil
+		}
+		if err := validateComposeYAML(file); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		environmentGroupIds, err := parser.GetArrayOfIntegers("environmentGroupIds", true)
@@ -132,6 +147,9 @@ func (s *PortainerMCPServer) HandleInspectStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		stack, err := s.cli.InspectStack(id)
 		if err != nil {
@@ -150,10 +168,16 @@ func (s *PortainerMCPServer) HandleDeleteStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		removeVolumes, err := parser.GetBoolean("removeVolumes", false)
@@ -178,6 +202,9 @@ func (s *PortainerMCPServer) HandleInspectStackFile() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		content, err := s.cli.InspectStackFile(id)
 		if err != nil {
@@ -196,10 +223,16 @@ func (s *PortainerMCPServer) HandleUpdateStackGit() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		referenceName, err := parser.GetString("referenceName", false)
@@ -229,10 +262,16 @@ func (s *PortainerMCPServer) HandleRedeployStackGit() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		pullImage, err := parser.GetBoolean("pullImage", false)
@@ -262,10 +301,16 @@ func (s *PortainerMCPServer) HandleStartStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		stack, err := s.cli.StartStack(id, endpointID)
@@ -285,10 +330,16 @@ func (s *PortainerMCPServer) HandleStopStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		stack, err := s.cli.StopStack(id, endpointID)
@@ -308,15 +359,24 @@ func (s *PortainerMCPServer) HandleMigrateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		targetEndpointID, err := parser.GetInt("targetEnvironmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid targetEnvironmentId parameter", err), nil
+		}
+		if err := validatePositiveID("targetEnvironmentId", targetEndpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		name, err := parser.GetString("name", false)

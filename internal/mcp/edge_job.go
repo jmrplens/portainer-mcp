@@ -40,6 +40,9 @@ func (s *PortainerMCPServer) HandleGetEdgeJob() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		job, err := s.cli.GetEdgeJob(id)
 		if err != nil {
@@ -57,6 +60,9 @@ func (s *PortainerMCPServer) HandleGetEdgeJobFile() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		content, err := s.cli.GetEdgeJobFile(id)
@@ -112,6 +118,9 @@ func (s *PortainerMCPServer) HandleDeleteEdgeJob() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteEdgeJob(id)

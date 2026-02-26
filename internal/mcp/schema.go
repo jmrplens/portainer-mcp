@@ -178,6 +178,12 @@ const (
 	TemplateTypeKubernetes = 3 // Kubernetes
 )
 
+// Webhook type constants.
+const (
+	WebhookTypeService   = 1 // Service webhook
+	WebhookTypeContainer = 2 // Container webhook
+)
+
 // isValidRegistryType checks if a given integer is a valid registry type.
 func isValidRegistryType(t int) bool {
 	return t >= RegistryTypeQuay && t <= RegistryTypeECR
@@ -186,4 +192,9 @@ func isValidRegistryType(t int) bool {
 // isValidTemplateType checks if a given integer is a valid custom template type.
 func isValidTemplateType(t int) bool {
 	return t >= TemplateTypeSwarm && t <= TemplateTypeKubernetes
+}
+
+// isValidWebhookType checks if a given integer is a valid webhook type.
+func isValidWebhookType(t int) bool {
+	return t >= WebhookTypeService && t <= WebhookTypeContainer
 }

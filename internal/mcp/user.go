@@ -39,6 +39,9 @@ func (s *PortainerMCPServer) HandleUpdateUserRole() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		role, err := parser.GetString("role", true)
 		if err != nil {
@@ -98,6 +101,9 @@ func (s *PortainerMCPServer) HandleGetUser() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		user, err := s.cli.GetUser(id)
 		if err != nil {
@@ -115,6 +121,9 @@ func (s *PortainerMCPServer) HandleDeleteUser() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteUser(id)

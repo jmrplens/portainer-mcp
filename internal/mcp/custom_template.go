@@ -39,6 +39,9 @@ func (s *PortainerMCPServer) HandleGetCustomTemplate() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		template, err := s.cli.GetCustomTemplate(id)
 		if err != nil {
@@ -56,6 +59,9 @@ func (s *PortainerMCPServer) HandleGetCustomTemplateFile() server.ToolHandlerFun
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		content, err := s.cli.GetCustomTemplateFile(id)
@@ -119,6 +125,9 @@ func (s *PortainerMCPServer) HandleDeleteCustomTemplate() server.ToolHandlerFunc
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteCustomTemplate(id)

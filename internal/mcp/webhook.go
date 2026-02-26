@@ -42,10 +42,16 @@ func (s *PortainerMCPServer) HandleCreateWebhook() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid endpointId parameter", err), nil
 		}
+		if err := validatePositiveID("endpointId", endpointId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		webhookType, err := parser.GetInt("webhookType", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid webhookType parameter", err), nil
+		}
+		if !isValidWebhookType(webhookType) {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid webhookType: %d (must be 1=service or 2=container)", webhookType)), nil
 		}
 
 		id, err := s.cli.CreateWebhook(resourceId, endpointId, webhookType)
@@ -64,6 +70,9 @@ func (s *PortainerMCPServer) HandleDeleteWebhook() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteWebhook(id)

@@ -37,6 +37,9 @@ func (s *PortainerMCPServer) HandleDockerProxy() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		method, err := parser.GetString("method", true)
 		if err != nil {
@@ -111,6 +114,9 @@ func (s *PortainerMCPServer) HandleGetDockerDashboard() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		dashboard, err := s.cli.GetDockerDashboard(environmentId)
