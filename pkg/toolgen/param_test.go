@@ -349,6 +349,18 @@ func TestParseArrayOfIntegers(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name:    "overflow value in array",
+			input:   []any{float64(1), float64(1e20), float64(3)},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "fractional value in array",
+			input:   []any{float64(1), float64(2.5), float64(3)},
+			want:    nil,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -442,6 +454,30 @@ func TestGetInt(t *testing.T) {
 		{
 			name:     "nil value",
 			args:     map[string]any{"num": nil},
+			param:    "num",
+			required: true,
+			want:     0,
+			wantErr:  true,
+		},
+		{
+			name:     "overflow large positive",
+			args:     map[string]any{"num": float64(1e20)},
+			param:    "num",
+			required: true,
+			want:     0,
+			wantErr:  true,
+		},
+		{
+			name:     "overflow large negative",
+			args:     map[string]any{"num": float64(-1e20)},
+			param:    "num",
+			required: true,
+			want:     0,
+			wantErr:  true,
+		},
+		{
+			name:     "non-integer fractional value",
+			args:     map[string]any{"num": float64(42.5)},
 			param:    "num",
 			required: true,
 			want:     0,

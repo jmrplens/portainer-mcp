@@ -1578,7 +1578,7 @@ tools:
       openWorldHint: false
   - name: getEdgeJob
     description: Get details of a specific edge job by ID, including name, cron expression, recurring status, and edge groups
-    inputSchema:
+    parameters:
       - name: id
         description: The ID of the edge job
         type: number
@@ -1591,7 +1591,7 @@ tools:
       openWorldHint: false
   - name: getEdgeJobFile
     description: Get the script file content of a specific edge job by ID
-    inputSchema:
+    parameters:
       - name: id
         description: The ID of the edge job
         type: number
@@ -1604,7 +1604,7 @@ tools:
       openWorldHint: false
   - name: createEdgeJob
     description: Create a new edge job with script content, cron schedule, and target environments or edge groups
-    inputSchema:
+    parameters:
       - name: name
         description: The name of the edge job
         type: string
@@ -1637,7 +1637,7 @@ tools:
       openWorldHint: true
   - name: deleteEdgeJob
     description: Delete an edge job by its ID
-    inputSchema:
+    parameters:
       - name: id
         description: The ID of the edge job to delete
         type: number
@@ -1687,7 +1687,7 @@ tools:
   ## ------------------------------------------------------------
   - name: listHelmRepositories
     description: List all Helm repositories configured for a user
-    inputSchema:
+    parameters:
       - name: userId
         description: The ID of the user
         type: number
@@ -1700,7 +1700,7 @@ tools:
       openWorldHint: false
   - name: addHelmRepository
     description: Add a Helm repository for a user
-    inputSchema:
+    parameters:
       - name: userId
         description: The ID of the user
         type: number
@@ -1717,7 +1717,7 @@ tools:
       openWorldHint: true
   - name: removeHelmRepository
     description: Remove a Helm repository for a user
-    inputSchema:
+    parameters:
       - name: userId
         description: The ID of the user
         type: number
@@ -1734,7 +1734,7 @@ tools:
       openWorldHint: false
   - name: searchHelmCharts
     description: Search for Helm charts in a repository
-    inputSchema:
+    parameters:
       - name: repo
         description: The URL of the Helm repository to search
         type: string
@@ -1751,7 +1751,7 @@ tools:
       openWorldHint: true
   - name: installHelmChart
     description: Install a Helm chart on an environment
-    inputSchema:
+    parameters:
       - name: environmentId
         description: The ID of the environment to install the chart on
         type: number
@@ -1788,7 +1788,7 @@ tools:
       openWorldHint: true
   - name: listHelmReleases
     description: List all Helm releases on an environment
-    inputSchema:
+    parameters:
       - name: environmentId
         description: The ID of the environment
         type: number
@@ -1813,7 +1813,7 @@ tools:
       openWorldHint: false
   - name: deleteHelmRelease
     description: Delete a Helm release from an environment
-    inputSchema:
+    parameters:
       - name: environmentId
         description: The ID of the environment
         type: number
@@ -1834,7 +1834,7 @@ tools:
       openWorldHint: false
   - name: getHelmReleaseHistory
     description: Get the revision history of a Helm release
-    inputSchema:
+    parameters:
       - name: environmentId
         description: The ID of the environment
         type: number
