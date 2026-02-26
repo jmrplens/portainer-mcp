@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/portainer/client-api-go/v2/client"
+	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 )
@@ -126,6 +127,151 @@ func TestProxyKubernetesRequest(t *testing.T) {
 				}
 			}
 
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetKubernetesDashboard verifies retrieval of Kubernetes dashboard data.
+func TestGetKubernetesDashboard(t *testing.T) {
+	tests := []struct {
+		name          string
+		envID         int
+		mockResult    *apimodels.KubernetesK8sDashboard
+		mockError     error
+		expectedError bool
+	}{
+		{
+			name:  "successful retrieval",
+			envID: 1,
+			mockResult: &apimodels.KubernetesK8sDashboard{
+				ApplicationsCount: 5,
+				ConfigMapsCount:   3,
+				IngressesCount:    2,
+				NamespacesCount:   4,
+				SecretsCount:      6,
+				ServicesCount:     3,
+				VolumesCount:      2,
+			},
+		},
+		{
+			name:          "API error",
+			envID:         99,
+			mockError:     errors.New("environment not found"),
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("GetKubernetesDashboard", int64(tt.envID)).Return(tt.mockResult, tt.mockError)
+
+			c := &PortainerClient{cli: mockAPI}
+			result, err := c.GetKubernetesDashboard(tt.envID)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, 5, result.ApplicationsCount)
+				assert.Equal(t, 4, result.NamespacesCount)
+			}
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetKubernetesNamespaces verifies retrieval of Kubernetes namespaces.
+func TestGetKubernetesNamespaces(t *testing.T) {
+	tests := []struct {
+		name          string
+		envID         int
+		mockResult    []*apimodels.PortainerK8sNamespaceInfo
+		mockError     error
+		expectedCount int
+		expectedError bool
+	}{
+		{
+			name:  "successful retrieval",
+			envID: 1,
+			mockResult: []*apimodels.PortainerK8sNamespaceInfo{
+				{Name: "default", IsDefault: true, IsSystem: false},
+				{Name: "kube-system", IsDefault: false, IsSystem: true},
+			},
+			expectedCount: 2,
+		},
+		{
+			name:          "empty list",
+			envID:         1,
+			mockResult:    []*apimodels.PortainerK8sNamespaceInfo{},
+			expectedCount: 0,
+		},
+		{
+			name:          "API error",
+			envID:         99,
+			mockError:     errors.New("environment not found"),
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("GetKubernetesNamespaces", int64(tt.envID)).Return(tt.mockResult, tt.mockError)
+
+			c := &PortainerClient{cli: mockAPI}
+			result, err := c.GetKubernetesNamespaces(tt.envID)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, result, tt.expectedCount)
+			}
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetKubernetesConfig verifies retrieval of kubeconfig for an environment.
+func TestGetKubernetesConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		envID         int
+		mockResult    interface{}
+		mockError     error
+		expectedError bool
+	}{
+		{
+			name:       "successful retrieval",
+			envID:      1,
+			mockResult: map[string]interface{}{"apiVersion": "v1", "kind": "Config"},
+		},
+		{
+			name:          "API error",
+			envID:         99,
+			mockError:     errors.New("environment not found"),
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("GetKubernetesConfig", int64(tt.envID)).Return(tt.mockResult, tt.mockError)
+
+			c := &PortainerClient{cli: mockAPI}
+			result, err := c.GetKubernetesConfig(tt.envID)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+			}
 			mockAPI.AssertExpectations(t)
 		})
 	}
