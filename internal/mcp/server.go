@@ -1,25 +1,48 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/portainer/client"
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
+	"github.com/rs/zerolog/log"
 )
 
 const (
-	// MinimumToolsVersion is the minimum supported version of the tools.yaml file
-	MinimumToolsVersion = "1.0"
+	// MinimumToolsVersion is the minimum supported version of the tools.yaml file.
+	// This uses the same "v{major}.{minor}" format as tools.yaml version strings.
+	MinimumToolsVersion = "v1.0"
 	// SupportedPortainerVersion is the version of Portainer that is supported by this tool
 	SupportedPortainerVersion = "2.31.2"
+	// maxProxyResponseSize is the maximum allowed response body size (10MB) for Docker/K8s proxy calls
+	maxProxyResponseSize = 10 * 1024 * 1024
 )
 
-// PortainerClient defines the interface for the wrapper client used by the MCP server
+// PortainerClient defines the contract between the MCP server and the Portainer API
+// client wrapper. It abstracts all Portainer API interactions so that the MCP handlers
+// never communicate with the Portainer HTTP API directly.
+//
+// The interface covers the following resource domains:
+//   - Environments (endpoints): CRUD, snapshots, access control
+//   - Environment groups and access groups: grouping and permission management
+//   - Stacks: edge stacks and regular (non-edge) compose/swarm stacks
+//   - Users and teams: identity and team membership management
+//   - Settings: server, public, and SSL configuration
+//   - Templates: application templates and custom templates
+//   - Registries: container registry management
+//   - Docker and Kubernetes proxies: raw API pass-through to container engines
+//   - Tags, roles, webhooks, backups, edge jobs, Helm, auth, and system status
+//
+// Implementations must be safe for concurrent use by multiple MCP handler goroutines.
 type PortainerClient interface {
 	// Tag methods
 	GetEnvironmentTags() ([]models.EnvironmentTag, error)
@@ -171,8 +194,11 @@ type PortainerClient interface {
 	GetHelmReleaseHistory(environmentId int, name, namespace string) ([]models.HelmReleaseDetails, error)
 }
 
-// PortainerMCPServer is the main server that handles MCP protocol communication
-// with AI assistants and translates them into Portainer API calls.
+// PortainerMCPServer is the main MCP server that bridges AI assistants and the
+// Portainer API. It registers tool definitions loaded from a YAML file, routes
+// incoming MCP tool-call requests to the appropriate handlers, and communicates
+// with Portainer through the [PortainerClient] interface. The server supports
+// read-only mode to prevent modifications and listens on stdio for MCP messages.
 type PortainerMCPServer struct {
 	srv      *server.MCPServer
 	cli      PortainerClient
@@ -180,14 +206,17 @@ type PortainerMCPServer struct {
 	readOnly bool
 }
 
-// ServerOption is a function that configures the server
+// ServerOption is a functional option for configuring a [PortainerMCPServer].
+// Pass one or more options to [NewPortainerMCPServer] to customise behaviour.
 type ServerOption func(*serverOptions)
 
 // serverOptions contains all configurable options for the server
 type serverOptions struct {
 	client              PortainerClient
 	readOnly            bool
+	granularTools       bool
 	disableVersionCheck bool
+	skipTLSVerify       bool
 }
 
 // WithClient sets a custom client for the server.
@@ -206,11 +235,27 @@ func WithReadOnly(readOnly bool) ServerOption {
 	}
 }
 
+// WithGranularTools enables granular tool mode, registering all ~98 individual
+// tools instead of the default ~15 grouped meta-tools.
+func WithGranularTools(granular bool) ServerOption {
+	return func(opts *serverOptions) {
+		opts.granularTools = granular
+	}
+}
+
 // WithDisableVersionCheck disables the Portainer server version check.
 // This allows connecting to unsupported Portainer versions.
 func WithDisableVersionCheck(disable bool) ServerOption {
 	return func(opts *serverOptions) {
 		opts.disableVersionCheck = disable
+	}
+}
+
+// WithSkipTLSVerify skips TLS certificate verification when connecting to Portainer.
+// This should only be used for development/testing with self-signed certificates.
+func WithSkipTLSVerify(skip bool) ServerOption {
+	return func(opts *serverOptions) {
+		opts.skipTLSVerify = skip
 	}
 }
 
@@ -249,7 +294,7 @@ func NewPortainerMCPServer(serverURL, token, toolsPath string, options ...Server
 	if opts.client != nil {
 		portainerClient = opts.client
 	} else {
-		portainerClient = client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(true))
+		portainerClient = client.NewPortainerClient(serverURL, token, client.WithSkipTLSVerify(opts.skipTLSVerify))
 	}
 
 	if !opts.disableVersionCheck {
@@ -258,8 +303,8 @@ func NewPortainerMCPServer(serverURL, token, toolsPath string, options ...Server
 			return nil, fmt.Errorf("failed to get Portainer server version: %w", err)
 		}
 
-		if version != SupportedPortainerVersion {
-			return nil, fmt.Errorf("unsupported Portainer server version: %s, only version %s is supported", version, SupportedPortainerVersion)
+		if !isCompatibleVersion(version, SupportedPortainerVersion) {
+			return nil, fmt.Errorf("unsupported Portainer server version: %s, only version %s.x is supported", version, SupportedPortainerVersion)
 		}
 	}
 
@@ -277,9 +322,23 @@ func NewPortainerMCPServer(serverURL, token, toolsPath string, options ...Server
 }
 
 // Start begins listening for MCP protocol messages on standard input/output.
-// This is a blocking call that will run until the connection is closed.
+// It handles SIGINT and SIGTERM for graceful shutdown.
 func (s *PortainerMCPServer) Start() error {
-	return server.ServeStdio(s.srv)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeStdio(s.srv)
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		log.Info().Msg("Received shutdown signal, stopping server")
+		return nil
+	}
 }
 
 // addToolIfExists adds a tool to the server if it exists in the tools map
@@ -287,6 +346,22 @@ func (s *PortainerMCPServer) addToolIfExists(toolName string, handler server.Too
 	if tool, exists := s.tools[toolName]; exists {
 		s.srv.AddTool(tool, handler)
 	} else {
-		log.Printf("Tool %s not found, will not be registered for MCP usage", toolName)
+		log.Warn().Str("tool", toolName).Msg("Tool not found, will not be registered for MCP usage")
 	}
+}
+
+// isCompatibleVersion checks if the actual version is compatible with the supported version.
+// It compares only the major.minor components, allowing patch version differences.
+func isCompatibleVersion(actual, supported string) bool {
+	return majorMinor(actual) == majorMinor(supported)
+}
+
+// majorMinor extracts the "major.minor" prefix from a version string.
+// For example, "2.31.2" returns "2.31" and "2.31" returns "2.31".
+func majorMinor(version string) string {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 2 {
+		return version
+	}
+	return parts[0] + "." + parts[1]
 }

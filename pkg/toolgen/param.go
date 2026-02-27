@@ -1,7 +1,11 @@
+// Package toolgen provides tool generation utilities for building MCP tool
+// definitions from YAML specifications. It handles parameter extraction,
+// type conversion, and tool definition construction.
 package toolgen
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -60,6 +64,11 @@ func (p *ParameterParser) GetInt(name string, required bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
+	if num < math.MinInt || num > math.MaxInt || math.Trunc(num) != num {
+		return 0, fmt.Errorf("%s must be a valid integer", name)
+	}
+
 	return int(num), nil
 }
 
@@ -130,6 +139,9 @@ func parseArrayOfIntegers(array []any) ([]int, error) {
 	for _, item := range array {
 		idFloat, ok := item.(float64)
 		if !ok {
+			return nil, fmt.Errorf("failed to parse '%v' as integer", item)
+		}
+		if idFloat < math.MinInt64 || idFloat > math.MaxInt64 || math.Trunc(idFloat) != idFloat {
 			return nil, fmt.Errorf("failed to parse '%v' as integer", item)
 		}
 		result = append(result, int(idFloat))

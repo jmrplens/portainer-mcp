@@ -1,3 +1,5 @@
+// Package utils provides general-purpose utility functions for the
+// Portainer MCP application, including type conversion helpers.
 package utils
 
 // Int64ToIntSlice converts a slice of int64 values to a slice of int values.

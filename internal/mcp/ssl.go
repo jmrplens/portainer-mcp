@@ -2,7 +2,8 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -27,12 +28,7 @@ func (s *PortainerMCPServer) HandleGetSSLSettings() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get SSL settings", err), nil
 		}
 
-		data, err := json.Marshal(sslSettings)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal SSL settings", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(sslSettings, "failed to marshal SSL settings")
 	}
 }
 
@@ -59,6 +55,23 @@ func (s *PortainerMCPServer) HandleUpdateSSLSettings() server.ToolHandlerFunc {
 					return mcp.NewToolResultErrorFromErr("invalid httpEnabled parameter", fmt.Errorf("httpEnabled must be a boolean")), nil
 				}
 				httpEnabled = &boolVal
+			}
+		}
+
+		if cert != "" {
+			block, _ := pem.Decode([]byte(cert))
+			if block == nil {
+				return mcp.NewToolResultErrorFromErr("invalid cert parameter", fmt.Errorf("certificate is not valid PEM format")), nil
+			}
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+				return mcp.NewToolResultErrorFromErr("invalid cert parameter", fmt.Errorf("certificate is not a valid X.509 certificate: %w", err)), nil
+			}
+		}
+
+		if key != "" {
+			block, _ := pem.Decode([]byte(key))
+			if block == nil {
+				return mcp.NewToolResultErrorFromErr("invalid key parameter", fmt.Errorf("key is not valid PEM format")), nil
 			}
 		}
 

@@ -8,7 +8,7 @@ BUILD_DATE ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 LDFLAGS_STRING = -s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}
 
-.PHONY: clean pre build run test test-integration test-all
+.PHONY: clean pre build release run test test-integration test-all fmt vet lint
 
 clean:
 	rm -rf dist
@@ -20,7 +20,17 @@ build: pre
 	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp ./cmd/portainer-mcp
 
 release: pre
-	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp ./cmd/portainer-mcp
+	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build -trimpath --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp ./cmd/portainer-mcp
+
+fmt:
+	gofmt -s -w .
+
+vet:
+	go vet ./...
+
+lint: vet
+	@which golangci-lint > /dev/null 2>&1 || echo "golangci-lint not installed, skipping"
+	@which golangci-lint > /dev/null 2>&1 && golangci-lint run ./... || true
 
 inspector: build
 	npx @modelcontextprotocol/inspector dist/portainer-mcp

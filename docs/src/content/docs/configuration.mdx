@@ -1,0 +1,142 @@
+---
+title: Configuration
+description: All options for running the Portainer MCP server.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Command-Line Flags
+
+| Flag | Description | Required | Default |
+|:-----|:-----------|:---------|:--------|
+| `-server` | Portainer server URL (e.g. `https://portainer:9443`) | **Yes** | — |
+| `-token` | Portainer API authentication token | **Yes** | — |
+| `-tools` | Path to a custom `tools.yaml` file | No | Embedded |
+| `-read-only` | Disable all write/delete operations | No | `false` |
+| `-granular-tools` | Register 98 individual tools instead of 15 meta-tools | No | `false` |
+| `-disable-version-check` | Skip Portainer version compatibility check | No | `false` |
+| `-skip-tls-verify` | Skip TLS certificate verification | No | `false` |
+
+### Example Usage
+
+**Default mode** (15 meta-tools):
+```bash
+./portainer-mcp \
+  -server "https://portainer.example.com:9443" \
+  -token "ptr_abc123..."
+```
+
+**Read-only monitoring**:
+```bash
+./portainer-mcp \
+  -server "https://portainer.example.com:9443" \
+  -token "ptr_abc123..." \
+  -read-only
+```
+
+**Granular tools** (backward-compatible 98 individual tools):
+```bash
+./portainer-mcp \
+  -server "https://portainer.example.com:9443" \
+  -token "ptr_abc123..." \
+  -granular-tools
+```
+
+**Self-signed certificate**:
+```bash
+./portainer-mcp \
+  -server "https://portainer.local:9443" \
+  -token "ptr_abc123..." \
+  -skip-tls-verify
+```
+
+**Docker**:
+```bash
+docker run --rm -i \
+  ghcr.io/portainer/portainer-mcp:latest \
+  -server "https://portainer.example.com:9443" \
+  -token "ptr_abc123..."
+```
+
+<Aside type="tip">
+When running in Docker, the MCP server communicates via stdio. Pass `-i` (interactive) to keep stdin open for the MCP client.
+</Aside>
+
+---
+
+## Tool Registration Modes
+
+### Meta-Tools (Default)
+
+By default, the server registers **15 grouped meta-tools**. Each meta-tool covers a functional domain and uses an `action` parameter (enum) to route to the appropriate handler.
+
+This is the recommended mode for AI assistants because it reduces the tool selection surface from 98 to 15, significantly improving LLM tool selection accuracy.
+
+See the [Meta-Tools Guide](/portainer-mcp/guides/meta-tools/) for details.
+
+### Granular Tools
+
+Pass `--granular-tools` to register all **98 individual tools** as separate MCP tools. This mode provides the same tool names defined in `tools.yaml` and is useful for:
+
+- Backward compatibility with existing configurations
+- Specific integrations that need individual tool access
+- Debugging and testing individual tool behaviors
+
+### Read-Only Mode
+
+The `-read-only` flag restricts the server to read-only operations:
+
+- In **meta-tools mode**: write actions are removed from the `action` enum of each meta-tool. If all actions in a group are write-only, the entire meta-tool is omitted.
+- In **granular mode**: only tools annotated with `readOnlyHint: true` are registered.
+
+This is ideal for monitoring dashboards or exploration where you don't want the AI to make changes.
+
+---
+
+## Custom Tools File
+
+The server ships with `tools.yaml` embedded in the binary. To customize tool definitions:
+
+1. The server checks for a `tools.yaml` file at the path specified by `-tools` (default: `./tools.yaml`)
+2. If the file doesn't exist, it creates one from the embedded version
+3. If a file exists, it's validated against the expected version before loading
+
+<Aside type="note">
+The custom tools file only affects **granular tools mode**. Meta-tools are defined programmatically in Go and are not influenced by `tools.yaml`.
+</Aside>
+
+### Tools YAML Versioning
+
+The `tools.yaml` file includes a version field that must match the server's expected version. This prevents running with an outdated or incompatible tool definitions file.
+
+---
+
+## Version Compatibility
+
+Each release of the MCP server is validated against a specific Portainer version. The server checks the Portainer instance version at startup and will fail with a clear error message if there's a mismatch.
+
+| MCP Server | Supported Portainer |
+|:-----------|:-------------------|
+| v0.6.x | 2.31.2 |
+| v0.5.x | 2.30.0 |
+| v0.4.x | 2.27.4 |
+
+Use `-disable-version-check` to bypass this validation when connecting to an unsupported Portainer version.
+
+<Aside type="caution">
+Running with version check disabled may result in unexpected errors or incomplete data if the Portainer API has changed.
+</Aside>
+
+---
+
+## MCP Inspector
+
+For development and debugging, you can test your server interactively using the MCP Inspector:
+
+```bash
+make inspector
+```
+
+This launches a web UI where you can invoke tools, inspect parameters, and view responses. It's useful for verifying tool definitions and handler behavior.

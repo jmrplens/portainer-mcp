@@ -16,6 +16,10 @@ type Webhook struct {
 
 // ConvertToWebhook converts a raw Portainer webhook to a local Webhook model
 func ConvertToWebhook(raw *apimodels.PortainerWebhook) Webhook {
+	if raw == nil {
+		return Webhook{}
+	}
+
 	return Webhook{
 		ID:         int(raw.ID),
 		EndpointID: int(raw.EndpointID),

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestNewPortainerMCPServer verifies MCP server new portainer m c p server behavior.
 func TestNewPortainerMCPServer(t *testing.T) {
 	// Define paths to test data files
 	validToolsPath := "testdata/valid_tools.yaml"
@@ -129,6 +130,7 @@ func TestNewPortainerMCPServer(t *testing.T) {
 	}
 }
 
+// TestAddToolIfExists verifies add tool if exists behavior.
 func TestAddToolIfExists(t *testing.T) {
 	tests := []struct {
 		name     string

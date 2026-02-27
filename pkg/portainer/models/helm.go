@@ -39,6 +39,10 @@ type HelmReleaseDetails struct {
 
 // ConvertToHelmRepository converts a raw PortainerHelmUserRepository to a local HelmRepository.
 func ConvertToHelmRepository(raw *apimodels.PortainerHelmUserRepository) HelmRepository {
+	if raw == nil {
+		return HelmRepository{}
+	}
+
 	return HelmRepository{
 		ID:     int(raw.ID),
 		URL:    raw.URL,
@@ -48,6 +52,10 @@ func ConvertToHelmRepository(raw *apimodels.PortainerHelmUserRepository) HelmRep
 
 // ConvertToHelmRepositoryList converts a raw UsersHelmUserRepositoryResponse to a local HelmRepositoryList.
 func ConvertToHelmRepositoryList(raw *apimodels.UsersHelmUserRepositoryResponse) HelmRepositoryList {
+	if raw == nil {
+		return HelmRepositoryList{}
+	}
+
 	repos := make([]HelmRepository, len(raw.UserRepositories))
 	for i, r := range raw.UserRepositories {
 		repos[i] = ConvertToHelmRepository(r)
@@ -61,6 +69,10 @@ func ConvertToHelmRepositoryList(raw *apimodels.UsersHelmUserRepositoryResponse)
 
 // ConvertToHelmRelease converts a raw ReleaseReleaseElement to a local HelmRelease.
 func ConvertToHelmRelease(raw *apimodels.ReleaseReleaseElement) HelmRelease {
+	if raw == nil {
+		return HelmRelease{}
+	}
+
 	return HelmRelease{
 		Name:       raw.Name,
 		Namespace:  raw.Namespace,
@@ -74,6 +86,10 @@ func ConvertToHelmRelease(raw *apimodels.ReleaseReleaseElement) HelmRelease {
 
 // ConvertToHelmReleaseDetails converts a raw ReleaseRelease to a local HelmReleaseDetails.
 func ConvertToHelmReleaseDetails(raw *apimodels.ReleaseRelease) HelmReleaseDetails {
+	if raw == nil {
+		return HelmReleaseDetails{}
+	}
+
 	status := ""
 	if raw.Info != nil {
 		status = raw.Info.Status

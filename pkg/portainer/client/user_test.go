@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetUsers verifies get users behavior.
 func TestGetUsers(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -96,6 +97,7 @@ func TestGetUsers(t *testing.T) {
 	}
 }
 
+// TestUpdateUserRole verifies update user role behavior.
 func TestUpdateUserRole(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -160,6 +162,7 @@ func TestUpdateUserRole(t *testing.T) {
 	}
 }
 
+// TestCreateUser verifies create user behavior.
 func TestCreateUser(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -230,6 +233,7 @@ func TestCreateUser(t *testing.T) {
 	}
 }
 
+// TestGetUser verifies get user behavior.
 func TestGetUser(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -281,6 +285,7 @@ func TestGetUser(t *testing.T) {
 	}
 }
 
+// TestDeleteUser verifies delete user behavior.
 func TestDeleteUser(t *testing.T) {
 	tests := []struct {
 		name          string

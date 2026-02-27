@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddWebhookFeatures registers the webhook management tools on the MCP server.
 func (s *PortainerMCPServer) AddWebhookFeatures() {
 	s.addToolIfExists(ToolListWebhooks, s.HandleListWebhooks())
 
@@ -19,6 +19,7 @@ func (s *PortainerMCPServer) AddWebhookFeatures() {
 	}
 }
 
+// HandleListWebhooks returns an MCP tool handler that lists webhooks.
 func (s *PortainerMCPServer) HandleListWebhooks() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		webhooks, err := s.cli.GetWebhooks()
@@ -26,15 +27,11 @@ func (s *PortainerMCPServer) HandleListWebhooks() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get webhooks", err), nil
 		}
 
-		data, err := json.Marshal(webhooks)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal webhooks", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(webhooks, "failed to marshal webhooks")
 	}
 }
 
+// HandleCreateWebhook returns an MCP tool handler that creates webhook.
 func (s *PortainerMCPServer) HandleCreateWebhook() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -48,10 +45,16 @@ func (s *PortainerMCPServer) HandleCreateWebhook() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid endpointId parameter", err), nil
 		}
+		if err := validatePositiveID("endpointId", endpointId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		webhookType, err := parser.GetInt("webhookType", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid webhookType parameter", err), nil
+		}
+		if !isValidWebhookType(webhookType) {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid webhookType: %d (must be 1=service or 2=container)", webhookType)), nil
 		}
 
 		id, err := s.cli.CreateWebhook(resourceId, endpointId, webhookType)
@@ -63,6 +66,7 @@ func (s *PortainerMCPServer) HandleCreateWebhook() server.ToolHandlerFunc {
 	}
 }
 
+// HandleDeleteWebhook returns an MCP tool handler that deletes webhook.
 func (s *PortainerMCPServer) HandleDeleteWebhook() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -70,6 +74,9 @@ func (s *PortainerMCPServer) HandleDeleteWebhook() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteWebhook(id)

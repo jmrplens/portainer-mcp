@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddCustomTemplateFeatures registers the custom template management tools on the MCP server.
 func (s *PortainerMCPServer) AddCustomTemplateFeatures() {
 	s.addToolIfExists(ToolListCustomTemplates, s.HandleListCustomTemplates())
 	s.addToolIfExists(ToolGetCustomTemplate, s.HandleGetCustomTemplate())
@@ -21,6 +21,7 @@ func (s *PortainerMCPServer) AddCustomTemplateFeatures() {
 	}
 }
 
+// HandleListCustomTemplates returns an MCP tool handler that lists custom templates.
 func (s *PortainerMCPServer) HandleListCustomTemplates() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		templates, err := s.cli.GetCustomTemplates()
@@ -28,15 +29,11 @@ func (s *PortainerMCPServer) HandleListCustomTemplates() server.ToolHandlerFunc 
 			return mcp.NewToolResultErrorFromErr("failed to list custom templates", err), nil
 		}
 
-		data, err := json.Marshal(templates)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal custom templates", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(templates, "failed to marshal custom templates")
 	}
 }
 
+// HandleGetCustomTemplate returns an MCP tool handler that retrieves custom template.
 func (s *PortainerMCPServer) HandleGetCustomTemplate() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -45,21 +42,20 @@ func (s *PortainerMCPServer) HandleGetCustomTemplate() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		template, err := s.cli.GetCustomTemplate(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get custom template", err), nil
 		}
 
-		data, err := json.Marshal(template)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal custom template", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(template, "failed to marshal custom template")
 	}
 }
 
+// HandleGetCustomTemplateFile returns an MCP tool handler that retrieves custom template file.
 func (s *PortainerMCPServer) HandleGetCustomTemplateFile() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -67,6 +63,9 @@ func (s *PortainerMCPServer) HandleGetCustomTemplateFile() server.ToolHandlerFun
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		content, err := s.cli.GetCustomTemplateFile(id)
@@ -78,6 +77,7 @@ func (s *PortainerMCPServer) HandleGetCustomTemplateFile() server.ToolHandlerFun
 	}
 }
 
+// HandleCreateCustomTemplate returns an MCP tool handler that creates custom template.
 func (s *PortainerMCPServer) HandleCreateCustomTemplate() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -102,6 +102,10 @@ func (s *PortainerMCPServer) HandleCreateCustomTemplate() server.ToolHandlerFunc
 			return mcp.NewToolResultErrorFromErr("invalid type parameter", err), nil
 		}
 
+		if !isValidTemplateType(templateType) {
+			return mcp.NewToolResultError("invalid template type: must be 1-3 (1=swarm 2=compose 3=kubernetes)"), nil
+		}
+
 		platform, err := parser.GetInt("platform", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid platform parameter", err), nil
@@ -119,6 +123,7 @@ func (s *PortainerMCPServer) HandleCreateCustomTemplate() server.ToolHandlerFunc
 	}
 }
 
+// HandleDeleteCustomTemplate returns an MCP tool handler that deletes custom template.
 func (s *PortainerMCPServer) HandleDeleteCustomTemplate() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -126,6 +131,9 @@ func (s *PortainerMCPServer) HandleDeleteCustomTemplate() server.ToolHandlerFunc
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteCustomTemplate(id)

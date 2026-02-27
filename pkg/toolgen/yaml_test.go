@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestLoadToolsFromYAML verifies load tools from y a m l behavior.
 func TestLoadToolsFromYAML(t *testing.T) {
 	// Create a minimal test YAML file
 	tmpDir := t.TempDir()
@@ -262,6 +263,7 @@ tools:
 	return path
 }
 
+// TestConvertToolDefinition verifies the ConvertToolDefinition model conversion function.
 func TestConvertToolDefinition(t *testing.T) {
 	// Define a valid annotation struct to reuse
 	validAnnotations := Annotations{
@@ -323,7 +325,7 @@ func TestConvertToolDefinition(t *testing.T) {
 				Annotations: Annotations{}, // Zero value simulates missing block
 			},
 			wantErr:       true,
-			wantErrSubstr: "annotations block is required",
+			wantErrSubstr: "annotations title is required",
 		},
 		{
 			name: "with parameters",
@@ -370,6 +372,7 @@ func TestConvertToolDefinition(t *testing.T) {
 	}
 }
 
+// TestConvertToolDefinitions verifies the ConvertToolDefinitions model conversion function.
 func TestConvertToolDefinitions(t *testing.T) {
 	// Define a valid annotation struct to reuse
 	validAnnotations := Annotations{
@@ -482,6 +485,7 @@ func TestConvertToolDefinitions(t *testing.T) {
 	}
 }
 
+// TestConvertParameter verifies the ConvertParameter model conversion function.
 func TestConvertParameter(t *testing.T) {
 	tests := []struct {
 		name  string

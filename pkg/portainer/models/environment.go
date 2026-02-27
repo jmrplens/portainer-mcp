@@ -5,6 +5,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
 )
 
+// Environment represents a Portainer-managed Docker or Kubernetes environment (endpoint).
 type Environment struct {
 	ID           int            `json:"id"`
 	Name         string         `json:"name"`
@@ -34,7 +35,12 @@ const (
 	EnvironmentTypeUnknown             = "unknown"
 )
 
+// ConvertEndpointToEnvironment converts a raw Portainer endpoint into a simplified Environment model.
 func ConvertEndpointToEnvironment(rawEndpoint *apimodels.PortainereeEndpoint) Environment {
+	if rawEndpoint == nil {
+		return Environment{}
+	}
+
 	return Environment{
 		ID:           int(rawEndpoint.ID),
 		Name:         rawEndpoint.Name,

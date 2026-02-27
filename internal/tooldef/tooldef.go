@@ -1,3 +1,6 @@
+// Package tooldef handles loading and parsing MCP tool definitions from YAML.
+// It supports both embedded and external tool definition files with version
+// validation to ensure compatibility between the server and its tool definitions.
 package tooldef
 
 import (
@@ -5,6 +8,8 @@ import (
 	"os"
 )
 
+// ToolsFile contains the embedded contents of the tools.yaml definition file.
+//
 //go:embed tools.yaml
 var ToolsFile []byte
 

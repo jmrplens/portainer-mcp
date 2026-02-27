@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddTeamFeatures registers the team management tools on the MCP server.
 func (s *PortainerMCPServer) AddTeamFeatures() {
 	s.addToolIfExists(ToolListTeams, s.HandleGetTeams())
 	s.addToolIfExists(ToolGetTeam, s.HandleGetTeam())
@@ -22,6 +22,7 @@ func (s *PortainerMCPServer) AddTeamFeatures() {
 	}
 }
 
+// HandleCreateTeam returns an MCP tool handler that creates team.
 func (s *PortainerMCPServer) HandleCreateTeam() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -29,6 +30,9 @@ func (s *PortainerMCPServer) HandleCreateTeam() server.ToolHandlerFunc {
 		name, err := parser.GetString("name", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid name parameter", err), nil
+		}
+		if err := validateName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		teamID, err := s.cli.CreateTeam(name)
@@ -40,6 +44,7 @@ func (s *PortainerMCPServer) HandleCreateTeam() server.ToolHandlerFunc {
 	}
 }
 
+// HandleGetTeams returns an MCP tool handler that retrieves teams.
 func (s *PortainerMCPServer) HandleGetTeams() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		teams, err := s.cli.GetTeams()
@@ -47,15 +52,11 @@ func (s *PortainerMCPServer) HandleGetTeams() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get teams", err), nil
 		}
 
-		data, err := json.Marshal(teams)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal teams", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(teams, "failed to marshal teams")
 	}
 }
 
+// HandleGetTeam returns an MCP tool handler that retrieves team.
 func (s *PortainerMCPServer) HandleGetTeam() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -70,15 +71,11 @@ func (s *PortainerMCPServer) HandleGetTeam() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get team", err), nil
 		}
 
-		data, err := json.Marshal(team)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal team", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(team, "failed to marshal team")
 	}
 }
 
+// HandleDeleteTeam returns an MCP tool handler that deletes team.
 func (s *PortainerMCPServer) HandleDeleteTeam() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -97,6 +94,7 @@ func (s *PortainerMCPServer) HandleDeleteTeam() server.ToolHandlerFunc {
 	}
 }
 
+// HandleUpdateTeamName returns an MCP tool handler that updates team name.
 func (s *PortainerMCPServer) HandleUpdateTeamName() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -110,6 +108,9 @@ func (s *PortainerMCPServer) HandleUpdateTeamName() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid name parameter", err), nil
 		}
+		if err := validateName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		err = s.cli.UpdateTeamName(id, name)
 		if err != nil {
@@ -120,6 +121,7 @@ func (s *PortainerMCPServer) HandleUpdateTeamName() server.ToolHandlerFunc {
 	}
 }
 
+// HandleUpdateTeamMembers returns an MCP tool handler that updates team members.
 func (s *PortainerMCPServer) HandleUpdateTeamMembers() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)

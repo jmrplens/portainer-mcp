@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListRegistries verifies the HandleListRegistries MCP tool handler.
 func TestHandleListRegistries(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -70,6 +71,7 @@ func TestHandleListRegistries(t *testing.T) {
 	}
 }
 
+// TestHandleGetRegistry verifies the HandleGetRegistry MCP tool handler.
 func TestHandleGetRegistry(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -143,6 +145,7 @@ func TestHandleGetRegistry(t *testing.T) {
 	}
 }
 
+// TestHandleCreateRegistry verifies the HandleCreateRegistry MCP tool handler.
 func TestHandleCreateRegistry(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -229,6 +232,7 @@ func TestHandleCreateRegistry(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateRegistry verifies the HandleUpdateRegistry MCP tool handler.
 func TestHandleUpdateRegistry(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -334,6 +338,7 @@ func TestHandleUpdateRegistry(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteRegistry verifies the HandleDeleteRegistry MCP tool handler.
 func TestHandleDeleteRegistry(t *testing.T) {
 	tests := []struct {
 		name        string

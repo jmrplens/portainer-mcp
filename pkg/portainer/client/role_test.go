@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetRoles verifies get roles behavior.
 func TestGetRoles(t *testing.T) {
 	id1 := int64(1)
 	id2 := int64(2)

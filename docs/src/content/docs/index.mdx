@@ -1,0 +1,73 @@
+---
+title: Portainer MCP Server
+description: Manage your entire Portainer infrastructure through AI assistants using the Model Context Protocol.
+template: splash
+hero:
+  tagline: Connect AI assistants to your Portainer instance — manage containers, stacks, Kubernetes, and more through natural language.
+  image:
+    file: ../../assets/demo-1-system-docker.webp
+  actions:
+    - text: Get Started
+      link: /portainer-mcp/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/portainer/portainer-mcp
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What is Portainer MCP?
+
+Portainer MCP is a [Model Context Protocol](https://modelcontextprotocol.io/) server that connects AI assistants — like **Claude Desktop**, **VS Code Copilot**, and **Cursor** — to your [Portainer](https://www.portainer.io/) instance. It exposes **98 tools** covering the complete Portainer API, enabling natural language management of your container infrastructure.
+
+## Key Features
+
+<CardGrid stagger>
+  <Card title="15 Meta-Tools" icon="puzzle">
+    Grouped tools for optimal LLM tool selection, or 98 granular tools for full control.
+  </Card>
+  <Card title="Complete API Coverage" icon="list-format">
+    Environments, stacks, Docker, Kubernetes, Helm, users, teams, registries, edge computing, backups, and more.
+  </Card>
+  <Card title="Read-Only Mode" icon="approve-check">
+    Restrict to observation-only operations for safe monitoring.
+  </Card>
+  <Card title="MCP Annotations" icon="information">
+    Every tool includes `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for safe AI operation.
+  </Card>
+  <Card title="Version-Pinned" icon="setting">
+    Validated against specific Portainer versions to prevent API mismatches.
+  </Card>
+  <Card title="Zero Dependencies" icon="rocket">
+    Single static binary, no runtime requirements.
+  </Card>
+</CardGrid>
+
+## How It Works
+
+```
+┌─────────────────────┐      MCP Protocol       ┌─────────────────────┐      HTTPS       ┌───────────────┐
+│   AI Assistant       │ ◄──── (stdio/JSON-RPC) ──►│  Portainer MCP      │ ◄──────────────► │  Portainer    │
+│  Claude / Copilot    │                          │  Server             │                  │  API          │
+│  Cursor / etc.       │                          │  (15 meta-tools)    │                  │  v2.31.2      │
+└─────────────────────┘                          └─────────────────────┘                  └───────────────┘
+```
+
+## Quick Example
+
+Ask your AI assistant:
+
+> "List all environments and show me the Docker dashboard for the local one"
+
+The assistant will call `manage_environments` with `action: list_environments`, then `manage_docker` with `action: get_docker_dashboard` — all handled automatically.
+
+## Compatibility
+
+| MCP Server Version | Supported Portainer |
+|:-------------------|:-------------------|
+| v0.6.x | 2.31.2 |
+| v0.5.x | 2.30.0 |
+| v0.4.x | 2.27.4 |

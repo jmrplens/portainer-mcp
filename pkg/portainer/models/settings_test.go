@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestConvertAuthenticationMethod verifies the ConvertAuthenticationMethod model conversion function.
 func TestConvertAuthenticationMethod(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -53,6 +54,7 @@ func TestConvertAuthenticationMethod(t *testing.T) {
 	}
 }
 
+// TestConvertSettingsToPortainerSettings verifies the ConvertSettingsToPortainerSettings model conversion function.
 func TestConvertSettingsToPortainerSettings(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -159,7 +161,7 @@ func TestConvertSettingsToPortainerSettings(t *testing.T) {
 		{
 			name:        "Nil input",
 			input:       nil,
-			shouldPanic: true,
+			shouldPanic: false,
 		},
 	}
 

@@ -35,6 +35,10 @@ type KubernetesDashboard struct {
 
 // ConvertK8sDashboard converts a raw SDK dashboard model to a local model.
 func ConvertK8sDashboard(raw *apimodels.KubernetesK8sDashboard) KubernetesDashboard {
+	if raw == nil {
+		return KubernetesDashboard{}
+	}
+
 	return KubernetesDashboard{
 		ApplicationsCount: int(raw.ApplicationsCount),
 		ConfigMapsCount:   int(raw.ConfigMapsCount),
@@ -58,6 +62,10 @@ type KubernetesNamespace struct {
 
 // ConvertK8sNamespace converts a raw SDK namespace model to a local model.
 func ConvertK8sNamespace(raw *apimodels.PortainerK8sNamespaceInfo) KubernetesNamespace {
+	if raw == nil {
+		return KubernetesNamespace{}
+	}
+
 	return KubernetesNamespace{
 		ID:             raw.ID,
 		Name:           raw.Name,

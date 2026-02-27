@@ -1,6 +1,8 @@
 package client
 
 import (
+	"fmt"
+
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 )
 
@@ -8,7 +10,7 @@ import (
 func (c *PortainerClient) GetRoles() ([]models.Role, error) {
 	rawRoles, err := c.cli.ListRoles()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list roles: %w", err)
 	}
 
 	roles := make([]models.Role, len(rawRoles))

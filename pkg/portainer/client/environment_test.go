@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetEnvironments verifies get environments behavior.
 func TestGetEnvironments(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -132,6 +133,7 @@ func TestGetEnvironments(t *testing.T) {
 	}
 }
 
+// TestGetEnvironment verifies get environment behavior.
 func TestGetEnvironment(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -189,6 +191,7 @@ func TestGetEnvironment(t *testing.T) {
 	}
 }
 
+// TestDeleteEnvironment verifies delete environment behavior.
 func TestDeleteEnvironment(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -227,6 +230,7 @@ func TestDeleteEnvironment(t *testing.T) {
 	}
 }
 
+// TestSnapshotEnvironment verifies snapshot environment behavior.
 func TestSnapshotEnvironment(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -265,6 +269,7 @@ func TestSnapshotEnvironment(t *testing.T) {
 	}
 }
 
+// TestSnapshotAllEnvironments verifies snapshot all environments behavior.
 func TestSnapshotAllEnvironments(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -300,6 +305,7 @@ func TestSnapshotAllEnvironments(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentTags verifies update environment tags behavior.
 func TestUpdateEnvironmentTags(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -346,6 +352,7 @@ func TestUpdateEnvironmentTags(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentUserAccesses verifies update environment user accesses behavior.
 func TestUpdateEnvironmentUserAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -400,6 +407,7 @@ func TestUpdateEnvironmentUserAccesses(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentTeamAccesses verifies update environment team accesses behavior.
 func TestUpdateEnvironmentTeamAccesses(t *testing.T) {
 	tests := []struct {
 		name          string

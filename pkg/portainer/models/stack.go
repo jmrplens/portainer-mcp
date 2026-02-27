@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
 )
 
+// Stack represents a Portainer edge stack deployed via edge groups.
 type Stack struct {
 	ID                  int    `json:"id"`
 	Name                string `json:"name"`
@@ -14,7 +15,12 @@ type Stack struct {
 	EnvironmentGroupIds []int  `json:"group_ids"`
 }
 
+// ConvertEdgeStackToStack converts a raw Portainer edge stack into a simplified Stack model.
 func ConvertEdgeStackToStack(rawEdgeStack *apimodels.PortainereeEdgeStack) Stack {
+	if rawEdgeStack == nil {
+		return Stack{}
+	}
+
 	createdAt := time.Unix(rawEdgeStack.CreationDate, 0).Format(time.RFC3339)
 
 	return Stack{
@@ -41,6 +47,10 @@ type RegularStack struct {
 
 // ConvertRegularStack converts a raw PortainereeStack to a RegularStack
 func ConvertRegularStack(raw *apimodels.PortainereeStack) RegularStack {
+	if raw == nil {
+		return RegularStack{}
+	}
+
 	createdAt := ""
 	if raw.CreationDate > 0 {
 		createdAt = time.Unix(raw.CreationDate, 0).Format(time.RFC3339)

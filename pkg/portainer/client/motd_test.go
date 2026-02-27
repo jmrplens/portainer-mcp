@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetMOTD verifies get m o t d behavior.
 func TestGetMOTD(t *testing.T) {
 	tests := []struct {
 		name          string

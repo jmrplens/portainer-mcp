@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetTeams verifies get teams behavior.
 func TestGetTeams(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -132,6 +133,7 @@ func TestGetTeams(t *testing.T) {
 	}
 }
 
+// TestUpdateTeamName verifies update team name behavior.
 func TestUpdateTeamName(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -173,6 +175,7 @@ func TestUpdateTeamName(t *testing.T) {
 	}
 }
 
+// TestCreateTeam verifies create team behavior.
 func TestCreateTeam(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -216,6 +219,7 @@ func TestCreateTeam(t *testing.T) {
 	}
 }
 
+// TestUpdateTeamMembers verifies update team members behavior.
 func TestUpdateTeamMembers(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -339,6 +343,7 @@ func TestUpdateTeamMembers(t *testing.T) {
 	}
 }
 
+// TestGetTeam verifies get team behavior.
 func TestGetTeam(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -409,6 +414,7 @@ func TestGetTeam(t *testing.T) {
 	}
 }
 
+// TestDeleteTeam verifies delete team behavior.
 func TestDeleteTeam(t *testing.T) {
 	tests := []struct {
 		name          string

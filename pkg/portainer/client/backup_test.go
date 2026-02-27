@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetBackupStatus verifies get backup status behavior.
 func TestGetBackupStatus(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -54,6 +55,7 @@ func TestGetBackupStatus(t *testing.T) {
 	}
 }
 
+// TestGetBackupS3Settings verifies get backup s3 settings behavior.
 func TestGetBackupS3Settings(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -101,6 +103,7 @@ func TestGetBackupS3Settings(t *testing.T) {
 	}
 }
 
+// TestCreateBackup verifies create backup behavior.
 func TestCreateBackup(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -138,6 +141,7 @@ func TestCreateBackup(t *testing.T) {
 	}
 }
 
+// TestBackupToS3 verifies backup to s3 behavior.
 func TestBackupToS3(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -193,6 +197,7 @@ func TestBackupToS3(t *testing.T) {
 	}
 }
 
+// TestRestoreFromS3 verifies restore from s3 behavior.
 func TestRestoreFromS3(t *testing.T) {
 	tests := []struct {
 		name          string

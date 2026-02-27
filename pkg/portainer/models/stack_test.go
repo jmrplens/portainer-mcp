@@ -9,6 +9,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertEdgeStackToStack verifies the ConvertEdgeStackToStack model conversion function.
 func TestConvertEdgeStackToStack(t *testing.T) {
 	tests := []struct {
 		name      string

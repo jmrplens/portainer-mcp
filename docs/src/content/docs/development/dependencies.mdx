@@ -1,0 +1,129 @@
+---
+title: Dependencies & Toolchain
+description: All external dependencies, build tools, and development utilities used by the Portainer MCP project.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Go Dependencies
+
+### Core Dependencies
+
+| Module | Version | Purpose |
+|--------|---------|---------|
+| `github.com/mark3labs/mcp-go` | v0.32.0 | MCP protocol implementation (stdio transport, tool registration) |
+| `github.com/portainer/client-api-go/v2` | v2.31.2 | Auto-generated Swagger client for Portainer API |
+| `github.com/go-openapi/runtime` | v0.28.0 | HTTP transport for Swagger client |
+| `github.com/go-openapi/strfmt` | v0.23.0 | Format types for Swagger models |
+| `github.com/rs/zerolog` | v1.34.0 | Structured logging (all output to stderr) |
+| `golang.org/x/mod` | v0.24.0 | Semver parsing for version compatibility checks |
+| `gopkg.in/yaml.v3` | v3.0.1 | YAML parsing for `tools.yaml` definitions |
+| `k8s.io/apimachinery` | v0.33.1 | Kubernetes metadata types for K8s response stripping |
+
+### Test Dependencies
+
+| Module | Version | Purpose |
+|--------|---------|---------|
+| `github.com/stretchr/testify` | v1.10.0 | Test assertions (`assert`, `require`) |
+| `github.com/testcontainers/testcontainers-go` | v0.36.0 | Docker-based integration testing |
+| `github.com/docker/docker` | v28.0.1 | Docker API client (used by testcontainers) |
+| `github.com/docker/go-connections` | v0.5.0 | Docker connection utilities |
+
+### Updating Dependencies
+
+```bash
+# Update all dependencies
+go get -u ./...
+go mod tidy
+
+# Update a specific dependency
+go get -u github.com/mark3labs/mcp-go@latest
+go mod tidy
+
+# Check for outdated modules
+go list -u -m all
+```
+
+<Aside type="caution">
+After updating `github.com/portainer/client-api-go/v2`, verify that the raw model fields haven't changed. Update conversion functions in `pkg/portainer/models/` if needed.
+</Aside>
+
+## Build Tools
+
+| Tool | Required | Purpose |
+|------|----------|---------|
+| **Go** 1.24+ | Yes | Compilation, testing |
+| **Make** | Yes | Build automation (see Makefile) |
+| **Docker** | For integration tests | Runs Portainer containers for tests |
+| **GoReleaser** | For releases | Multi-platform builds, Docker images, changelogs |
+| **pnpm** | For docs | Starlight documentation site |
+| **Node.js** 20+ | For docs | Required by Astro/Starlight |
+
+## CI/CD Infrastructure
+
+### GitHub Actions Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `release.yml` | Tag push `v*` | GoReleaser build → GitHub Release + Docker images + Homebrew |
+| `deploy-docs.yml` | Push to `main` (docs/) | Build Starlight → deploy to GitHub Pages |
+
+### GoReleaser Configuration
+
+The `.goreleaser.yaml` file defines:
+
+- **6 build targets**: linux/darwin/windows × amd64/arm64
+- **Checksums**: SHA256 for all archives
+- **Changelog**: Auto-generated from conventional commits
+- **Docker**: Multi-arch images pushed to `ghcr.io/portainer/portainer-mcp`
+- **Homebrew**: Formula published to `portainer/homebrew-tap`
+
+### Build Flags
+
+The binary embeds version information via ldflags:
+
+```makefile
+LDFLAGS = -s -w \
+  -X main.Version=${VERSION} \
+  -X main.Commit=${COMMIT} \
+  -X main.BuildDate=${BUILD_DATE}
+```
+
+These are set automatically by both `make build` and GoReleaser.
+
+## Documentation Toolchain
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [Astro](https://astro.build/) | 5.x | Static site generator |
+| [Starlight](https://starlight.astro.build/) | 0.35.x | Documentation theme for Astro |
+| [pnpm](https://pnpm.io/) | 10.x | Package manager |
+
+```bash
+cd docs
+pnpm install       # Install dependencies
+pnpm run dev       # Development server (http://localhost:4321)
+pnpm run build     # Production build
+```
+
+## External Services
+
+| Service | Purpose | Configuration |
+|---------|---------|---------------|
+| **Portainer API** | Target server managed by MCP | `-server` and `-token` flags |
+| **GitHub Packages** | Docker image registry (`ghcr.io`) | Automatic via GoReleaser |
+| **GitHub Pages** | Documentation hosting | `deploy-docs.yml` workflow |
+| **Homebrew** | Binary distribution | `portainer/homebrew-tap` repo |
+
+## tools.yaml Versioning
+
+The `tools.yaml` file has its own version scheme:
+
+```yaml
+version: "v1.2"
+```
+
+- The server defines `MinimumToolsVersion` in `internal/mcp/server.go`
+- At startup, the file version is validated against the minimum
+- Incompatible versions cause a startup failure with a clear message
+- External `tools.yaml` files can override the embedded one via `-tools` flag

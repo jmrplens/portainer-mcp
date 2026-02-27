@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestNewPortainerClient verifies new portainer client behavior.
 func TestNewPortainerClient(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -40,6 +41,7 @@ func TestNewPortainerClient(t *testing.T) {
 	}
 }
 
+// TestWithSkipTLSVerify verifies with skip t l s verify behavior.
 func TestWithSkipTLSVerify(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetEdgeJobs verifies get edge jobs behavior.
 func TestGetEdgeJobs(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -69,6 +70,7 @@ func TestGetEdgeJobs(t *testing.T) {
 	}
 }
 
+// TestGetEdgeJob verifies get edge job behavior.
 func TestGetEdgeJob(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -118,6 +120,7 @@ func TestGetEdgeJob(t *testing.T) {
 	}
 }
 
+// TestGetEdgeJobFile verifies get edge job file behavior.
 func TestGetEdgeJobFile(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -165,6 +168,7 @@ func TestGetEdgeJobFile(t *testing.T) {
 	}
 }
 
+// TestCreateEdgeJob verifies create edge job behavior.
 func TestCreateEdgeJob(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -225,6 +229,7 @@ func TestCreateEdgeJob(t *testing.T) {
 	}
 }
 
+// TestDeleteEdgeJob verifies delete edge job behavior.
 func TestDeleteEdgeJob(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -263,6 +268,7 @@ func TestDeleteEdgeJob(t *testing.T) {
 	}
 }
 
+// TestGetEdgeUpdateSchedules verifies get edge update schedules behavior.
 func TestGetEdgeUpdateSchedules(t *testing.T) {
 	tests := []struct {
 		name              string

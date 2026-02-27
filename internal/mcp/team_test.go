@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleCreateTeam verifies the HandleCreateTeam MCP tool handler.
 func TestHandleCreateTeam(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -98,6 +99,7 @@ func TestHandleCreateTeam(t *testing.T) {
 	}
 }
 
+// TestHandleGetTeams verifies the HandleGetTeams MCP tool handler.
 func TestHandleGetTeams(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -163,6 +165,7 @@ func TestHandleGetTeams(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateTeamName verifies the HandleUpdateTeamName MCP tool handler.
 func TestHandleUpdateTeamName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -266,6 +269,7 @@ func TestHandleUpdateTeamName(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateTeamMembers verifies the HandleUpdateTeamMembers MCP tool handler.
 func TestHandleUpdateTeamMembers(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -369,6 +373,7 @@ func TestHandleUpdateTeamMembers(t *testing.T) {
 	}
 }
 
+// TestHandleGetTeam verifies the HandleGetTeam MCP tool handler.
 func TestHandleGetTeam(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -464,6 +469,7 @@ func TestHandleGetTeam(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteTeam verifies the HandleDeleteTeam MCP tool handler.
 func TestHandleDeleteTeam(t *testing.T) {
 	tests := []struct {
 		name        string

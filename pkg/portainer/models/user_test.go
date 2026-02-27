@@ -6,6 +6,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertToUser verifies the ConvertToUser model conversion function.
 func TestConvertToUser(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -63,6 +64,7 @@ func TestConvertToUser(t *testing.T) {
 	}
 }
 
+// TestConvertUserRole verifies the ConvertUserRole model conversion function.
 func TestConvertUserRole(t *testing.T) {
 	tests := []struct {
 		name     string

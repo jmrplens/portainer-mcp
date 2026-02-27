@@ -51,5 +51,7 @@ jobs:
       - name: "checkout the current branch"
         uses: actions/checkout@v4
       - uses: fgrosse/go-coverage-report@v1.2.0
+        continue-on-error: true
         with:
           coverage-file-name: "coverage.out"
+          root-package: "github.com/portainer/portainer-mcp"

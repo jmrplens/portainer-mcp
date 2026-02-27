@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: portainer-mcp
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: portainer-mcp
+    main: ./cmd/portainer-mcp
+    binary: portainer-mcp
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.BuildDate={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - tools.yaml
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "🚀 Features"
+      regexp: '^.*?feat(\(.+\))?\!?:.+$'
+      order: 0
+    - title: "🐛 Bug Fixes"
+      regexp: '^.*?fix(\(.+\))?\!?:.+$'
+      order: 1
+    - title: "🔒 Security"
+      regexp: '^.*?sec(\(.+\))?\!?:.+$'
+      order: 2
+    - title: "📦 Other"
+      order: 999
+
+release:
+  github:
+    owner: portainer
+    name: portainer-mcp
+  draft: false
+  prerelease: auto
+  name_template: "{{.Tag}}"
+  header: |
+    ## Portainer MCP Server {{.Tag}}
+
+    ### Installation
+
+    **Homebrew (macOS/Linux):**
+    ```bash
+    brew install portainer/tap/portainer-mcp
+    ```
+
+    **Go install:**
+    ```bash
+    go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@{{.Tag}}
+    ```
+
+    **Docker:**
+    ```bash
+    docker pull ghcr.io/portainer/portainer-mcp:{{.Tag}}
+    ```
+
+    **Manual download:** See assets below for your platform.
+  footer: |
+    **Full Changelog**: https://github.com/portainer/portainer-mcp/compare/{{.PreviousTag}}...{{.Tag}}
+
+# Homebrew tap
+brews:
+  - name: portainer-mcp
+    repository:
+      owner: portainer
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: portainer-bot
+      email: bot@portainer.io
+    directory: Formula
+    homepage: "https://github.com/portainer/portainer-mcp"
+    description: "MCP server for AI-powered Portainer container management"
+    license: "MIT"
+    install: |
+      bin.install "portainer-mcp"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/portainer-mcp 2>&1", 1)
+    skip_upload: auto
+
+# Docker images via GHCR
+dockers:
+  - image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-amd64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/portainer/portainer-mcp"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - tools.yaml
+
+  - image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-arm64"
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/portainer/portainer-mcp"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - tools.yaml
+
+docker_manifests:
+  - name_template: "ghcr.io/portainer/portainer-mcp:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-amd64"
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/portainer/portainer-mcp:latest"
+    image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-amd64"
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-arm64"

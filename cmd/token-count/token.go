@@ -1,3 +1,5 @@
+// Package main implements a token counting utility that calculates
+// the total Anthropic token count for all MCP tool definitions.
 package main
 
 import (

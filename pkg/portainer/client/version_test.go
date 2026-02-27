@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetVersion verifies get version behavior.
 func TestGetVersion(t *testing.T) {
 	tests := []struct {
 		name           string

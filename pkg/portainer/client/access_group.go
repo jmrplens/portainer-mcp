@@ -16,12 +16,12 @@ import (
 func (c *PortainerClient) GetAccessGroups() ([]models.AccessGroup, error) {
 	groups, err := c.cli.ListEndpointGroups()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list endpoint groups: %w", err)
 	}
 
 	endpoints, err := c.cli.ListEndpoints()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list endpoints: %w", err)
 	}
 
 	accessGroups := make([]models.AccessGroup, len(groups))

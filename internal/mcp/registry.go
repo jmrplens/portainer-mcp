@@ -2,14 +2,15 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddRegistryFeatures registers the Docker registry management tools on the MCP server.
 func (s *PortainerMCPServer) AddRegistryFeatures() {
 	s.addToolIfExists(ToolListRegistries, s.HandleListRegistries())
 	s.addToolIfExists(ToolGetRegistry, s.HandleGetRegistry())
@@ -21,6 +22,7 @@ func (s *PortainerMCPServer) AddRegistryFeatures() {
 	}
 }
 
+// HandleListRegistries returns an MCP tool handler that lists registries.
 func (s *PortainerMCPServer) HandleListRegistries() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		registries, err := s.cli.GetRegistries()
@@ -28,15 +30,11 @@ func (s *PortainerMCPServer) HandleListRegistries() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to list registries", err), nil
 		}
 
-		data, err := json.Marshal(registries)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal registries", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(registries, "failed to marshal registries")
 	}
 }
 
+// HandleGetRegistry returns an MCP tool handler that retrieves registry.
 func (s *PortainerMCPServer) HandleGetRegistry() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -45,21 +43,20 @@ func (s *PortainerMCPServer) HandleGetRegistry() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		registry, err := s.cli.GetRegistry(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get registry", err), nil
 		}
 
-		data, err := json.Marshal(registry)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal registry", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(registry, "failed to marshal registry")
 	}
 }
 
+// HandleCreateRegistry returns an MCP tool handler that creates registry.
 func (s *PortainerMCPServer) HandleCreateRegistry() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -74,9 +71,20 @@ func (s *PortainerMCPServer) HandleCreateRegistry() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("invalid type parameter", err), nil
 		}
 
+		if !isValidRegistryType(registryType) {
+			return mcp.NewToolResultError("invalid registry type: must be 1-7 (1=Quay.io 2=Azure 3=Custom 4=GitLab 5=ProGet 6=DockerHub 7=ECR)"), nil
+		}
+
 		url, err := parser.GetString("url", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
+		}
+
+		// Registry URLs like "docker.io" may not have a scheme; only validate if scheme is present
+		if strings.Contains(url, "://") {
+			if err := validateURL(url); err != nil {
+				return mcp.NewToolResultErrorFromErr("invalid registry URL", err), nil
+			}
 		}
 
 		authentication, err := parser.GetBoolean("authentication", true)
@@ -97,6 +105,7 @@ func (s *PortainerMCPServer) HandleCreateRegistry() server.ToolHandlerFunc {
 	}
 }
 
+// HandleUpdateRegistry returns an MCP tool handler that updates registry.
 func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -104,6 +113,9 @@ func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		args := request.GetArguments()
@@ -122,6 +134,11 @@ func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 			v, err := parser.GetString("url", false)
 			if err != nil {
 				return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
+			}
+			if strings.Contains(v, "://") {
+				if err := validateURL(v); err != nil {
+					return mcp.NewToolResultErrorFromErr("invalid registry URL", err), nil
+				}
 			}
 			url = &v
 		}
@@ -171,6 +188,7 @@ func (s *PortainerMCPServer) HandleUpdateRegistry() server.ToolHandlerFunc {
 	}
 }
 
+// HandleDeleteRegistry returns an MCP tool handler that deletes registry.
 func (s *PortainerMCPServer) HandleDeleteRegistry() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -178,6 +196,9 @@ func (s *PortainerMCPServer) HandleDeleteRegistry() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteRegistry(id)

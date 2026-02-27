@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListCustomTemplates verifies the HandleListCustomTemplates MCP tool handler.
 func TestHandleListCustomTemplates(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -70,6 +71,7 @@ func TestHandleListCustomTemplates(t *testing.T) {
 	}
 }
 
+// TestHandleGetCustomTemplate verifies the HandleGetCustomTemplate MCP tool handler.
 func TestHandleGetCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -143,6 +145,7 @@ func TestHandleGetCustomTemplate(t *testing.T) {
 	}
 }
 
+// TestHandleGetCustomTemplateFile verifies the HandleGetCustomTemplateFile MCP tool handler.
 func TestHandleGetCustomTemplateFile(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -210,6 +213,7 @@ func TestHandleGetCustomTemplateFile(t *testing.T) {
 	}
 }
 
+// TestHandleCreateCustomTemplate verifies the HandleCreateCustomTemplate MCP tool handler.
 func TestHandleCreateCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -298,6 +302,7 @@ func TestHandleCreateCustomTemplate(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteCustomTemplate verifies the HandleDeleteCustomTemplate MCP tool handler.
 func TestHandleDeleteCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name        string

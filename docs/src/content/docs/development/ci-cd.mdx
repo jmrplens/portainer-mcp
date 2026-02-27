@@ -1,0 +1,185 @@
+---
+title: CI/CD & Releases
+description: How continuous integration, documentation deployment, and release automation work in the Portainer MCP project.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## GitHub Actions Workflows
+
+### Release Workflow
+
+**File**: `.github/workflows/release.yml`
+**Trigger**: Tag push matching `v*` (e.g., `v0.6.1`)
+
+```
+git tag v0.6.1
+git push origin v0.6.1
+```
+
+This triggers:
+
+1. **GoReleaser** builds binaries for 6 platforms:
+   - `linux/amd64`, `linux/arm64`
+   - `darwin/amd64`, `darwin/arm64`
+   - `windows/amd64`, `windows/arm64`
+
+2. **Archives** created as `.tar.gz` (Linux/macOS) and `.zip` (Windows)
+
+3. **Checksums** file with SHA256 hashes
+
+4. **Docker images** built and pushed to `ghcr.io/portainer/portainer-mcp`:
+   - Multi-arch manifest (`latest` + version tag)
+   - Based on Alpine Linux
+
+5. **Homebrew formula** updated in `portainer/homebrew-tap`
+
+6. **GitHub Release** created with changelog and all artifacts
+
+### Documentation Workflow
+
+**File**: `.github/workflows/deploy-docs.yml`
+**Trigger**: Push to `main` that modifies `docs/` directory
+
+Steps:
+1. Checkout code
+2. Install pnpm
+3. Install Node.js dependencies
+4. Build Starlight site (`pnpm run build`)
+5. Deploy to GitHub Pages
+
+<Aside type="note">
+GitHub Pages must be configured to deploy from **GitHub Actions** (not a branch). Go to **Settings → Pages → Source** and select "GitHub Actions".
+</Aside>
+
+## GoReleaser Configuration
+
+Key sections in `.goreleaser.yaml`:
+
+### Builds
+
+```yaml
+builds:
+  - main: ./cmd/portainer-mcp
+    binary: portainer-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.BuildDate={{.Date}}
+```
+
+### Docker
+
+```yaml
+dockers:
+  - image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-amd64"
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+  - image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-arm64"
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+
+docker_manifests:
+  - name_template: "ghcr.io/portainer/portainer-mcp:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-amd64"
+      - "ghcr.io/portainer/portainer-mcp:{{ .Tag }}-arm64"
+```
+
+### Homebrew
+
+```yaml
+brews:
+  - repository:
+      owner: portainer
+      name: homebrew-tap
+    homepage: "https://github.com/portainer/portainer-mcp"
+    description: "MCP server for Portainer container management"
+    install: |
+      bin.install "portainer-mcp"
+```
+
+## Creating a Release
+
+<Aside type="caution">
+Ensure all tests pass and the `main` branch is stable before tagging.
+</Aside>
+
+```bash
+# 1. Ensure you're on main and up-to-date
+git checkout main
+git pull origin main
+
+# 2. Run all tests
+make test-all
+
+# 3. Create and push the tag
+git tag v0.6.1
+git push origin v0.6.1
+
+# 4. Monitor the release workflow
+# Go to Actions tab on GitHub
+```
+
+### Version Scheme
+
+The project uses [Semantic Versioning](https://semver.org/):
+
+- **Major** (`v1.0.0`): Breaking API changes (tool removal, parameter changes)
+- **Minor** (`v0.7.0`): New tools, features, Portainer version support
+- **Patch** (`v0.6.1`): Bug fixes, documentation improvements
+
+### Changelog
+
+GoReleaser auto-generates the changelog from commit messages since the last tag. Use [Conventional Commits](https://www.conventionalcommits.org/) for clean changelogs:
+
+| Prefix | Section in Changelog |
+|--------|---------------------|
+| `feat:` | Features |
+| `fix:` | Bug Fixes |
+| `docs:` | (filtered out) |
+| `test:` | (filtered out) |
+| `refactor:` | (filtered out) |
+
+## Local Testing of Releases
+
+Test GoReleaser locally without publishing:
+
+```bash
+# Install GoReleaser
+brew install goreleaser
+
+# Dry-run (no publish)
+goreleaser release --snapshot --clean
+
+# Check build artifacts
+ls dist/
+```
+
+## Docker Images
+
+### Build Locally
+
+```bash
+# Standard Dockerfile (full build)
+docker build -t portainer-mcp .
+
+# GoReleaser Dockerfile (pre-built binary)
+# Used by CI — expects binary at build context root
+```
+
+### Run from Registry
+
+```bash
+docker run --rm \
+  ghcr.io/portainer/portainer-mcp:latest \
+  -server https://portainer:9443 \
+  -token ptr_your_api_token
+```

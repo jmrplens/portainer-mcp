@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetEnvironmentTags verifies get environment tags behavior.
 func TestGetEnvironmentTags(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -70,6 +71,7 @@ func TestGetEnvironmentTags(t *testing.T) {
 	}
 }
 
+// TestCreateEnvironmentTag verifies create environment tag behavior.
 func TestCreateEnvironmentTag(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -120,6 +122,7 @@ func TestCreateEnvironmentTag(t *testing.T) {
 	}
 }
 
+// TestDeleteEnvironmentTag verifies delete environment tag behavior.
 func TestDeleteEnvironmentTag(t *testing.T) {
 	tests := []struct {
 		name          string

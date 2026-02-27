@@ -23,6 +23,10 @@ type S3BackupSettings struct {
 
 // ConvertToBackupStatus converts a raw BackupBackupStatus to a local BackupStatus
 func ConvertToBackupStatus(raw *apimodels.BackupBackupStatus) BackupStatus {
+	if raw == nil {
+		return BackupStatus{}
+	}
+
 	return BackupStatus{
 		Failed:       raw.Failed,
 		TimestampUTC: raw.TimestampUTC,
@@ -31,6 +35,10 @@ func ConvertToBackupStatus(raw *apimodels.BackupBackupStatus) BackupStatus {
 
 // ConvertToS3BackupSettings converts a raw PortainereeS3BackupSettings to a local S3BackupSettings
 func ConvertToS3BackupSettings(raw *apimodels.PortainereeS3BackupSettings) S3BackupSettings {
+	if raw == nil {
+		return S3BackupSettings{}
+	}
+
 	return S3BackupSettings{
 		AccessKeyID:      raw.AccessKeyID,
 		BucketName:       raw.BucketName,

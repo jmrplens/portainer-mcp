@@ -33,6 +33,10 @@ type DockerDashboard struct {
 
 // ConvertDockerDashboardResponse converts the raw API DockerDashboardResponse to a local DockerDashboard model.
 func ConvertDockerDashboardResponse(raw *apimodels.DockerDashboardResponse) DockerDashboard {
+	if raw == nil {
+		return DockerDashboard{}
+	}
+
 	dashboard := DockerDashboard{
 		Networks: int(raw.Networks),
 		Services: int(raw.Services),

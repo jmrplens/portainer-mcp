@@ -1,3 +1,6 @@
+// Package helpers provides test environment setup utilities for integration tests.
+// It configures both the raw Portainer API client and MCP server instances
+// for comparative testing.
 package helpers
 
 import (
@@ -39,7 +42,7 @@ func NewTestEnv(t *testing.T, opts ...containers.PortainerContainerOption) *Test
 		client.WithSkipTLSVerify(true),
 	)
 
-	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, portainer.GetAPIToken(), ToolsPath)
+	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, portainer.GetAPIToken(), ToolsPath, mcp.WithSkipTLSVerify(true))
 	require.NoError(t, err, "Failed to create MCP server")
 
 	return &TestEnv{

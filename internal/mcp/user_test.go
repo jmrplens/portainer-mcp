@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetUsers verifies the HandleGetUsers MCP tool handler.
 func TestHandleGetUsers(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -79,6 +80,7 @@ func TestHandleGetUsers(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateUserRole verifies the HandleUpdateUserRole MCP tool handler.
 func TestHandleUpdateUserRole(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -204,6 +206,7 @@ func TestHandleUpdateUserRole(t *testing.T) {
 	}
 }
 
+// TestHandleCreateUser verifies the HandleCreateUser MCP tool handler.
 func TestHandleCreateUser(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -322,6 +325,7 @@ func TestHandleCreateUser(t *testing.T) {
 	}
 }
 
+// TestHandleGetUser verifies the HandleGetUser MCP tool handler.
 func TestHandleGetUser(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -417,6 +421,7 @@ func TestHandleGetUser(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteUser verifies the HandleDeleteUser MCP tool handler.
 func TestHandleDeleteUser(t *testing.T) {
 	tests := []struct {
 		name        string

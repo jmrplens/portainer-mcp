@@ -1,6 +1,8 @@
 package client
 
 import (
+	"fmt"
+
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 )
@@ -9,7 +11,7 @@ import (
 func (c *PortainerClient) GetBackupStatus() (models.BackupStatus, error) {
 	raw, err := c.cli.GetBackupStatus()
 	if err != nil {
-		return models.BackupStatus{}, err
+		return models.BackupStatus{}, fmt.Errorf("failed to get backup status: %w", err)
 	}
 
 	return models.ConvertToBackupStatus(raw), nil
@@ -19,7 +21,7 @@ func (c *PortainerClient) GetBackupStatus() (models.BackupStatus, error) {
 func (c *PortainerClient) GetBackupS3Settings() (models.S3BackupSettings, error) {
 	raw, err := c.cli.GetBackupSettings()
 	if err != nil {
-		return models.S3BackupSettings{}, err
+		return models.S3BackupSettings{}, fmt.Errorf("failed to get backup S3 settings: %w", err)
 	}
 
 	return models.ConvertToS3BackupSettings(raw), nil

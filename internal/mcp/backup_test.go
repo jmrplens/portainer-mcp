@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetBackupStatus verifies the HandleGetBackupStatus MCP tool handler.
 func TestHandleGetBackupStatus(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -65,6 +66,7 @@ func TestHandleGetBackupStatus(t *testing.T) {
 	}
 }
 
+// TestHandleGetBackupS3Settings verifies the HandleGetBackupS3Settings MCP tool handler.
 func TestHandleGetBackupS3Settings(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -120,6 +122,7 @@ func TestHandleGetBackupS3Settings(t *testing.T) {
 	}
 }
 
+// TestHandleCreateBackup verifies the HandleCreateBackup MCP tool handler.
 func TestHandleCreateBackup(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -179,6 +182,7 @@ func TestHandleCreateBackup(t *testing.T) {
 	}
 }
 
+// TestHandleBackupToS3 verifies the HandleBackupToS3 MCP tool handler.
 func TestHandleBackupToS3(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -254,6 +258,7 @@ func TestHandleBackupToS3(t *testing.T) {
 	}
 }
 
+// TestHandleRestoreFromS3 verifies the HandleRestoreFromS3 MCP tool handler.
 func TestHandleRestoreFromS3(t *testing.T) {
 	tests := []struct {
 		name        string

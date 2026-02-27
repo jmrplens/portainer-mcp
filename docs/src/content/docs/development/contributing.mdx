@@ -1,0 +1,77 @@
+---
+title: Contributing
+description: How to contribute to the Portainer MCP project — overview and quick links.
+---
+
+import { Aside, LinkCard, CardGrid, Steps } from '@astrojs/starlight/components';
+
+Welcome! We're glad you want to contribute. This page is a quick orientation — detailed guides are linked below.
+
+## Quick Start
+
+<Steps>
+1. **Clone and build**:
+   ```bash
+   git clone https://github.com/portainer/portainer-mcp.git
+   cd portainer-mcp
+   make build          # → dist/portainer-mcp
+   ```
+
+2. **Run tests**:
+   ```bash
+   make test           # Unit tests
+   make test-all       # Unit + integration (requires Docker)
+   ```
+
+3. **Format and lint**:
+   ```bash
+   gofmt -s -w .
+   go vet ./...
+   ```
+</Steps>
+
+## Developer Guides
+
+<CardGrid>
+  <LinkCard title="Project Structure" href="/portainer-mcp/development/project-structure/" description="File layout, layer diagram, and key source files" />
+  <LinkCard title="Development Workflow" href="/portainer-mcp/development/workflow/" description="Setup, build, test, debug, and release" />
+  <LinkCard title="Adding Tools" href="/portainer-mcp/development/adding-tools/" description="Step-by-step guide from YAML definition to meta-tool integration" />
+  <LinkCard title="Testing Guide" href="/portainer-mcp/development/testing/" description="Unit tests, integration tests, mocking, and coverage" />
+  <LinkCard title="Dependencies & Toolchain" href="/portainer-mcp/development/dependencies/" description="Go modules, build tools, and CI/CD infrastructure" />
+  <LinkCard title="CI/CD & Releases" href="/portainer-mcp/development/ci-cd/" description="GitHub Actions, GoReleaser, Docker images, Homebrew" />
+</CardGrid>
+
+## Key Conventions
+
+| Area | Convention |
+|------|-----------|
+| Naming | `PascalCase` exported, `camelCase` private |
+| Errors | `fmt.Errorf("context: %w", err)` — always wrap with context |
+| Imports | Standard lib → external → internal (blank line separated) |
+| Tests | Table-driven with descriptive case names |
+| Models | Raw SDK → Local models (never expose raw to handlers) |
+| Logging | `zerolog` to stderr; never log to stdout (MCP transport) |
+| Commits | [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `docs:`, etc. |
+
+## Pull Request Process
+
+1. **Fork** and create a branch: `feat/my-feature` or `fix/my-fix`
+2. **Implement** with tests
+3. **Verify**: `go build ./... && go vet ./... && make test-all`
+4. **Submit** with a clear title and description
+
+<Aside type="tip">
+See the full [CONTRIBUTING.md](https://github.com/portainer/portainer-mcp/blob/main/CONTRIBUTING.md) for the complete checklist and guidelines.
+</Aside>
+
+## Architecture Reference
+
+<CardGrid>
+  <LinkCard title="Architecture" href="/portainer-mcp/reference/architecture/" description="Server layers, client model, tool registration" />
+  <LinkCard title="Clients & Models" href="/portainer-mcp/reference/clients-and-models/" description="Two-layer model architecture and conventions" />
+  <LinkCard title="Design Decisions" href="/portainer-mcp/reference/design-decisions/" description="Architectural records and decision log" />
+</CardGrid>
+
+## Security
+
+Report vulnerabilities privately — see the [Security Policy](https://github.com/portainer/portainer-mcp/blob/main/SECURITY.md) for details.

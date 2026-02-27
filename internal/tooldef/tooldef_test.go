@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCreateToolsFileIfNotExists verifies create tools file if not exists behavior.
 func TestCreateToolsFileIfNotExists(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "tooldef-test")

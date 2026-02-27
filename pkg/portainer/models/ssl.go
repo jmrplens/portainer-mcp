@@ -13,6 +13,10 @@ type SSLSettings struct {
 
 // ConvertToSSLSettings converts raw SDK SSL settings to the local SSLSettings model.
 func ConvertToSSLSettings(raw *apimodels.PortainereeSSLSettings) SSLSettings {
+	if raw == nil {
+		return SSLSettings{}
+	}
+
 	return SSLSettings{
 		CertPath:    raw.CertPath,
 		KeyPath:     raw.KeyPath,

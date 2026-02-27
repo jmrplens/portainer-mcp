@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetMOTD verifies the HandleGetMOTD MCP tool handler.
 func TestHandleGetMOTD(t *testing.T) {
 	tests := []struct {
 		name        string

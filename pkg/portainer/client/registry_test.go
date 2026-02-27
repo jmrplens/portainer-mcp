@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetRegistries verifies get registries behavior.
 func TestGetRegistries(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -69,6 +70,7 @@ func TestGetRegistries(t *testing.T) {
 	}
 }
 
+// TestGetRegistry verifies get registry behavior.
 func TestGetRegistry(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -118,6 +120,7 @@ func TestGetRegistry(t *testing.T) {
 	}
 }
 
+// TestCreateRegistry verifies create registry behavior.
 func TestCreateRegistry(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -181,6 +184,7 @@ func TestCreateRegistry(t *testing.T) {
 	}
 }
 
+// TestUpdateRegistry verifies update registry behavior.
 func TestUpdateRegistry(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -262,6 +266,7 @@ func TestUpdateRegistry(t *testing.T) {
 	}
 }
 
+// TestDeleteRegistry verifies delete registry behavior.
 func TestDeleteRegistry(t *testing.T) {
 	tests := []struct {
 		name          string

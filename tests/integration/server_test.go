@@ -39,7 +39,7 @@ func TestServerInitialization(t *testing.T) {
 	apiToken := portainer.GetAPIToken()
 
 	// Create the MCP server - this is the main test objective
-	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath)
+	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath, mcp.WithSkipTLSVerify(true))
 
 	// Assert the server was created successfully
 	require.NoError(t, err, "Failed to create MCP server")
@@ -68,7 +68,7 @@ func TestServerInitializationUnsupportedVersion(t *testing.T) {
 	apiToken := portainer.GetAPIToken()
 
 	// Try to create the MCP server - should fail with version error
-	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath)
+	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath, mcp.WithSkipTLSVerify(true))
 
 	// Assert the server creation failed with correct error
 	assert.Error(t, err, "Server creation should fail with unsupported version")
@@ -98,7 +98,7 @@ func TestServerInitializationDisabledVersionCheck(t *testing.T) {
 	apiToken := portainer.GetAPIToken()
 
 	// Create the MCP server with disabled version check - should succeed despite unsupported version
-	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath, mcp.WithDisableVersionCheck(true))
+	mcpServer, err := mcp.NewPortainerMCPServer(serverURL, apiToken, toolsPath, mcp.WithDisableVersionCheck(true), mcp.WithSkipTLSVerify(true))
 
 	// Assert the server was created successfully
 	require.NoError(t, err, "Failed to create MCP server with disabled version check")

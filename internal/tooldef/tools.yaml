@@ -1,11 +1,11 @@
 ---
 version: v1.2
 tools:
-  ## Access Groups
-  ## An access group is the equivalent of an Endpoint Group in Portainer.
-  ## ------------------------------------------------------------
+  # === ACCESS GROUPS (7 tools) === #
+  # Manage access groups for multi-environment permission policies.
+  # An access group is the equivalent of an Endpoint Group in Portainer.
   - name: listAccessGroups
-    description: List all available access groups
+    description: "Returns a list of all access groups with their IDs and names. Use this to discover access group IDs for other operations."
     annotations:
       title: List Access Groups
       readOnlyHint: true
@@ -13,19 +13,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createAccessGroup
-    description: Create a new access group. Use access groups when you want to define
-      accesses on more than one environment. Otherwise, define the accesses on
-      the environment level.
+    description: "Create a new access group for managing permissions across multiple environments. Use 'listEnvironments' to get valid environment IDs. Related: updateAccessGroupUserAccesses, updateAccessGroupTeamAccesses."
     parameters:
       - name: name
-        description: The name of the access group
+        description: "Display name for the access group"
         type: string
         required: true
       - name: environmentIds
-        description: "The IDs of the environments that are part of the access group.
-          Must include all the environment IDs that are part of the group - this
-          includes new environments and the existing environments that are
-          already associated with the group. Example: [1, 2, 3]"
+        description: "Numeric IDs of environments to include. Must list all desired environment IDs (replaces existing). Example: [1, 2, 3]"
         type: array
         items:
           type: number
@@ -36,14 +31,14 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: updateAccessGroupName
-    description: Update the name of an existing access group.
+    description: "Rename an existing access group. Use 'listAccessGroups' to find the access group ID."
     parameters:
       - name: id
-        description: The ID of the access group to update
+        description: "Numeric ID of the access group to rename"
         type: number
         required: true
       - name: name
-        description: The name of the access group
+        description: "New display name for the access group"
         type: string
         required: true
     annotations:
@@ -53,28 +48,24 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateAccessGroupUserAccesses
-    description: Update the user accesses of an existing access group.
+    description: "Set user-level access policies for all environments in an access group. Replaces all existing user accesses. Use 'listUsers' to get user IDs."
     parameters:
       - name: id
-        description: The ID of the access group to update
+        description: "Numeric ID of the access group to update"
         type: number
         required: true
       - name: userAccesses
-        description: "The user accesses that are associated with all the environments in
-          the access group. The ID is the user ID of the user in Portainer.
-          Example: [{id: 1, access: 'environment_administrator'}, {id: 2,
-          access: 'standard_user'}]"
+        description: "Full list of user access entries (replaces existing). Each entry maps a Portainer user ID to an access role. Example: [{id: 1, access: 'environment_administrator'}, {id: 2, access: 'standard_user'}]"
         type: array
         required: true
         items:
           type: object
           properties:
             id:
-              description: The ID of the user
+              description: "Numeric user ID from Portainer"
               type: number
             access:
-              description: The access level of the user. Can be environment_administrator,
-                helpdesk_user, standard_user, readonly_user or operator_user
+              description: "Access role: environment_administrator (full control), helpdesk_user (limited admin), standard_user (normal access), readonly_user (view only), operator_user (operations)"
               type: string
               enum:
                 - environment_administrator
@@ -89,28 +80,24 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateAccessGroupTeamAccesses
-    description: Update the team accesses of an existing access group.
+    description: "Set team-level access policies for all environments in an access group. Replaces all existing team accesses. Use 'listTeams' to get team IDs."
     parameters:
       - name: id
-        description: The ID of the access group to update
+        description: "Numeric ID of the access group to update"
         type: number
         required: true
       - name: teamAccesses
-        description: "The team accesses that are associated with all the environments in
-          the access group. The ID is the team ID of the team in Portainer.
-          Example: [{id: 1, access: 'environment_administrator'}, {id: 2,
-          access: 'standard_user'}]"
+        description: "Full list of team access entries (replaces existing). Each entry maps a Portainer team ID to an access role. Example: [{id: 1, access: 'environment_administrator'}, {id: 2, access: 'standard_user'}]"
         type: array
         required: true
         items:
           type: object
           properties:
             id:
-              description: The ID of the team
+              description: "Numeric team ID from Portainer"
               type: number
             access:
-              description: The access level of the team. Can be environment_administrator,
-                helpdesk_user, standard_user, readonly_user or operator_user
+              description: "Access role: environment_administrator (full control), helpdesk_user (limited admin), standard_user (normal access), readonly_user (view only), operator_user (operations)"
               type: string
               enum:
                 - environment_administrator
@@ -125,14 +112,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: addEnvironmentToAccessGroup
-    description: Add an environment to an access group.
+    description: "Add a single environment to an existing access group. Use 'listEnvironments' to get environment IDs and 'listAccessGroups' to get access group IDs."
     parameters:
       - name: id
-        description: The ID of the access group to update
+        description: "Numeric ID of the access group"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment to add to the access group
+        description: "Numeric ID of the environment to add"
         type: number
         required: true
     annotations:
@@ -142,14 +129,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: removeEnvironmentFromAccessGroup
-    description: Remove an environment from an access group.
+    description: "Remove a single environment from an access group. The environment itself is not deleted. Use 'listAccessGroups' to verify membership."
     parameters:
       - name: id
-        description: The ID of the access group to update
+        description: "Numeric ID of the access group"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment to remove from the access group
+        description: "Numeric ID of the environment to remove from the group"
         type: number
         required: true
     annotations:
@@ -158,10 +145,12 @@ tools:
       destructiveHint: true
       idempotentHint: true
       openWorldHint: false
-  ## Environment
-  ## ------------------------------------------------------------
+
+  # === ENVIRONMENTS (8 tools) === #
+  # Manage Portainer environments (Docker, Kubernetes, etc.).
+  # An environment represents a Docker host, Swarm cluster, or Kubernetes cluster.
   - name: listEnvironments
-    description: List all available environments
+    description: "Returns a list of all environments with their IDs, names, types, and status. Use this first to discover environment IDs needed by most other tools."
     annotations:
       title: List Environments
       readOnlyHint: true
@@ -169,10 +158,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getEnvironment
-    description: Get detailed information about a specific environment by its ID
+    description: "Returns full details of a specific environment including status, type, URL, tags, and group memberships. Use 'listEnvironments' to find the ID."
     parameters:
       - name: id
-        description: The ID of the environment to retrieve
+        description: "Numeric environment ID (from 'listEnvironments')"
         type: number
         required: true
     annotations:
@@ -182,10 +171,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteEnvironment
-    description: Delete an environment by its ID. This action cannot be undone.
+    description: "Permanently deletes an environment from Portainer. This only removes the Portainer reference — it does not affect the actual Docker host or cluster. Cannot be undone."
     parameters:
       - name: id
-        description: The ID of the environment to delete
+        description: "Numeric ID of the environment to permanently delete"
         type: number
         required: true
     annotations:
@@ -195,13 +184,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: snapshotEnvironment
-    description: >-
-      Trigger a snapshot for a specific environment.
-      A snapshot captures the current state of the environment including
-      containers, images, volumes, and networks.
+    description: "Trigger a state snapshot for a specific environment. Captures the current state of containers, images, volumes, and networks. Related: snapshotAllEnvironments."
     parameters:
       - name: id
-        description: The ID of the environment to snapshot
+        description: "Numeric ID of the environment to snapshot"
         type: number
         required: true
     annotations:
@@ -211,10 +197,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: snapshotAllEnvironments
-    description: >-
-      Trigger a snapshot for all environments.
-      A snapshot captures the current state of each environment including
-      containers, images, volumes, and networks.
+    description: "Trigger a state snapshot for all environments at once. Captures containers, images, volumes, and networks for each environment. Related: snapshotEnvironment for a single target."
     annotations:
       title: Snapshot All Environments
       readOnlyHint: false
@@ -222,17 +205,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentTags
-    description: Update the tags associated with an environment
+    description: "Replace all tags on an environment. Provide the complete list of tag IDs to keep — omitted tags are removed. Use 'listEnvironmentTags' to find tag IDs."
     parameters:
       - name: id
-        description: The ID of the environment to update
+        description: "Numeric ID of the environment to update"
         type: number
         required: true
       - name: tagIds
         description: >-
-          The IDs of the tags that are associated with the environment.
-          Must include all the tag IDs that should be associated with the environment - this includes new tags and existing tags.
-          Providing an empty array will remove all tags.
+          Complete list of numeric tag IDs to assign.
+          Must include all desired tags (replaces existing).
+          Provide an empty array [] to remove all tags.
           Example: [1, 2, 3]
         type: array
         required: true
@@ -245,18 +228,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentUserAccesses
-    description: Update the user access policies of an environment
+    description: "Set user access policies for a specific environment. Replaces all existing user access entries. Use 'listUsers' to get user IDs."
     parameters:
       - name: id
-        description: The ID of the environment to update
+        description: "Numeric ID of the environment to update"
         type: number
         required: true
       - name: userAccesses
         description: >-
-          The user accesses that are associated with the environment.
-          The ID is the user ID of the user in Portainer.
-          Must include all the access policies for all users that should be associated with the environment.
-          Providing an empty array will remove all user accesses.
+          Full list of user access entries (replaces existing).
+          Each entry maps a Portainer user ID to an access role.
+          Provide an empty array [] to remove all user accesses.
           Example: [{id: 1, access: 'environment_administrator'}, {id: 2, access: 'standard_user'}]
         type: array
         required: true
@@ -264,10 +246,10 @@ tools:
           type: object
           properties:
             id:
-              description: The ID of the user
+              description: "Numeric user ID from Portainer"
               type: number
             access:
-              description: The access level of the user
+              description: "Access role: environment_administrator (full control), helpdesk_user (limited admin), standard_user (normal access), readonly_user (view only), operator_user (operations)"
               type: string
               enum:
                 - environment_administrator
@@ -282,18 +264,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentTeamAccesses
-    description: Update the team access policies of an environment
+    description: "Set team access policies for a specific environment. Replaces all existing team access entries. Use 'listTeams' to get team IDs."
     parameters:
       - name: id
-        description: The ID of the environment to update
+        description: "Numeric ID of the environment to update"
         type: number
         required: true
       - name: teamAccesses
         description: >-
-          The team accesses that are associated with the environment.
-          The ID is the team ID of the team in Portainer.
-          Must include all the access policies for all teams that should be associated with the environment.
-          Providing an empty array will remove all team accesses.
+          Full list of team access entries (replaces existing).
+          Each entry maps a Portainer team ID to an access role.
+          Provide an empty array [] to remove all team accesses.
           Example: [{id: 1, access: 'environment_administrator'}, {id: 2, access: 'standard_user'}]
         type: array
         required: true
@@ -301,10 +282,10 @@ tools:
           type: object
           properties:
             id:
-              description: The ID of the team
+              description: "Numeric team ID from Portainer"
               type: number
             access:
-              description: The access level of the team
+              description: "Access role: environment_administrator (full control), helpdesk_user (limited admin), standard_user (normal access), readonly_user (view only), operator_user (operations)"
               type: string
               enum:
                 - environment_administrator
@@ -318,18 +299,19 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
-  ## Environment Groups
-  ## An environment group is the equivalent of an Edge Group in Portainer.
-  ## ------------------------------------------------------------
+
+  # === ENVIRONMENT GROUPS (5 tools) === #
+  # Manage environment groups (equivalent to Edge Groups in Portainer).
+  # Used to group environments for edge stack deployments.
   - name: createEnvironmentGroup
-    description: Create a new environment group. Environment groups are the equivalent of Edge Groups in Portainer.
+    description: "Create a new environment group (Edge Group) with a name and initial set of environments. Use 'listEnvironments' to get environment IDs."
     parameters:
       - name: name
-        description: The name of the environment group
+        description: "Display name for the environment group"
         type: string
         required: true
       - name: environmentIds
-        description: The IDs of the environments to add to the group
+        description: "Numeric IDs of environments to include in the group"
         type: array
         required: true
         items:
@@ -341,7 +323,7 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: listEnvironmentGroups
-    description: List all available environment groups. Environment groups are the equivalent of Edge Groups in Portainer.
+    description: "Returns a list of all environment groups (Edge Groups) with their IDs, names, and member environments."
     annotations:
       title: List Environment Groups
       readOnlyHint: true
@@ -349,14 +331,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentGroupName
-    description: Update the name of an environment group. Environment groups are the equivalent of Edge Groups in Portainer.
+    description: "Rename an existing environment group (Edge Group). Use 'listEnvironmentGroups' to find the group ID."
     parameters:
       - name: id
-        description: The ID of the environment group to update
+        description: "Numeric ID of the environment group to rename"
         type: number
         required: true
       - name: name
-        description: The new name for the environment group
+        description: "New display name for the environment group"
         type: string
         required: true
     annotations:
@@ -366,17 +348,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentGroupEnvironments
-    description: Update the environments associated with an environment group. Environment groups are the equivalent of Edge Groups in Portainer.
+    description: "Replace the list of environments in an environment group (Edge Group). Provide all desired environment IDs — omitted ones are removed."
     parameters:
       - name: id
-        description: The ID of the environment group to update
+        description: "Numeric ID of the environment group to update"
         type: number
         required: true
       - name: environmentIds
         description: >-
-          The IDs of the environments that should be part of the group.
-          Must include all environment IDs that should be associated with the group.
-          Providing an empty array will remove all environments from the group.
+          Complete list of numeric environment IDs to assign.
+          Must include all desired environments (replaces existing).
+          Provide an empty array [] to remove all environments from the group.
           Example: [1, 2, 3]
         type: array
         required: true
@@ -389,17 +371,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateEnvironmentGroupTags
-    description: Update the tags associated with an environment group. Environment groups are the equivalent of Edge Groups in Portainer.
+    description: "Replace the tags on an environment group (Edge Group). Provide all desired tag IDs — omitted ones are removed. Use 'listEnvironmentTags' to find tag IDs."
     parameters:
       - name: id
-        description: The ID of the environment group to update
+        description: "Numeric ID of the environment group to update"
         type: number
         required: true
       - name: tagIds
         description: >-
-          The IDs of the tags that should be associated with the group.
-          Must include all tag IDs that should be associated with the group.
-          Providing an empty array will remove all tags from the group.
+          Complete list of numeric tag IDs to assign.
+          Must include all desired tags (replaces existing).
+          Provide an empty array [] to remove all tags from the group.
           Example: [1, 2, 3]
         type: array
         required: true
@@ -411,20 +393,23 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
-  ## Settings
-  ## ------------------------------------------------------------
+
+  # === SETTINGS (1 tool) === #
+  # Retrieve Portainer instance configuration.
   - name: getSettings
-    description: Get the settings of the Portainer instance
+    description: "Returns the full Portainer instance settings including authentication method, edge configuration, and feature flags. Related: updateSettings, getPublicSettings."
     annotations:
       title: Get Settings
       readOnlyHint: true
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
-  ## Stacks
-  ## ------------------------------------------------------------
+
+  # === EDGE STACKS (5 tools) === #
+  # Manage edge stacks deployed to Edge environments via Edge Groups.
+  # For regular stacks deployed directly to environments, see Regular Stacks.
   - name: listStacks
-    description: List all edge stacks. Edge stacks are deployed to Edge environments via Edge Groups. For regular Docker Compose or Swarm stacks deployed to specific environments, use listRegularStacks instead.
+    description: "Returns a list of all edge stacks deployed via Edge Groups. For regular Docker Compose/Swarm stacks deployed to specific environments, use 'listRegularStacks' instead."
     annotations:
       title: List Edge Stacks
       readOnlyHint: true
@@ -432,7 +417,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: listRegularStacks
-    description: List all regular (non-edge) stacks. These are Docker Compose or Swarm stacks deployed directly to specific environments. Returns stack ID, name, type, status, endpoint ID, entry point, creation info, and filesystem path. For edge stacks deployed via Edge Groups, use listStacks instead.
+    description: "Returns a list of all regular (non-edge) stacks with ID, name, type, status, and endpoint info. For edge stacks deployed via Edge Groups, use 'listStacks' instead."
     annotations:
       title: List Regular Stacks
       readOnlyHint: true
@@ -440,10 +425,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getStackFile
-    description: Get the compose file for a specific stack ID
+    description: "Returns the docker-compose.yml content for an edge stack. Use 'listStacks' to find the stack ID. For regular stack files, use 'inspectStackFile'."
     parameters:
       - name: id
-        description: The ID of the stack to get the compose file for
+        description: "Numeric ID of the edge stack"
         type: number
         required: true
     annotations:
@@ -453,12 +438,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createStack
-    description: Create a new stack
+    description: "Create a new edge stack with a docker-compose file and deploy it to environment groups. Use 'listEnvironmentGroups' to get group IDs. Example file: \"services:\\n  web:\\n    image: nginx\""
     parameters:
       - name: name
-        description: Name of the stack. Stack name must only consist of lowercase alpha
-          characters, numbers, hyphens, or underscores as well as start with a
-          lowercase character or number
+        description: "Stack name: lowercase alphanumeric, hyphens, underscores only. Must start with a letter or number"
         type: string
         required: true
       - name: file
@@ -470,8 +453,7 @@ tools:
         type: string
         required: true
       - name: environmentGroupIds
-        description: "The IDs of the environment groups that the stack belongs to. Must
-          include at least one environment group ID. Example: [1, 2, 3]"
+        description: "Numeric IDs of the environment groups to deploy to. At least one required. Example: [1, 2, 3]"
         type: array
         required: true
         items:
@@ -483,10 +465,10 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: updateStack
-    description: Update an existing stack
+    description: "Update an existing edge stack's compose file and environment group assignments. Use 'listStacks' to find the stack ID."
     parameters:
       - name: id
-        description: The ID of the stack to update
+        description: "Numeric ID of the edge stack to update"
         type: number
         required: true
       - name: file
@@ -499,8 +481,7 @@ tools:
         type: string
         required: true
       - name: environmentGroupIds
-        description: "The IDs of the environment groups that the stack belongs to. Must
-          include at least one environment group ID. Example: [1, 2, 3]"
+        description: "Numeric IDs of the environment groups to deploy to. At least one required. Example: [1, 2, 3]"
         type: array
         required: true
         items:
@@ -511,13 +492,15 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
-  ## Regular Stacks
-  ## ------------------------------------------------------------
+
+  # === REGULAR STACKS (8 tools) === #
+  # Manage regular (non-edge) Docker Compose or Swarm stacks deployed to specific environments.
+  # For edge stacks deployed via Edge Groups, see Edge Stacks.
   - name: getStack
-    description: Get a specific stack by ID. Returns detailed information about a regular (non-edge) stack including name, type, status, and environment.
+    description: "Returns full details of a regular (non-edge) stack including name, type, status, environment, and git info. Use 'listRegularStacks' to find the stack ID."
     parameters:
       - name: id
-        description: The ID of the stack to inspect
+        description: "Numeric ID of the regular stack to inspect"
         type: number
         required: true
     annotations:
@@ -527,31 +510,31 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteStack
-    description: Delete a regular (non-edge) stack permanently. This removes the stack and all its associated containers from the environment.
+    description: "Permanently deletes a regular (non-edge) stack and all its associated containers from the environment. Cannot be undone. Use 'listRegularStacks' to find stack/environment IDs."
     parameters:
       - name: id
-        description: The ID of the stack to delete
+        description: "Numeric ID of the stack to permanently delete"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment where the stack is deployed
+        description: "Numeric ID of the environment where the stack is deployed"
         type: number
         required: true
       - name: removeVolumes
-        description: Whether to remove associated volumes when deleting the stack
+        description: "Set to true to also delete associated Docker volumes (default: false)"
         type: boolean
         required: false
     annotations:
       title: Delete Stack
       readOnlyHint: false
       destructiveHint: true
-      idempotentHint: false
+      idempotentHint: true
       openWorldHint: false
   - name: inspectStackFile
-    description: Get the compose file content for a specific regular (non-edge) stack by its ID. Returns the raw compose file as text.
+    description: "Returns the raw docker-compose.yml content for a regular (non-edge) stack. Use 'listRegularStacks' to find the stack ID. For edge stack files, use 'getStackFile'."
     parameters:
       - name: id
-        description: The ID of the stack to get the compose file for
+        description: "Numeric ID of the regular stack"
         type: number
         required: true
     annotations:
@@ -561,22 +544,22 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateStackGit
-    description: Update the git configuration of a regular (non-edge) stack. Allows changing the git reference (branch/tag) and prune settings.
+    description: "Update the git configuration (branch/tag and prune settings) of a regular (non-edge) stack. Use 'redeployStackGit' to apply changes."
     parameters:
       - name: id
-        description: The ID of the stack to update
+        description: "Numeric ID of the stack to update"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment where the stack is deployed
+        description: "Numeric ID of the environment where the stack is deployed"
         type: number
         required: true
       - name: referenceName
-        description: The git reference name (branch or tag) to use
+        description: "Git reference name: branch (e.g. 'refs/heads/main') or tag (e.g. 'refs/tags/v1.0')"
         type: string
         required: false
       - name: prune
-        description: Whether to prune services that are no longer in the compose file
+        description: "Set to true to remove services no longer defined in the compose file"
         type: boolean
         required: false
     annotations:
@@ -586,22 +569,22 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: redeployStackGit
-    description: Trigger a git-based redeployment of a regular (non-edge) stack. Pulls the latest changes from the git repository and redeploys the stack.
+    description: "Pull the latest changes from a git repository and redeploy a regular (non-edge) stack. Use 'updateStackGit' to change branch/tag first if needed."
     parameters:
       - name: id
-        description: The ID of the stack to redeploy
+        description: "Numeric ID of the stack to redeploy"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment where the stack is deployed
+        description: "Numeric ID of the environment where the stack is deployed"
         type: number
         required: true
       - name: pullImage
-        description: Whether to pull the latest images before redeploying
+        description: "Set to true to pull the latest container images before redeploying"
         type: boolean
         required: false
       - name: prune
-        description: Whether to prune services that are no longer in the compose file
+        description: "Set to true to remove services no longer defined in the compose file"
         type: boolean
         required: false
     annotations:
@@ -611,14 +594,14 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: startStack
-    description: Start a stopped regular (non-edge) stack. Brings up all containers defined in the stack's compose file.
+    description: "Start a stopped regular (non-edge) stack, bringing up all containers defined in its compose file. Related: stopStack."
     parameters:
       - name: id
-        description: The ID of the stack to start
+        description: "Numeric ID of the stack to start"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment where the stack is deployed
+        description: "Numeric ID of the environment where the stack is deployed"
         type: number
         required: true
     annotations:
@@ -628,14 +611,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: stopStack
-    description: Stop a running regular (non-edge) stack. Stops all containers defined in the stack's compose file.
+    description: "Stop a running regular (non-edge) stack, stopping all containers defined in its compose file. Related: startStack."
     parameters:
       - name: id
-        description: The ID of the stack to stop
+        description: "Numeric ID of the stack to stop"
         type: number
         required: true
       - name: environmentId
-        description: The ID of the environment where the stack is deployed
+        description: "Numeric ID of the environment where the stack is deployed"
         type: number
         required: true
     annotations:
@@ -645,37 +628,38 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: migrateStack
-    description: Migrate a regular (non-edge) stack to another environment. Moves the stack from one environment to another, optionally renaming it.
+    description: "Move a regular (non-edge) stack from one environment to another, optionally renaming it. The stack is removed from the source environment. Use 'listEnvironments' to get environment IDs."
     parameters:
       - name: id
-        description: The ID of the stack to migrate
+        description: "Numeric ID of the stack to migrate"
         type: number
         required: true
       - name: environmentId
-        description: The current environment ID where the stack is deployed
+        description: "Numeric ID of the current source environment"
         type: number
         required: true
       - name: targetEnvironmentId
-        description: The target environment ID to migrate the stack to
+        description: "Numeric ID of the destination environment"
         type: number
         required: true
       - name: name
-        description: Optional new name for the migrated stack
+        description: "Optional new name for the stack in the target environment"
         type: string
         required: false
     annotations:
       title: Migrate Stack
       readOnlyHint: false
-      destructiveHint: false
+      destructiveHint: true
       idempotentHint: false
       openWorldHint: false
-  ## Tags
-  ## ------------------------------------------------------------
+
+  # === TAGS (3 tools) === #
+  # Manage environment tags for organizing and filtering environments.
   - name: createEnvironmentTag
-    description: Create a new environment tag
+    description: "Create a new tag that can be assigned to environments. Use 'updateEnvironmentTags' to assign it after creation."
     parameters:
       - name: name
-        description: The name of the tag
+        description: "Display name for the tag (must be unique)"
         type: string
         required: true
     annotations:
@@ -685,7 +669,7 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: listEnvironmentTags
-    description: List all available environment tags
+    description: "Returns a list of all environment tags with their IDs and names. Use this to discover tag IDs for 'updateEnvironmentTags'."
     annotations:
       title: List Environment Tags
       readOnlyHint: true
@@ -693,10 +677,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteEnvironmentTag
-    description: Delete an environment tag by ID
+    description: "Permanently deletes an environment tag by ID. The tag is removed from all environments that had it. Use 'listEnvironmentTags' to find the ID."
     parameters:
       - name: id
-        description: The ID of the environment tag to delete
+        description: "Numeric ID of the environment tag to permanently delete"
         type: number
         required: true
     annotations:
@@ -705,13 +689,14 @@ tools:
       destructiveHint: true
       idempotentHint: true
       openWorldHint: false
-  ## Teams
-  ## ------------------------------------------------------------
+
+  # === TEAMS (6 tools) === #
+  # Manage teams and team membership for role-based access control.
   - name: createTeam
-    description: Create a new team
+    description: "Create a new team. Use 'updateTeamMembers' to add users after creation. Related: updateAccessGroupTeamAccesses, updateEnvironmentTeamAccesses."
     parameters:
       - name: name
-        description: The name of the team
+        description: "Display name for the team (must be unique)"
         type: string
         required: true
     annotations:
@@ -721,7 +706,7 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: listTeams
-    description: List all available teams
+    description: "Returns a list of all teams with their IDs and names. Use this to discover team IDs for access control operations."
     annotations:
       title: List Teams
       readOnlyHint: true
@@ -729,10 +714,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getTeam
-    description: Get details of a specific team by ID
+    description: "Returns full details of a specific team by ID including name and member count. Use 'listTeams' to find the ID."
     parameters:
       - name: id
-        description: The ID of the team to retrieve
+        description: "Numeric team ID (from 'listTeams')"
         type: number
         required: true
     annotations:
@@ -742,10 +727,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteTeam
-    description: Delete a team by ID
+    description: "Permanently deletes a team by ID. Team members are not deleted but lose team-based access. Use 'listTeams' to find the ID."
     parameters:
       - name: id
-        description: The ID of the team to delete
+        description: "Numeric ID of the team to permanently delete"
         type: number
         required: true
     annotations:
@@ -755,14 +740,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateTeamName
-    description: Update the name of an existing team
+    description: "Rename an existing team. Use 'listTeams' to find the team ID."
     parameters:
       - name: id
-        description: The ID of the team to update
+        description: "Numeric ID of the team to rename"
         type: number
         required: true
       - name: name
-        description: The new name of the team
+        description: "New display name for the team"
         type: string
         required: true
     annotations:
@@ -772,17 +757,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateTeamMembers
-    description: Update the members of an existing team
+    description: "Replace the member list of a team. Provide all desired user IDs — omitted users are removed from the team. Use 'listUsers' to get user IDs."
     parameters:
       - name: id
-        description: The ID of the team to update
+        description: "Numeric ID of the team to update"
         type: number
         required: true
       - name: userIds
-        description: "The IDs of the users that are part of the team. Must include all
-          the user IDs that are part of the team - this includes new users and
-          the existing users that are already associated with the team. Example:
-          [1, 2, 3]"
+        description: "Complete list of numeric user IDs to assign as team members (replaces existing). Example: [1, 2, 3]"
         type: array
         required: true
         items:
@@ -794,10 +776,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
-  ## Users
-  ## ------------------------------------------------------------
+  # === USERS (5 tools) === #
+  # Manage Portainer user accounts and roles.
   - name: listUsers
-    description: List all available users
+    description: "Returns a list of all Portainer users with their IDs, usernames, and roles. Use this to discover user IDs for access control."
     annotations:
       title: List Users
       readOnlyHint: true
@@ -805,10 +787,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getUser
-    description: Get details of a specific user by ID
+    description: "Returns full details of a specific user by ID including username, role, and auth source. Use 'listUsers' to find the ID."
     parameters:
       - name: id
-        description: The ID of the user to retrieve
+        description: "Numeric user ID (from 'listUsers')"
         type: number
         required: true
     annotations:
@@ -818,18 +800,18 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createUser
-    description: Create a new user
+    description: "Create a new Portainer user account with a username, password, and role. Related: updateUserRole, updateTeamMembers."
     parameters:
       - name: username
-        description: The username of the new user
+        description: "Login username for the new user (must be unique)"
         type: string
         required: true
       - name: password
-        description: The password of the new user
+        description: "Initial password for the new user"
         type: string
         required: true
       - name: role
-        description: The role of the user. Can be admin, user or edge_admin
+        description: "User role: admin (full Portainer access), user (standard access), edge_admin (edge device management)"
         type: string
         required: true
         enum:
@@ -843,10 +825,10 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: deleteUser
-    description: Delete a user by ID
+    description: "Permanently deletes a Portainer user account by ID. The user loses all access immediately. Cannot be undone."
     parameters:
       - name: id
-        description: The ID of the user to delete
+        description: "Numeric ID of the user to permanently delete"
         type: number
         required: true
     annotations:
@@ -856,14 +838,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateUserRole
-    description: Update an existing user
+    description: "Change the role of an existing Portainer user. Use 'listUsers' to find the user ID."
     parameters:
       - name: id
-        description: The ID of the user to update
+        description: "Numeric ID of the user to update"
         type: number
         required: true
       - name: role
-        description: The role of the user. Can be admin, user or edge_admin
+        description: "New user role: admin (full Portainer access), user (standard access), edge_admin (edge device management)"
         type: string
         required: true
         enum:
@@ -877,10 +859,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
-  ## System
-  ## ------------------------------------------------------------
+  # === SYSTEM (1 tool) === #
+  # Retrieve Portainer system information.
   - name: getSystemStatus
-    description: Get the system status of the Portainer instance, including version and instance ID
+    description: "Returns the Portainer system status including version number and instance ID. Use this to verify the Portainer server is running."
     annotations:
       title: Get System Status
       readOnlyHint: true
@@ -888,18 +870,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
-  ## Docker Proxy
-  ## ------------------------------------------------------------
+  # === DOCKER PROXY (1 tool) === #
+  # Proxy raw Docker Engine API requests through Portainer to a specific environment.
   - name: dockerProxy
-    description: Proxy Docker requests to a specific Portainer environment.
-      This tool can be used with any Docker API operation as documented in the Docker Engine API specification (https://docs.docker.com/reference/api/engine/version/v1.48/).
+    description: "Proxy any Docker Engine API request to a Portainer environment. Supports all operations from the Docker API v1.48 spec. Use 'listEnvironments' to get the environmentId. Example: {method: 'GET', dockerAPIPath: '/containers/json'} to list containers."
     parameters:
       - name: environmentId
-        description: The ID of the environment to proxy Docker requests to
+        description: "Numeric ID of the target Docker environment (from 'listEnvironments')"
         type: number
         required: true
       - name: method
-        description: The HTTP method to use to proxy the Docker API operation
+        description: "HTTP method for the Docker API call"
         type: string
         required: true
         enum:
@@ -909,12 +890,11 @@ tools:
           - DELETE
           - HEAD
       - name: dockerAPIPath
-        description: "The route of the Docker API operation to proxy. Must include the leading slash. Example: /containers/json"
+        description: "Docker API path with leading slash. Example: /containers/json, /images/json, /networks"
         type: string
         required: true
       - name: queryParams
-        description: "The query parameters to include in the Docker API operation. Must be an array of key-value pairs.
-          Example: [{key: 'all', value: 'true'}, {key: 'filter', value: 'dangling'}]"
+        description: "Optional query parameters as key-value pairs. Example: [{key: 'all', value: 'true'}]"
         type: array
         required: false
         items:
@@ -922,13 +902,12 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the query parameter
+              description: "Query parameter name"
             value:
               type: string
-              description: The value of the query parameter
+              description: "Query parameter value"
       - name: headers
-        description: "The headers to include in the Docker API operation. Must be an array of key-value pairs.
-          Example: [{key: 'Content-Type', value: 'application/json'}]"
+        description: "Optional HTTP headers as key-value pairs. Example: [{key: 'Content-Type', value: 'application/json'}]"
         type: array
         required: false
         items:
@@ -936,30 +915,28 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the header
+              description: "Header name"
             value:
               type: string
-              description: The value of the header
+              description: "Header value"
       - name: body
-        description: "The body of the Docker API operation to proxy. Must be a JSON string.
-          Example: {'Image': 'nginx:latest', 'Name': 'my-container'}"
+        description: "Optional JSON request body as a string. Example: '{\"Image\": \"nginx:latest\"}'"
         type: string
         required: false
     annotations:
       title: Docker Proxy
-      readOnlyHint: true
+      readOnlyHint: false
       destructiveHint: true
-      idempotentHint: true
-      openWorldHint: false
+      idempotentHint: false
+      openWorldHint: true
 
-  ## Docker Dashboard
-  ## ------------------------------------------------------------
+  # === DOCKER DASHBOARD (1 tool) === #
+  # Get a high-level overview of Docker resources in an environment.
   - name: getDockerDashboard
-    description: Get Docker dashboard data for a specific Portainer environment.
-      Returns container, image, network, volume, stack, and service counts and status summary.
+    description: "Returns a summary dashboard for a Docker environment with counts and status of containers, images, networks, volumes, stacks, and services. Use 'listEnvironments' to get the environmentId."
     parameters:
       - name: environmentId
-        description: The ID of the environment to get Docker dashboard data for
+        description: "Numeric ID of the Docker environment (from 'listEnvironments')"
         type: number
         required: true
     annotations:
@@ -969,18 +946,17 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
-  ## Kubernetes Proxy
-  ## ------------------------------------------------------------
+  # === KUBERNETES PROXY (2 tools) === #
+  # Proxy raw Kubernetes API requests through Portainer to a specific environment.
   - name: kubernetesProxy
-    description: Proxy Kubernetes requests to a specific Portainer environment.
-      This tool can be used with any Kubernetes API operation as documented in the Kubernetes API specification (https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/).
+    description: "Proxy any Kubernetes API request to a Portainer environment. Supports all operations from the K8s API v1.32 spec. Use 'listEnvironments' to get the environmentId. Example: {method: 'GET', kubernetesAPIPath: '/api/v1/namespaces/default/pods'} to list pods."
     parameters:
       - name: environmentId
-        description: The ID of the environment to proxy Kubernetes requests to
+        description: "Numeric ID of the target Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
       - name: method
-        description: The HTTP method to use to proxy the Kubernetes API operation
+        description: "HTTP method for the Kubernetes API call"
         type: string
         required: true
         enum:
@@ -990,12 +966,11 @@ tools:
           - DELETE
           - HEAD
       - name: kubernetesAPIPath
-        description: "The route of the Kubernetes API operation to proxy. Must include the leading slash. Example: /api/v1/namespaces/default/pods"
+        description: "Kubernetes API path with leading slash. Example: /api/v1/namespaces/default/pods, /apis/apps/v1/deployments"
         type: string
         required: true
       - name: queryParams
-        description: "The query parameters to include in the Kubernetes API operation. Must be an array of key-value pairs.
-          Example: [{key: 'watch', value: 'true'}, {key: 'fieldSelector', value: 'metadata.name=my-pod'}]"
+        description: "Optional query parameters as key-value pairs. Example: [{key: 'labelSelector', value: 'app=nginx'}]"
         type: array
         required: false
         items:
@@ -1003,13 +978,12 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the query parameter
+              description: "Query parameter name"
             value:
               type: string
-              description: The value of the query parameter
+              description: "Query parameter value"
       - name: headers
-        description: "The headers to include in the Kubernetes API operation. Must be an array of key-value pairs.
-          Example: [{key: 'Content-Type', value: 'application/json'}]"
+        description: "Optional HTTP headers as key-value pairs. Example: [{key: 'Content-Type', value: 'application/json'}]"
         type: array
         required: false
         items:
@@ -1017,42 +991,35 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the header
+              description: "Header name"
             value:
               type: string
-              description: The value of the header
+              description: "Header value"
       - name: body
-        description: "The body of the Kubernetes API operation to proxy. Must be a JSON string.
-          Example: {'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': 'my-pod'}}"
+        description: "Optional JSON request body as a string. Example: '{\"apiVersion\": \"v1\", \"kind\": \"Pod\", \"metadata\": {\"name\": \"my-pod\"}}'"
         type: string
         required: false
     annotations:
       title: Kubernetes Proxy
-      readOnlyHint: true
+      readOnlyHint: false
       destructiveHint: true
-      idempotentHint: true
-      openWorldHint: false
+      idempotentHint: false
+      openWorldHint: true
   - name: getKubernetesResourceStripped
     description: >-
-      Proxy GET requests to a specific Portainer environment for Kubernetes resources,
-      and automatically strips verbose metadata fields (such as 'managedFields') from the API response
-      to reduce its size. This tool is intended for retrieving Kubernetes resource
-      information where a leaner payload is desired.
-      This tool can be used with any GET Kubernetes API operation as documented
-      in the Kubernetes API specification (https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/).
-      For other methods (POST, PUT, DELETE, HEAD), use the 'kubernetesProxy' tool.
+      Proxy a GET request to a Kubernetes environment and automatically strip verbose metadata (e.g. managedFields) for a leaner response.
+      For write operations (POST, PUT, DELETE), use 'kubernetesProxy' instead.
     parameters:
       - name: environmentId
-        description: The ID of the environment to proxy Kubernetes GET requests to
+        description: "Numeric ID of the target Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
       - name: kubernetesAPIPath
-        description: "The route of the Kubernetes API GET operation to proxy. Must include the leading slash. Example: /api/v1/namespaces/default/pods"
+        description: "Kubernetes API GET path with leading slash. Example: /api/v1/namespaces/default/pods"
         type: string
         required: true
       - name: queryParams
-        description: "The query parameters to include in the Kubernetes API operation. Must be an array of key-value pairs.
-          Example: [{key: 'watch', value: 'true'}, {key: 'fieldSelector', value: 'metadata.name=my-pod'}]"
+        description: "Optional query parameters as key-value pairs. Example: [{key: 'fieldSelector', value: 'metadata.name=my-pod'}]"
         type: array
         required: false
         items:
@@ -1060,13 +1027,12 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the query parameter
+              description: "Query parameter name"
             value:
               type: string
-              description: The value of the query parameter
+              description: "Query parameter value"
       - name: headers
-        description: "The headers to include in the Kubernetes API operation. Must be an array of key-value pairs.
-          Example: [{key: 'Accept', value: 'application/json'}]"
+        description: "Optional HTTP headers as key-value pairs. Example: [{key: 'Accept', value: 'application/json'}]"
         type: array
         required: false
         items:
@@ -1074,26 +1040,24 @@ tools:
           properties:
             key:
               type: string
-              description: The key of the header
+              description: "Header name"
             value:
               type: string
-              description: The value of the header
+              description: "Header value"
     annotations:
       title: Get Kubernetes Resource (Stripped)
       readOnlyHint: true
       destructiveHint: false
       idempotentHint: true
-      openWorldHint: false
+      openWorldHint: true
 
-  ## Kubernetes Native Operations
-
+  # === KUBERNETES NATIVE (3 tools) === #
+  # High-level Kubernetes operations through Portainer's native API.
   - name: getKubernetesDashboard
-    description: >-
-      Get a summary dashboard for a Kubernetes environment showing counts of key resources
-      including applications, config maps, ingresses, namespaces, secrets, services, and volumes.
+    description: "Returns a summary dashboard for a Kubernetes environment with counts of applications, config maps, ingresses, namespaces, secrets, services, and volumes. Use 'listEnvironments' to get the environmentId."
     parameters:
       - name: environmentId
-        description: The ID of the Kubernetes environment to get the dashboard for
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
     annotations:
@@ -1104,13 +1068,10 @@ tools:
       openWorldHint: false
 
   - name: listKubernetesNamespaces
-    description: >-
-      List all Kubernetes namespaces in a specific environment.
-      Returns namespace details including name, creation date, owner, and whether the namespace
-      is a default or system namespace.
+    description: "Returns a list of all Kubernetes namespaces in an environment including name, creation date, owner, and default/system status. Use 'listEnvironments' to get the environmentId."
     parameters:
       - name: environmentId
-        description: The ID of the Kubernetes environment to list namespaces for
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
     annotations:
@@ -1121,12 +1082,10 @@ tools:
       openWorldHint: false
 
   - name: getKubernetesConfig
-    description: >-
-      Get the kubeconfig for a specific Kubernetes environment.
-      Returns the kubeconfig content that can be used to connect to the cluster.
+    description: "Returns the kubeconfig file content for a Kubernetes environment, which can be used to connect to the cluster externally. Use 'listEnvironments' to get the environmentId."
     parameters:
       - name: environmentId
-        description: The ID of the Kubernetes environment to get the kubeconfig for
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
     annotations:
@@ -1136,10 +1095,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
 
-  ## Custom Templates
-  ## ------------------------------------------------------------
+  # === CUSTOM TEMPLATES (5 tools) === #
+  # Manage reusable Docker Compose/Swarm/Kubernetes deployment templates.
   - name: listCustomTemplates
-    description: List all available custom templates
+    description: "Returns a list of all custom templates with their IDs, titles, types, and platforms. Related: getCustomTemplate, getCustomTemplateFile."
     annotations:
       title: List Custom Templates
       readOnlyHint: true
@@ -1147,10 +1106,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getCustomTemplate
-    description: Get details of a specific custom template by ID
+    description: "Returns full details of a custom template by ID including title, description, type, platform, and metadata. Use 'listCustomTemplates' to find the ID."
     parameters:
       - name: id
-        description: The ID of the custom template to retrieve
+        description: "Numeric ID of the custom template (from 'listCustomTemplates')"
         type: number
         required: true
     annotations:
@@ -1160,10 +1119,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getCustomTemplateFile
-    description: Get the file content of a specific custom template by ID
+    description: "Returns the raw file content (e.g. docker-compose.yml) of a custom template. Use 'listCustomTemplates' to find the ID."
     parameters:
       - name: id
-        description: The ID of the custom template to get the file content for
+        description: "Numeric ID of the custom template (from 'listCustomTemplates')"
         type: number
         required: true
     annotations:
@@ -1173,34 +1132,34 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createCustomTemplate
-    description: Create a new custom template from file content
+    description: "Create a new custom template from file content. Example: type=2 (compose), platform=1 (linux), fileContent='services:\\n  web:\\n    image: nginx'"
     parameters:
       - name: title
-        description: The title of the custom template
+        description: "Display title for the custom template"
         type: string
         required: true
       - name: description
-        description: The description of the custom template
+        description: "Brief description of what the template deploys"
         type: string
         required: true
       - name: fileContent
-        description: The file content for the custom template (e.g. docker-compose.yml content)
+        description: "The template file content (e.g. docker-compose.yml or Kubernetes manifest)"
         type: string
         required: true
       - name: type
-        description: "The template type: 1 for swarm, 2 for compose, 3 for kubernetes"
+        description: "Template type: 1 = Swarm, 2 = Compose, 3 = Kubernetes"
         type: number
         required: true
       - name: platform
-        description: "The platform type: 1 for linux, 2 for windows"
+        description: "Target platform: 1 = Linux, 2 = Windows"
         type: number
         required: true
       - name: note
-        description: An optional note for the custom template
+        description: "Optional usage notes or instructions for the template"
         type: string
         required: false
       - name: logo
-        description: An optional logo URL for the custom template
+        description: "Optional logo image URL for display in the template list"
         type: string
         required: false
     annotations:
@@ -1210,10 +1169,10 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: deleteCustomTemplate
-    description: Delete a custom template by ID
+    description: "Permanently deletes a custom template by ID. Existing stacks created from this template are not affected."
     parameters:
       - name: id
-        description: The ID of the custom template to delete
+        description: "Numeric ID of the custom template to permanently delete"
         type: number
         required: true
     annotations:
@@ -1222,10 +1181,11 @@ tools:
       destructiveHint: true
       idempotentHint: true
       openWorldHint: false
-  ## Webhooks
-  ## ------------------------------------------------------------
+
+  # === WEBHOOKS (3 tools) === #
+  # Manage webhooks for triggering service/container redeployments.
   - name: listWebhooks
-    description: List all webhooks configured in Portainer
+    description: "Returns a list of all webhooks configured in Portainer with their IDs, types, and associated resources."
     annotations:
       title: List Webhooks
       readOnlyHint: true
@@ -1233,18 +1193,18 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createWebhook
-    description: Create a new webhook for a service or container
+    description: "Create a new webhook that triggers redeployment of a service or container. Use 'listEnvironments' to get the endpointId."
     parameters:
       - name: resourceId
-        description: The resource ID associated with the webhook (e.g., service ID)
+        description: "The Docker resource ID (e.g. service ID) to associate with the webhook"
         type: string
         required: true
       - name: endpointId
-        description: The ID of the environment to deploy the webhook to
+        description: "Numeric ID of the environment where the resource is deployed (from 'listEnvironments')"
         type: number
         required: true
       - name: webhookType
-        description: "The type of webhook (1: service webhook)"
+        description: "Webhook type: 1 = service webhook (triggers service update)"
         type: number
         required: true
     annotations:
@@ -1254,10 +1214,10 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: deleteWebhook
-    description: Delete a webhook by ID
+    description: "Permanently deletes a webhook by ID. The associated service/container is not affected. Use 'listWebhooks' to find the ID."
     parameters:
       - name: id
-        description: The ID of the webhook to delete
+        description: "Numeric ID of the webhook to permanently delete"
         type: number
         required: true
     annotations:
@@ -1266,8 +1226,11 @@ tools:
       destructiveHint: true
       idempotentHint: true
       openWorldHint: false
+
+  # === REGISTRIES (5 tools) === #
+  # Manage Docker container registries connected to Portainer.
   - name: listRegistries
-    description: List all available registries
+    description: "Returns a list of all configured container registries with their IDs, names, types, and URLs."
     annotations:
       title: List Registries
       readOnlyHint: true
@@ -1275,10 +1238,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getRegistry
-    description: Get details of a specific registry by ID
+    description: "Returns full details of a specific registry by ID including URL, type, and authentication status. Use 'listRegistries' to find the ID."
     parameters:
       - name: id
-        description: The ID of the registry to retrieve
+        description: "Numeric ID of the registry (from 'listRegistries')"
         type: number
         required: true
     annotations:
@@ -1288,36 +1251,34 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createRegistry
-    description: >-
-      Create a new registry. Registry types: 1 = Quay.io, 2 = Azure Container Registry,
-      3 = Custom registry, 4 = GitLab, 5 = ProGet, 6 = DockerHub, 7 = Amazon ECR.
+    description: "Connect a new container registry to Portainer. Example: {name: 'Docker Hub', type: 6, url: 'docker.io', authentication: true, username: 'user', password: 'pass'}"
     parameters:
       - name: name
-        description: The name of the registry
+        description: "Display name for the registry"
         type: string
         required: true
       - name: type
-        description: "The registry type: 1 = Quay.io, 2 = Azure Container Registry, 3 = Custom registry, 4 = GitLab, 5 = ProGet, 6 = DockerHub, 7 = Amazon ECR"
+        description: "Registry type: 1 = Quay.io, 2 = Azure Container Registry, 3 = Custom, 4 = GitLab, 5 = ProGet, 6 = DockerHub, 7 = Amazon ECR"
         type: number
         required: true
       - name: url
-        description: The URL of the registry (e.g. docker.io, myregistry.example.com)
+        description: "Registry URL (e.g. 'docker.io', 'myregistry.example.com', 'quay.io')"
         type: string
         required: true
       - name: authentication
-        description: Whether the registry requires authentication
+        description: "Set to true if the registry requires username/password authentication"
         type: boolean
         required: true
       - name: username
-        description: The username for authentication
+        description: "Username for registry authentication (when authentication is true)"
         type: string
         required: false
       - name: password
-        description: The password for authentication
+        description: "Password or access token for registry authentication"
         type: string
         required: false
       - name: baseURL
-        description: The base URL of the registry (used for registries that require a separate API endpoint)
+        description: "Separate API endpoint URL if the registry uses a different base for API calls"
         type: string
         required: false
     annotations:
@@ -1327,36 +1288,34 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: updateRegistry
-    description: >-
-      Update an existing registry. Only the provided fields will be updated,
-      other fields will retain their current values.
+    description: "Update an existing registry's configuration. Only provided fields are changed — omitted fields keep their current values. Use 'listRegistries' to find the ID."
     parameters:
       - name: id
-        description: The ID of the registry to update
+        description: "Numeric ID of the registry to update"
         type: number
         required: true
       - name: name
-        description: The new name of the registry
+        description: "New display name for the registry"
         type: string
         required: false
       - name: url
-        description: The new URL of the registry
+        description: "New registry URL"
         type: string
         required: false
       - name: authentication
-        description: Whether the registry requires authentication
+        description: "Whether the registry requires authentication"
         type: boolean
         required: false
       - name: username
-        description: The new username for authentication
+        description: "New username for registry authentication"
         type: string
         required: false
       - name: password
-        description: The new password for authentication
+        description: "New password or access token for registry authentication"
         type: string
         required: false
       - name: baseURL
-        description: The new base URL of the registry
+        description: "New separate API endpoint URL"
         type: string
         required: false
     annotations:
@@ -1366,10 +1325,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteRegistry
-    description: Delete a registry by ID
+    description: "Permanently deletes a registry connection from Portainer by ID. Existing images pulled from this registry are not affected."
     parameters:
       - name: id
-        description: The ID of the registry to delete
+        description: "Numeric ID of the registry to permanently delete"
         type: number
         required: true
     annotations:
@@ -1378,8 +1337,11 @@ tools:
       destructiveHint: true
       idempotentHint: true
       openWorldHint: false
+
+  # === BACKUP & RESTORE (5 tools) === #
+  # Backup and restore the Portainer server configuration.
   - name: getBackupStatus
-    description: Get the status of the last Portainer backup, including whether it failed and the timestamp
+    description: "Returns the status of the last Portainer backup including success/failure state and timestamp. Related: createBackup, backupToS3."
     annotations:
       title: Get Backup Status
       readOnlyHint: true
@@ -1387,7 +1349,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getBackupS3Settings
-    description: Get the current S3 backup settings configured in Portainer
+    description: "Returns the current S3 backup settings including bucket name, region, and schedule. Related: backupToS3."
     annotations:
       title: Get Backup S3 Settings
       readOnlyHint: true
@@ -1395,10 +1357,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createBackup
-    description: Create a backup of the Portainer server
+    description: "Create a local backup of the Portainer server configuration. Returns the backup file. Optionally encrypt with a password."
     parameters:
       - name: password
-        description: Optional password to encrypt the backup
+        description: "Optional password to encrypt the backup file (remember this for restore)"
         type: string
         required: false
     annotations:
@@ -1408,34 +1370,34 @@ tools:
       idempotentHint: false
       openWorldHint: false
   - name: backupToS3
-    description: Backup the Portainer server to an S3-compatible storage
+    description: "Backup the Portainer server configuration to S3-compatible storage. Supports AWS S3 and compatible services (MinIO, etc.). Example: {accessKeyID: 'AKIA...', secretAccessKey: '...', bucketName: 'my-backups', region: 'us-east-1'}"
     parameters:
       - name: accessKeyID
-        description: The AWS access key ID for S3 authentication
+        description: "AWS access key ID or S3-compatible service access key"
         type: string
         required: true
       - name: secretAccessKey
-        description: The AWS secret access key for S3 authentication
+        description: "AWS secret access key or S3-compatible service secret key"
         type: string
         required: true
       - name: bucketName
-        description: The name of the S3 bucket to store the backup
+        description: "Name of the S3 bucket to store the backup in"
         type: string
         required: true
       - name: region
-        description: The AWS region of the S3 bucket
+        description: "AWS region of the bucket (e.g. 'us-east-1', 'eu-west-1')"
         type: string
         required: false
       - name: s3CompatibleHost
-        description: The S3-compatible host URL (for non-AWS S3 services)
+        description: "Custom S3 endpoint URL for non-AWS services (e.g. 'https://minio.example.com')"
         type: string
         required: false
       - name: password
-        description: Optional password to encrypt the backup
+        description: "Optional password to encrypt the backup file"
         type: string
         required: false
       - name: cronRule
-        description: A cron expression for scheduled S3 backups
+        description: "Cron expression for scheduled backups (e.g. '0 2 * * *' for daily at 2 AM)"
         type: string
         required: false
     annotations:
@@ -1445,34 +1407,34 @@ tools:
       idempotentHint: false
       openWorldHint: true
   - name: restoreFromS3
-    description: Restore the Portainer server from an S3-compatible storage backup
+    description: "Restore the Portainer server from an S3 backup. WARNING — this overwrites the current Portainer configuration. The server will restart after restore."
     parameters:
       - name: accessKeyID
-        description: The AWS access key ID for S3 authentication
+        description: "AWS access key ID or S3-compatible service access key"
         type: string
         required: true
       - name: secretAccessKey
-        description: The AWS secret access key for S3 authentication
+        description: "AWS secret access key or S3-compatible service secret key"
         type: string
         required: true
       - name: bucketName
-        description: The name of the S3 bucket containing the backup
+        description: "Name of the S3 bucket containing the backup"
         type: string
         required: true
       - name: filename
-        description: The filename of the backup to restore
+        description: "Exact filename of the backup to restore from the bucket"
         type: string
         required: true
       - name: password
-        description: The password to decrypt the backup (if encrypted)
+        description: "Password to decrypt the backup (if it was encrypted during creation)"
         type: string
         required: false
       - name: region
-        description: The AWS region of the S3 bucket
+        description: "AWS region of the bucket (e.g. 'us-east-1', 'eu-west-1')"
         type: string
         required: false
       - name: s3CompatibleHost
-        description: The S3-compatible host URL (for non-AWS S3 services)
+        description: "Custom S3 endpoint URL for non-AWS services (e.g. 'https://minio.example.com')"
         type: string
         required: false
     annotations:
@@ -1481,8 +1443,11 @@ tools:
       destructiveHint: true
       idempotentHint: false
       openWorldHint: true
+
+  # === ROLES & SYSTEM INFO (6 tools) === #
+  # Retrieve roles, MOTD, and manage Portainer instance settings.
   - name: listRoles
-    description: List all available roles in Portainer, including their authorizations and priority
+    description: "Returns a list of all available Portainer roles with their authorizations and priority levels. Useful for understanding permission options."
     annotations:
       title: List Roles
       readOnlyHint: true
@@ -1490,7 +1455,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getMOTD
-    description: Get the Portainer message of the day (MOTD), including title, message, and style information
+    description: "Returns the Portainer message of the day (MOTD) including title, message body, and style information."
     annotations:
       title: Get MOTD
       readOnlyHint: true
@@ -1498,10 +1463,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateSettings
-    description: Update the Portainer settings. Accepts a JSON string containing the settings fields to update (partial update supported). Fields include authenticationMethod, enableEdgeComputeFeatures, edge configuration, and more.
+    description: "Update Portainer instance settings with a partial JSON payload. Supports fields like authenticationMethod, enableEdgeComputeFeatures, and edge configuration. Use 'getSettings' first to see current values."
     parameters:
       - name: settings
-        description: A JSON string containing the settings fields to update
+        description: "JSON string with settings fields to update (partial update supported). Example: '{\"enableEdgeComputeFeatures\": true}'"
         type: string
         required: true
     annotations:
@@ -1511,7 +1476,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getPublicSettings
-    description: Get the public settings of the Portainer instance. These settings are available without authentication and include authentication method, logo URL, OAuth configuration, and feature flags.
+    description: "Returns publicly accessible Portainer settings (no auth required) including authentication method, logo URL, OAuth config, and feature flags."
     annotations:
       title: Get Public Settings
       readOnlyHint: true
@@ -1519,7 +1484,7 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getSSLSettings
-    description: Get the SSL settings of the Portainer instance, including certificate paths, HTTP enabled status, and self-signed flag.
+    description: "Returns the SSL/TLS settings of the Portainer instance including certificate paths, HTTP enabled status, and self-signed flag. Related: updateSSLSettings."
     annotations:
       title: Get SSL Settings
       readOnlyHint: true
@@ -1527,18 +1492,18 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: updateSSLSettings
-    description: Update the SSL settings of the Portainer instance. Allows updating the SSL certificate, key, and whether HTTP is enabled.
+    description: "Update the SSL/TLS settings of the Portainer instance. Use 'getSSLSettings' to see current values first."
     parameters:
       - name: cert
-        description: The SSL certificate content (PEM format)
+        description: "SSL certificate content in PEM format"
         type: string
         required: false
       - name: key
-        description: The SSL private key content (PEM format)
+        description: "SSL private key content in PEM format"
         type: string
         required: false
       - name: httpEnabled
-        description: Whether HTTP is enabled (true/false)
+        description: "Set to true to enable HTTP access alongside HTTPS, false for HTTPS only"
         type: boolean
         required: false
     annotations:
@@ -1547,8 +1512,11 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
+
+  # === APP TEMPLATES (2 tools) === #
+  # Browse and inspect built-in application templates.
   - name: listAppTemplates
-    description: List all available application templates in Portainer. Returns template ID, title, description, type, image, categories, platform, and other metadata.
+    description: "Returns a list of all built-in application templates with their IDs, titles, descriptions, types, images, categories, and platform info."
     annotations:
       title: List App Templates
       readOnlyHint: true
@@ -1556,10 +1524,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getAppTemplateFile
-    description: Get the file content (e.g., docker-compose.yml) of a specific application template by its ID.
+    description: "Returns the file content (e.g. docker-compose.yml) of a built-in application template. Use 'listAppTemplates' to find the template ID."
     parameters:
       - name: id
-        description: The ID of the application template
+        description: "Numeric ID of the application template (from 'listAppTemplates')"
         type: number
         required: true
     annotations:
@@ -1568,8 +1536,11 @@ tools:
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
+
+  # === EDGE JOBS (5 tools) === #
+  # Manage scheduled jobs that run on Edge environments.
   - name: listEdgeJobs
-    description: List all edge jobs configured in Portainer. Returns job ID, name, cron expression, recurring status, and edge groups
+    description: "Returns a list of all edge jobs with their IDs, names, cron expressions, recurring status, and target edge groups."
     annotations:
       title: List Edge Jobs
       readOnlyHint: true
@@ -1577,10 +1548,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getEdgeJob
-    description: Get details of a specific edge job by ID, including name, cron expression, recurring status, and edge groups
-    inputSchema:
+    description: "Returns full details of an edge job by ID including name, cron expression, recurring status, and target edge groups. Use 'listEdgeJobs' to find the ID."
+    parameters:
       - name: id
-        description: The ID of the edge job
+        description: "Numeric ID of the edge job (from 'listEdgeJobs')"
         type: number
         required: true
     annotations:
@@ -1590,10 +1561,10 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: getEdgeJobFile
-    description: Get the script file content of a specific edge job by ID
-    inputSchema:
+    description: "Returns the script file content of an edge job. Use 'listEdgeJobs' to find the ID."
+    parameters:
       - name: id
-        description: The ID of the edge job
+        description: "Numeric ID of the edge job (from 'listEdgeJobs')"
         type: number
         required: true
     annotations:
@@ -1603,30 +1574,30 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: createEdgeJob
-    description: Create a new edge job with script content, cron schedule, and target environments or edge groups
-    inputSchema:
+    description: "Create a new edge job with a script, cron schedule, and target environments or edge groups. Example cronExpression: '0 2 * * *' (daily at 2 AM). Provide endpoints and/or edgeGroups for targeting."
+    parameters:
       - name: name
-        description: The name of the edge job
+        description: "Display name for the edge job"
         type: string
         required: true
       - name: cronExpression
-        description: The cron expression for job scheduling
+        description: "Cron schedule expression (e.g. '0 2 * * *' for daily at 2 AM, '*/5 * * * *' for every 5 minutes)"
         type: string
         required: true
       - name: fileContent
-        description: The script content of the edge job
+        description: "Shell script content to execute on target environments"
         type: string
         required: true
       - name: recurring
-        description: Whether the job should run on a recurring schedule
+        description: "Set to true for repeating schedule, false for one-time execution"
         type: boolean
         required: false
       - name: endpoints
-        description: Array of environment IDs to target
+        description: "Array of numeric environment IDs to target directly"
         type: array
         required: false
       - name: edgeGroups
-        description: Array of edge group IDs to target
+        description: "Array of numeric edge group IDs to target (from 'listEnvironmentGroups')"
         type: array
         required: false
     annotations:
@@ -1636,37 +1607,41 @@ tools:
       idempotentHint: false
       openWorldHint: true
   - name: deleteEdgeJob
-    description: Delete an edge job by its ID
-    inputSchema:
+    description: "Permanently deletes an edge job by ID. Scheduled executions are cancelled. Use 'listEdgeJobs' to find the ID."
+    parameters:
       - name: id
-        description: The ID of the edge job to delete
+        description: "Numeric ID of the edge job to permanently delete"
         type: number
         required: true
     annotations:
       title: Delete Edge Job
       readOnlyHint: false
       destructiveHint: true
-      idempotentHint: false
+      idempotentHint: true
       openWorldHint: false
+
+  # === EDGE UPDATE SCHEDULES (1 tool) === #
+  # View scheduled edge agent update operations.
   - name: listEdgeUpdateSchedules
-    description: List all edge update schedules configured in Portainer. Returns schedule ID, name, type, status, scheduled time, and edge groups
+    description: "Returns a list of all edge update schedules with their IDs, names, types, status, scheduled times, and target edge groups."
     annotations:
       title: List Edge Update Schedules
       readOnlyHint: true
       destructiveHint: false
       idempotentHint: true
       openWorldHint: false
-  ## Auth
-  ## ------------------------------------------------------------
+
+  # === AUTHENTICATION (2 tools) === #
+  # Authenticate and manage user sessions.
   - name: authenticate
-    description: Authenticate a user against Portainer using a username and password. Returns a JWT token that can be used for subsequent API calls
+    description: "Authenticate a user with username and password. Returns a JWT token for subsequent API calls. Related: logout."
     parameters:
       - name: username
-        description: The username for authentication
+        description: "Portainer login username"
         type: string
         required: true
       - name: password
-        description: The password for authentication
+        description: "Portainer login password"
         type: string
         required: true
     annotations:
@@ -1676,20 +1651,21 @@ tools:
       idempotentHint: true
       openWorldHint: true
   - name: logout
-    description: Log out the current user session from Portainer
+    description: "Log out the current user session and invalidate the JWT token. Related: authenticate."
     annotations:
       title: Logout
       readOnlyHint: false
       destructiveHint: false
       idempotentHint: true
       openWorldHint: true
-  ## Helm
-  ## ------------------------------------------------------------
+
+  # === HELM (8 tools) === #
+  # Manage Helm repositories, charts, and releases on Kubernetes environments.
   - name: listHelmRepositories
-    description: List all Helm repositories configured for a user
-    inputSchema:
+    description: "Returns a list of all Helm repositories configured for a specific user. Use 'listUsers' to get the userId."
+    parameters:
       - name: userId
-        description: The ID of the user
+        description: "Numeric Portainer user ID (from 'listUsers')"
         type: number
         required: true
     annotations:
@@ -1699,14 +1675,14 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: addHelmRepository
-    description: Add a Helm repository for a user
-    inputSchema:
+    description: "Add a Helm chart repository for a user. The repository URL must be a valid Helm repo index. Use 'listUsers' to get the userId."
+    parameters:
       - name: userId
-        description: The ID of the user
+        description: "Numeric Portainer user ID (from 'listUsers')"
         type: number
         required: true
       - name: url
-        description: The URL of the Helm repository to add
+        description: "Helm repository URL (e.g. 'https://charts.bitnami.com/bitnami')"
         type: string
         required: true
     annotations:
@@ -1716,31 +1692,31 @@ tools:
       idempotentHint: false
       openWorldHint: true
   - name: removeHelmRepository
-    description: Remove a Helm repository for a user
-    inputSchema:
+    description: "Remove a Helm repository for a user. Installed releases from this repo are not affected. Use 'listHelmRepositories' to find the repositoryId."
+    parameters:
       - name: userId
-        description: The ID of the user
+        description: "Numeric Portainer user ID (from 'listUsers')"
         type: number
         required: true
       - name: repositoryId
-        description: The ID of the Helm repository to remove
+        description: "Numeric ID of the Helm repository to remove (from 'listHelmRepositories')"
         type: number
         required: true
     annotations:
       title: Remove Helm Repository
       readOnlyHint: false
       destructiveHint: true
-      idempotentHint: false
+      idempotentHint: true
       openWorldHint: false
   - name: searchHelmCharts
-    description: Search for Helm charts in a repository
-    inputSchema:
+    description: "Search for available Helm charts in a repository by name. Use 'listHelmRepositories' or 'addHelmRepository' to get the repo URL."
+    parameters:
       - name: repo
-        description: The URL of the Helm repository to search
+        description: "Helm repository URL to search (e.g. 'https://charts.bitnami.com/bitnami')"
         type: string
         required: true
       - name: chart
-        description: The name of the chart to search for
+        description: "Chart name or keyword to search for (e.g. 'nginx', 'postgresql')"
         type: string
         required: false
     annotations:
@@ -1750,34 +1726,34 @@ tools:
       idempotentHint: true
       openWorldHint: true
   - name: installHelmChart
-    description: Install a Helm chart on an environment
-    inputSchema:
+    description: "Install a Helm chart as a new release on a Kubernetes environment. Example: {environmentId: 1, chart: 'nginx', name: 'my-nginx', repo: 'https://charts.bitnami.com/bitnami'}. Use 'searchHelmCharts' to find available charts."
+    parameters:
       - name: environmentId
-        description: The ID of the environment to install the chart on
+        description: "Numeric ID of the Kubernetes environment to install into (from 'listEnvironments')"
         type: number
         required: true
       - name: chart
-        description: The name of the chart to install
+        description: "Name of the Helm chart to install (e.g. 'nginx', 'postgresql')"
         type: string
         required: true
       - name: name
-        description: The release name for the installed chart
+        description: "Release name for the installed chart (e.g. 'my-nginx')"
         type: string
         required: true
       - name: repo
-        description: The URL of the Helm repository containing the chart
+        description: "Helm repository URL containing the chart (e.g. 'https://charts.bitnami.com/bitnami')"
         type: string
         required: true
       - name: namespace
-        description: The Kubernetes namespace to install the chart in
+        description: "Kubernetes namespace to install into (e.g. 'default', 'production')"
         type: string
         required: false
       - name: values
-        description: Custom values for the chart in YAML format
+        description: "Custom chart values in YAML format to override defaults (e.g. 'replicaCount: 2\\nservice:\\n  type: LoadBalancer')"
         type: string
         required: false
       - name: version
-        description: The version of the chart to install
+        description: "Specific chart version to install (e.g. '15.3.1'). Defaults to latest"
         type: string
         required: false
     annotations:
@@ -1787,22 +1763,22 @@ tools:
       idempotentHint: false
       openWorldHint: true
   - name: listHelmReleases
-    description: List all Helm releases on an environment
-    inputSchema:
+    description: "Returns a list of all Helm releases installed on a Kubernetes environment. Supports filtering by namespace, name pattern, and label selector."
+    parameters:
       - name: environmentId
-        description: The ID of the environment
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
       - name: namespace
-        description: Filter releases by Kubernetes namespace
+        description: "Filter releases to a specific Kubernetes namespace (e.g. 'default')"
         type: string
         required: false
       - name: filter
-        description: Filter releases by name pattern
+        description: "Filter releases by name pattern (e.g. 'nginx' matches 'my-nginx')"
         type: string
         required: false
       - name: selector
-        description: Filter releases by label selector
+        description: "Filter releases by Kubernetes label selector (e.g. 'app=nginx')"
         type: string
         required: false
     annotations:
@@ -1812,39 +1788,39 @@ tools:
       idempotentHint: true
       openWorldHint: false
   - name: deleteHelmRelease
-    description: Delete a Helm release from an environment
-    inputSchema:
+    description: "Permanently deletes a Helm release and all its associated Kubernetes resources from an environment. Use 'listHelmReleases' to find the release name."
+    parameters:
       - name: environmentId
-        description: The ID of the environment
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
       - name: release
-        description: The name of the release to delete
+        description: "Name of the Helm release to permanently delete (from 'listHelmReleases')"
         type: string
         required: true
       - name: namespace
-        description: The Kubernetes namespace of the release
+        description: "Kubernetes namespace of the release (e.g. 'default')"
         type: string
         required: false
     annotations:
       title: Delete Helm Release
       readOnlyHint: false
       destructiveHint: true
-      idempotentHint: false
-      openWorldHint: false
+      idempotentHint: true
+      openWorldHint: true
   - name: getHelmReleaseHistory
-    description: Get the revision history of a Helm release
-    inputSchema:
+    description: "Returns the revision history of a Helm release including version, status, and timestamps for each revision. Use 'listHelmReleases' to find the release name."
+    parameters:
       - name: environmentId
-        description: The ID of the environment
+        description: "Numeric ID of the Kubernetes environment (from 'listEnvironments')"
         type: number
         required: true
       - name: name
-        description: The name of the Helm release
+        description: "Name of the Helm release (from 'listHelmReleases')"
         type: string
         required: true
       - name: namespace
-        description: The Kubernetes namespace of the release
+        description: "Kubernetes namespace of the release (e.g. 'default')"
         type: string
         required: false
     annotations:

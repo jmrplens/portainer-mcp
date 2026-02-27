@@ -2,16 +2,17 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// AddMotdFeatures registers the message of the day (MOTD) management tools on the MCP server.
 func (s *PortainerMCPServer) AddMotdFeatures() {
 	s.addToolIfExists(ToolGetMOTD, s.HandleGetMOTD())
 }
 
+// HandleGetMOTD returns an MCP tool handler that retrieves m o t d.
 func (s *PortainerMCPServer) HandleGetMOTD() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		motd, err := s.cli.GetMOTD()
@@ -19,11 +20,6 @@ func (s *PortainerMCPServer) HandleGetMOTD() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get MOTD", err), nil
 		}
 
-		data, err := json.Marshal(motd)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal MOTD", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(motd, "failed to marshal MOTD")
 	}
 }

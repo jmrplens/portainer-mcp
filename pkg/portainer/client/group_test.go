@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetEnvironmentGroups verifies get environment groups behavior.
 func TestGetEnvironmentGroups(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -81,6 +82,7 @@ func TestGetEnvironmentGroups(t *testing.T) {
 	}
 }
 
+// TestCreateEnvironmentGroup verifies create environment group behavior.
 func TestCreateEnvironmentGroup(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -134,6 +136,7 @@ func TestCreateEnvironmentGroup(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentGroupName verifies update environment group name behavior.
 func TestUpdateEnvironmentGroupName(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -175,6 +178,7 @@ func TestUpdateEnvironmentGroupName(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentGroupEnvironments verifies update environment group environments behavior.
 func TestUpdateEnvironmentGroupEnvironments(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -221,6 +225,7 @@ func TestUpdateEnvironmentGroupEnvironments(t *testing.T) {
 	}
 }
 
+// TestUpdateEnvironmentGroupTags verifies update environment group tags behavior.
 func TestUpdateEnvironmentGroupTags(t *testing.T) {
 	tests := []struct {
 		name          string

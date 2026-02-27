@@ -1,12 +1,23 @@
-# Portainer MCP Enhanced
+<div align="center">
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/jmrplens/portainer-mcp-enhanced)](https://goreportcard.com/report/github.com/jmrplens/portainer-mcp-enhanced)
+# Portainer MCP Server
 
-> **Community-enhanced fork of [portainer/portainer-mcp](https://github.com/portainer/portainer-mcp) with comprehensive API coverage.**
+**Manage your entire Portainer infrastructure through AI assistants using the Model Context Protocol**
 
-Portainer MCP Enhanced connects your AI assistant directly to your Portainer environments with **98 tools** covering the full Portainer API surface — compared to ~25 tools in the official version.
+[![Go Report Card](https://goreportcard.com/badge/github.com/portainer/portainer-mcp)](https://goreportcard.com/report/github.com/portainer/portainer-mcp)
+[![codecov](https://codecov.io/gh/portainer/portainer-mcp/graph/badge.svg?token=NHTQ5FIPFX)](https://codecov.io/gh/portainer/portainer-mcp)
+![Go Version](https://img.shields.io/github/go-mod/go-version/portainer/portainer-mcp)
+![License](https://img.shields.io/github/license/portainer/portainer-mcp)
+![Portainer](https://img.shields.io/badge/Portainer-2.31.2-blue)
+![MCP Tools](https://img.shields.io/badge/MCP_Tools-98-green)
 
-Manage stacks, users, teams, registries, templates, environments, edge computing, Kubernetes, Helm, backups, settings, and more — all through natural language via your AI assistant.
+[Documentation](https://portainer.github.io/portainer-mcp/) · [Quickstart](#quickstart) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+---
+
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server that connects AI assistants to [Portainer](https://www.portainer.io/) — exposing **98 tools** covering the complete Portainer API. Manage environments, stacks, users, teams, registries, Kubernetes, Helm, Docker, edge computing, backups, and more through natural language.
 
 <details open>
 <summary><b>🖥️ System & Docker Dashboard</b></summary>
@@ -32,80 +43,38 @@ Manage stacks, users, teams, registries, templates, environments, edge computing
 ![Backup & Docker Proxy demo](docs/demo-4-backup-proxy.webp)
 </details>
 
-## Overview
+## Quickstart
 
-This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server for Portainer. MCP standardizes how AI models interact with external tools and data sources.
+### 1. Install
 
-This enhanced fork extends the official implementation to expose the **full Portainer API** through MCP tools, enabling AI assistants to perform any operation available in the Portainer web interface and beyond.
-
-### Key Differences from Official Version
-
-| Feature | Official | Enhanced |
-|---------|----------|----------|
-| Total tools | ~25 | **98** |
-| Stack management | Edge stacks only | Edge + Regular + Git + Migrate |
-| User management | List, update role | Full CRUD |
-| Team management | List, create, update | Full CRUD |
-| Registries | ❌ | Full CRUD |
-| Custom templates | ❌ | Full CRUD |
-| Webhooks | ❌ | List, create, delete |
-| Backup/Restore | ❌ | Full (local + S3) |
-| Settings management | Read only | Read + Update |
-| SSL management | ❌ | Read + Update |
-| Edge jobs | ❌ | Full CRUD |
-| Edge update schedules | ❌ | List |
-| Kubernetes dashboard | ❌ | Dashboard, namespaces, config |
-| Docker dashboard | ❌ | Full dashboard data |
-| Helm management | ❌ | Repos, charts, releases |
-| Auth | ❌ | Login, logout |
-| Roles | ❌ | List |
-| App templates | ❌ | List, get file |
-| MOTD | ❌ | Read |
-| System status | ❌ | Status info |
-| Environment snapshots | ❌ | Single + batch |
-| Environment delete | ❌ | Delete |
-| Tag delete | ❌ | Delete |
-
-> [!NOTE]
-> This fork is based on the official v0.6.0 release and maintains full backward compatibility. All original tools work identically.
-
-## Installation
-
-### Download Pre-built Binaries
-
-Download from the [Releases Page](https://github.com/jmrplens/portainer-mcp-enhanced/releases/latest) for Linux (amd64, arm64) and macOS (arm64).
-
-### Build from Source
-
+**Homebrew** (macOS / Linux):
 ```bash
-git clone https://github.com/jmrplens/portainer-mcp-enhanced.git
-cd portainer-mcp-enhanced
-make build
+brew install portainer/tap/portainer-mcp
 ```
 
-The binary will be in `dist/portainer-mcp-<platform>-<arch>`.
-
-### Go Install
-
+**Go install**:
 ```bash
-go install github.com/jmrplens/portainer-mcp-enhanced/cmd/portainer-mcp@latest
+go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@latest
 ```
 
-## Configuration
+**Docker**:
+```bash
+docker pull ghcr.io/portainer/portainer-mcp:latest
+```
 
-### Getting a Portainer API Token
+Or download a pre-built binary from [Releases](https://github.com/portainer/portainer-mcp/releases/latest) (Linux, macOS, Windows — amd64/arm64, with SHA256 checksums).
 
-1. Log in to your Portainer instance
-2. Click on your username in the top-right corner
-3. Select **My Account**
-4. Scroll to **API Keys** and create a new key
-5. Copy the generated token
+### 2. Get a Portainer API Token
 
-### MCP Client Configuration
+1. Log in to your Portainer instance → **My Account** → **API Keys**
+2. Create a new key and copy the token
 
-#### Claude Desktop / Cursor
+### 3. Configure your AI assistant
 
-Add to your MCP settings configuration file:
+<details open>
+<summary><b>Claude Desktop</b></summary>
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
@@ -113,17 +82,19 @@ Add to your MCP settings configuration file:
     "portainer": {
       "command": "/path/to/portainer-mcp",
       "args": [
-        "--server-url", "https://your-portainer-instance:9443",
-        "--api-token", "ptr_your_api_token_here"
+        "-server", "https://your-portainer:9443",
+        "-token", "ptr_your_api_token"
       ]
     }
   }
 }
 ```
+</details>
 
-#### VS Code (GitHub Copilot)
+<details>
+<summary><b>VS Code (GitHub Copilot)</b></summary>
 
-Add to `.vscode/mcp.json`:
+Create `.vscode/mcp.json` in your workspace:
 
 ```json
 {
@@ -132,320 +103,121 @@ Add to `.vscode/mcp.json`:
       "type": "stdio",
       "command": "/path/to/portainer-mcp",
       "args": [
-        "--server-url", "https://your-portainer-instance:9443",
-        "--api-token", "ptr_your_api_token_here"
+        "-server", "https://your-portainer:9443",
+        "-token", "ptr_your_api_token"
       ]
     }
   }
 }
 ```
+</details>
 
-### Command-Line Flags
+<details>
+<summary><b>Cursor</b></summary>
 
-| Flag | Description | Required |
-|------|-------------|----------|
-| `--server-url` | Portainer server URL (e.g., `https://portainer:9443`) | Yes |
-| `--api-token` | Portainer API token | Yes |
-| `--read-only` | Enable read-only mode (disables all write/delete operations) | No |
-| `--disable-version-check` | Skip Portainer version compatibility check | No |
+Go to **Cursor Settings → MCP** and add:
+
+```json
+{
+  "mcpServers": {
+    "portainer": {
+      "command": "/path/to/portainer-mcp",
+      "args": [
+        "-server", "https://your-portainer:9443",
+        "-token", "ptr_your_api_token"
+      ]
+    }
+  }
+}
+```
+</details>
+
+### 4. Start asking
+
+> "List all environments and their status"  
+> "Create a new nginx stack from this compose file"  
+> "Show me the Kubernetes dashboard for environment 3"
+
+## Configuration
+
+| Flag | Description | Required | Default |
+|------|-------------|----------|---------|
+| `-server` | Portainer server URL | **Yes** | — |
+| `-token` | Portainer API token | **Yes** | — |
+| `-tools` | Path to custom tools.yaml | No | Embedded |
+| `-read-only` | Disable all write/delete operations | No | `false` |
+| `-granular-tools` | Register all 98 individual tools instead of 15 grouped meta-tools | No | `false` |
+| `-disable-version-check` | Skip Portainer version validation | No | `false` |
+| `-skip-tls-verify` | Skip TLS certificate verification | No | `false` |
+
+### Meta-Tools (Default Mode)
+
+By default the server registers **15 grouped meta-tools** instead of the 98 individual granular tools. Each meta-tool covers a functional domain and exposes an `action` parameter (enum) that routes to the appropriate handler.
+
+This dramatically reduces the tool-selection surface for LLMs while preserving 100% of the underlying functionality.
+
+| Meta-Tool | Actions | Description |
+|-----------|---------|-------------|
+| `manage_environments` | 16 | Environments, environment groups, tags |
+| `manage_stacks` | 13 | Regular and compose stacks |
+| `manage_access_groups` | 7 | Access group CRUD and user/team access policies |
+| `manage_users` | 5 | User CRUD and role management |
+| `manage_teams` | 6 | Teams and team membership |
+| `manage_docker` | 2 | Docker proxy and dashboard |
+| `manage_kubernetes` | 5 | Kubernetes proxy, namespaces, config, dashboard |
+| `manage_helm` | 8 | Helm repos, charts, releases |
+| `manage_registries` | 5 | Container registry management |
+| `manage_templates` | 7 | Custom and app templates |
+| `manage_backups` | 5 | Backup, restore, S3 settings |
+| `manage_webhooks` | 3 | Webhook CRUD |
+| `manage_edge` | 6 | Edge jobs and update schedules |
+| `manage_settings` | 5 | Server settings and SSL |
+| `manage_system` | 5 | Version, status, MOTD, roles, auth |
+
+To use the original 98 individual tools, pass `--granular-tools`. See the [Meta-Tools Guide](https://portainer.github.io/portainer-mcp/guides/meta-tools/) for the full action reference.
 
 ### Read-Only Mode
 
-Use `--read-only` to restrict the server to read-only operations only. This disables all create, update, delete, and destructive operations — useful for monitoring and observation without risk.
+Run with `-read-only` to restrict to read-only operations. All write, update, and delete actions are disabled — ideal for monitoring and observation. Works with both meta-tools and granular tools modes.
 
-### Portainer Version Support
+### Version Compatibility
 
-| MCP Enhanced Version | Based On | Supported Portainer Version |
-|---------------------|----------|----------------------------|
-| 1.0.0 | v0.6.0 | 2.31.2 |
+| MCP Server | Supported Portainer |
+|------------|-------------------|
+| v0.6.x | 2.31.2 |
+| v0.5.x | 2.30.0 |
+| v0.4.x | 2.27.4 |
 
-> [!NOTE]
-> Use `--disable-version-check` to connect to unsupported Portainer versions at your own risk.
+## Documentation
 
-## Supported Capabilities
+📖 **[Full Documentation](https://portainer.github.io/portainer-mcp/)** — Installation, configuration, meta-tools guide, architecture, security, and API reference.
 
-### Access Groups (Endpoint Groups)
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listAccessGroups` | List all available access groups | ✅ |
-| `createAccessGroup` | Create a new access group | ❌ |
-| `updateAccessGroupName` | Update the name of an access group | ❌ |
-| `updateAccessGroupUserAccesses` | Update user accesses for an access group | ❌ |
-| `updateAccessGroupTeamAccesses` | Update team accesses for an access group | ❌ |
-| `addEnvironmentToAccessGroup` | Add an environment to an access group | ❌ |
-| `removeEnvironmentFromAccessGroup` | Remove an environment from an access group | ❌ |
-
-### Environments (Endpoints)
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listEnvironments` | List all available environments | ✅ |
-| `getEnvironment` | Get detailed information about a specific environment | ✅ |
-| `deleteEnvironment` | Delete an environment permanently | ❌ |
-| `snapshotEnvironment` | Trigger a snapshot refresh for a specific environment | ❌ |
-| `snapshotAllEnvironments` | Trigger a snapshot refresh for all environments | ❌ |
-| `updateEnvironmentTags` | Update tags associated with an environment | ❌ |
-| `updateEnvironmentUserAccesses` | Update user access policies for an environment | ❌ |
-| `updateEnvironmentTeamAccesses` | Update team access policies for an environment | ❌ |
-
-### Environment Groups (Edge Groups)
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listEnvironmentGroups` | List all environment groups | ✅ |
-| `createEnvironmentGroup` | Create a new environment group | ❌ |
-| `updateEnvironmentGroupName` | Update the name of an environment group | ❌ |
-| `updateEnvironmentGroupEnvironments` | Update environments in a group | ❌ |
-| `updateEnvironmentGroupTags` | Update tags associated with a group | ❌ |
-
-### Stacks — Edge Stacks
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listStacks` | List all edge stacks | ✅ |
-| `getStackFile` | Get the compose file for an edge stack | ✅ |
-| `createStack` | Create a new edge stack | ❌ |
-| `updateStack` | Update an existing edge stack | ❌ |
-
-### Stacks — Regular Stacks (Docker Compose / Swarm)
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listRegularStacks` | List all regular (non-edge) stacks | ✅ |
-| `getStack` | Get detailed information about a specific stack | ✅ |
-| `inspectStackFile` | Get the compose file content of a stack | ✅ |
-| `deleteStack` | Delete a regular stack permanently | ❌ |
-| `startStack` | Start a stopped stack | ❌ |
-| `stopStack` | Stop a running stack | ❌ |
-| `updateStackGit` | Update git configuration of a stack | ❌ |
-| `redeployStackGit` | Trigger git-based redeployment of a stack | ❌ |
-| `migrateStack` | Migrate a stack to another environment | ❌ |
-
-### Tags
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listEnvironmentTags` | List all environment tags | ✅ |
-| `createEnvironmentTag` | Create a new environment tag | ❌ |
-| `deleteEnvironmentTag` | Delete an environment tag | ❌ |
-
-### Teams
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listTeams` | List all teams | ✅ |
-| `getTeam` | Get details of a specific team | ✅ |
-| `createTeam` | Create a new team | ❌ |
-| `deleteTeam` | Delete a team | ❌ |
-| `updateTeamName` | Update the name of a team | ❌ |
-| `updateTeamMembers` | Update the members of a team | ❌ |
-
-### Users
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listUsers` | List all users | ✅ |
-| `getUser` | Get details of a specific user | ✅ |
-| `createUser` | Create a new user | ❌ |
-| `deleteUser` | Delete a user | ❌ |
-| `updateUserRole` | Update a user's role | ❌ |
-
-### Registries
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listRegistries` | List all configured registries | ✅ |
-| `getRegistry` | Get details of a specific registry | ✅ |
-| `createRegistry` | Create a new registry | ❌ |
-| `updateRegistry` | Update an existing registry | ❌ |
-| `deleteRegistry` | Delete a registry | ❌ |
-
-### Custom Templates
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listCustomTemplates` | List all custom templates | ✅ |
-| `getCustomTemplate` | Get details of a specific custom template | ✅ |
-| `getCustomTemplateFile` | Get the file content of a custom template | ✅ |
-| `createCustomTemplate` | Create a new custom template | ❌ |
-| `deleteCustomTemplate` | Delete a custom template | ❌ |
-
-### Webhooks
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listWebhooks` | List all webhooks | ✅ |
-| `createWebhook` | Create a new webhook | ❌ |
-| `deleteWebhook` | Delete a webhook | ❌ |
-
-### Docker
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `dockerProxy` | Proxy any Docker API request to a specific environment | Depends on method |
-| `getDockerDashboard` | Get Docker dashboard data (containers, images, volumes, networks) | ✅ |
-
-### Kubernetes
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `kubernetesProxy` | Proxy any Kubernetes API request to a specific environment | Depends on method |
-| `getKubernetesResourceStripped` | Get K8s resources with verbose metadata automatically stripped | ✅ |
-| `getKubernetesDashboard` | Get Kubernetes dashboard data for an environment | ✅ |
-| `listKubernetesNamespaces` | List all namespaces in a Kubernetes environment | ✅ |
-| `getKubernetesConfig` | Get the kubeconfig for a Kubernetes environment | ✅ |
-
-### Helm
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listHelmRepositories` | List all Helm repositories configured for a user | ✅ |
-| `addHelmRepository` | Add a Helm repository | ❌ |
-| `removeHelmRepository` | Remove a Helm repository | ❌ |
-| `searchHelmCharts` | Search for Helm charts in a repository | ✅ |
-| `installHelmChart` | Install a Helm chart on an environment | ❌ |
-| `listHelmReleases` | List all Helm releases on an environment | ✅ |
-| `deleteHelmRelease` | Delete a Helm release | ❌ |
-| `getHelmReleaseHistory` | Get the revision history of a Helm release | ✅ |
-
-### Settings
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `getSettings` | Get Portainer instance settings | ✅ |
-| `updateSettings` | Update Portainer settings (partial update supported) | ❌ |
-| `getPublicSettings` | Get public settings (available without auth) | ✅ |
-| `getSSLSettings` | Get SSL certificate settings | ✅ |
-| `updateSSLSettings` | Update SSL certificate and key | ❌ |
-
-### Backup & Restore
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `getBackupStatus` | Get the status of the last backup | ✅ |
-| `getBackupS3Settings` | Get S3 backup settings | ✅ |
-| `createBackup` | Create a local backup of the Portainer server | ❌ |
-| `backupToS3` | Backup to S3-compatible storage | ❌ |
-| `restoreFromS3` | Restore from S3-compatible storage | ❌ |
-
-### Edge Computing
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listEdgeJobs` | List all edge jobs | ✅ |
-| `getEdgeJob` | Get details of a specific edge job | ✅ |
-| `getEdgeJobFile` | Get the script file content of an edge job | ✅ |
-| `createEdgeJob` | Create a new edge job | ❌ |
-| `deleteEdgeJob` | Delete an edge job | ❌ |
-| `listEdgeUpdateSchedules` | List all edge update schedules | ✅ |
-
-### Application Templates
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listAppTemplates` | List all available application templates | ✅ |
-| `getAppTemplateFile` | Get the file content of an application template | ✅ |
-
-### Authentication
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `authenticate` | Authenticate with username and password, returns JWT token | ✅ |
-| `logout` | Log out the current user session | ❌ |
-
-### Roles
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `listRoles` | List all available roles with their authorizations | ✅ |
-
-### System
-
-| Tool | Description | Read-Only |
-|------|-------------|-----------|
-| `getSystemStatus` | Get system status including version and instance ID | ✅ |
-| `getMOTD` | Get the Portainer message of the day | ✅ |
+| Page | Description |
+|------|-------------|
+| [Getting Started](https://portainer.github.io/portainer-mcp/getting-started/) | Prerequisites, installation, AI assistant setup |
+| [Configuration](https://portainer.github.io/portainer-mcp/configuration/) | CLI flags, tool modes, version compatibility |
+| [Meta-Tools Guide](https://portainer.github.io/portainer-mcp/guides/meta-tools/) | All 15 meta-tools with complete action reference |
+| [Tools Reference](https://portainer.github.io/portainer-mcp/reference/api-reference/) | All 98 granular tools with parameters |
+| [Architecture](https://portainer.github.io/portainer-mcp/reference/architecture/) | Server layers, client model, project structure |
+| [Security](https://portainer.github.io/portainer-mcp/guides/security/) | Authentication, TLS, read-only mode, proxy safety |
+| [Contributing](https://portainer.github.io/portainer-mcp/development/contributing/) | Development setup, code style, adding new tools |
 
 ## Development
 
-### Building
-
 ```bash
-make build                                    # Build for current platform
-make PLATFORM=linux ARCH=amd64 build          # Build for specific platform
+make build                    # Build binary
+make test                     # Unit tests
+make test-integration         # Integration tests (requires Docker)
+make test-all                 # All tests
+make inspector                # Launch MCP Inspector UI
 ```
 
-### Testing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines. The [Developer Documentation](https://portainer.github.io/portainer-mcp/development/contributing/) covers project structure, adding tools, testing, dependencies, and CI/CD in detail.
 
-```bash
-go test -v ./...                              # Run unit tests
-make test-all                                 # Run all tests
-```
+### Security
 
-### Live Testing
-
-The project includes a comprehensive live test suite that validates all 98 tools against a real Portainer instance:
-
-```bash
-export PORTAINER_LIVE_URL="your-portainer-host:9443"
-export PORTAINER_LIVE_TOKEN="ptr_your_token"
-go test -v ./tests/live/ -count=1
-```
-
-Live tests follow non-destructive patterns: they create test resources, validate operations, and clean up afterward.
-
-### Code Statistics
-
-```bash
-./cloc.sh                                     # Lines of code metrics
-```
-
-### Token Counting
-
-Estimate token consumption for tool definitions sent to AI models:
-
-```bash
-go run ./cmd/token-count -input internal/tooldef/tools.yaml -output .tmp/tools.json
-./token.sh -k <anthropic-api-key> -i .tmp/tools.json
-```
-
-## Architecture
-
-```
-cmd/portainer-mcp/       # Entry point
-internal/
-  mcp/                   # MCP server, handlers, tool registration
-  tooldef/               # Tool definitions (tools.yaml, embedded at build time)
-pkg/portainer/
-  client/                # Wrapper client over portainer/client-api-go SDK
-  models/                # Local models with conversion from raw SDK models
-tests/
-  live/                  # Live tests against real Portainer instance
-docs/
-  design/                # Design decision records
-  clients_and_models.md  # Client architecture documentation
-```
-
-For detailed architecture documentation, see [docs/clients_and_models.md](docs/clients_and_models.md).
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch from `main`
-3. Follow the existing code style and patterns
-4. Add tests for new functionality
-5. Submit a pull request
-
-## Related
-
-- [Official Portainer MCP](https://github.com/portainer/portainer-mcp) — Original implementation
-- [Portainer](https://www.portainer.io/) — Container management platform
-- [MCP Protocol](https://modelcontextprotocol.io/) — Model Context Protocol specification
-- [PR #45](https://github.com/portainer/portainer-mcp/pull/45) — Our contribution to the official repo
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please use **private disclosure** — do not open public issues for security bugs.
 
 ## License
 
-[MIT License](LICENSE)
+Copyright (c) 2025 Portainer.io — See [LICENSE](LICENSE) for details.

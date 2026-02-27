@@ -9,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddSettingsFeatures registers the Portainer settings management tools on the MCP server.
 func (s *PortainerMCPServer) AddSettingsFeatures() {
 	s.addToolIfExists(ToolGetSettings, s.HandleGetSettings())
 	s.addToolIfExists(ToolGetPublicSettings, s.HandleGetPublicSettings())
@@ -18,6 +19,7 @@ func (s *PortainerMCPServer) AddSettingsFeatures() {
 	}
 }
 
+// HandleGetSettings returns an MCP tool handler that retrieves settings.
 func (s *PortainerMCPServer) HandleGetSettings() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		settings, err := s.cli.GetSettings()
@@ -25,17 +27,19 @@ func (s *PortainerMCPServer) HandleGetSettings() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get settings", err), nil
 		}
 
-		data, err := json.Marshal(settings)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal settings", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(settings, "failed to marshal settings")
 	}
 }
 
 // HandleUpdateSettings handles the updateSettings tool call.
 // It accepts a JSON string parameter containing the settings fields to update.
+//
+// SECURITY NOTE: This handler passes the JSON settings map directly to the Portainer
+// API without validating or restricting which fields can be modified. This means the
+// caller can change any Portainer setting including authentication methods, edge compute
+// features, and other security-sensitive configuration. Access control relies on the
+// Portainer API token permissions. Consider restricting allowed fields in the future
+// if a more granular access model is needed.
 func (s *PortainerMCPServer) HandleUpdateSettings() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -66,11 +70,6 @@ func (s *PortainerMCPServer) HandleGetPublicSettings() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get public settings", err), nil
 		}
 
-		data, err := json.Marshal(publicSettings)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal public settings", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(publicSettings, "failed to marshal public settings")
 	}
 }

@@ -2,13 +2,13 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddEnvironmentFeatures registers the environment (endpoint) management tools on the MCP server.
 func (s *PortainerMCPServer) AddEnvironmentFeatures() {
 	s.addToolIfExists(ToolListEnvironments, s.HandleGetEnvironments())
 	s.addToolIfExists(ToolGetEnvironment, s.HandleGetEnvironment())
@@ -23,6 +23,7 @@ func (s *PortainerMCPServer) AddEnvironmentFeatures() {
 	}
 }
 
+// HandleGetEnvironments returns an MCP tool handler that retrieves environments.
 func (s *PortainerMCPServer) HandleGetEnvironments() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		environments, err := s.cli.GetEnvironments()
@@ -30,15 +31,11 @@ func (s *PortainerMCPServer) HandleGetEnvironments() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get environments", err), nil
 		}
 
-		data, err := json.Marshal(environments)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal environments", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(environments, "failed to marshal environments")
 	}
 }
 
+// HandleGetEnvironment returns an MCP tool handler that retrieves environment.
 func (s *PortainerMCPServer) HandleGetEnvironment() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -47,21 +44,20 @@ func (s *PortainerMCPServer) HandleGetEnvironment() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		environment, err := s.cli.GetEnvironment(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get environment", err), nil
 		}
 
-		data, err := json.Marshal(environment)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal environment", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(environment, "failed to marshal environment")
 	}
 }
 
+// HandleDeleteEnvironment returns an MCP tool handler that deletes environment.
 func (s *PortainerMCPServer) HandleDeleteEnvironment() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -69,6 +65,9 @@ func (s *PortainerMCPServer) HandleDeleteEnvironment() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteEnvironment(id)
@@ -80,6 +79,7 @@ func (s *PortainerMCPServer) HandleDeleteEnvironment() server.ToolHandlerFunc {
 	}
 }
 
+// HandleSnapshotEnvironment returns an MCP tool handler that triggers a snapshot of environment.
 func (s *PortainerMCPServer) HandleSnapshotEnvironment() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -87,6 +87,9 @@ func (s *PortainerMCPServer) HandleSnapshotEnvironment() server.ToolHandlerFunc 
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.SnapshotEnvironment(id)
@@ -98,6 +101,7 @@ func (s *PortainerMCPServer) HandleSnapshotEnvironment() server.ToolHandlerFunc 
 	}
 }
 
+// HandleSnapshotAllEnvironments returns an MCP tool handler that triggers a snapshot of all environments.
 func (s *PortainerMCPServer) HandleSnapshotAllEnvironments() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		err := s.cli.SnapshotAllEnvironments()
@@ -109,6 +113,7 @@ func (s *PortainerMCPServer) HandleSnapshotAllEnvironments() server.ToolHandlerF
 	}
 }
 
+// HandleUpdateEnvironmentTags returns an MCP tool handler that updates environment tags.
 func (s *PortainerMCPServer) HandleUpdateEnvironmentTags() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -116,6 +121,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentTags() server.ToolHandlerFun
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		tagIds, err := parser.GetArrayOfIntegers("tagIds", true)
@@ -132,6 +140,7 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentTags() server.ToolHandlerFun
 	}
 }
 
+// HandleUpdateEnvironmentUserAccesses returns an MCP tool handler that updates environment user accesses.
 func (s *PortainerMCPServer) HandleUpdateEnvironmentUserAccesses() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -139,6 +148,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentUserAccesses() server.ToolHa
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		userAccesses, err := parser.GetArrayOfObjects("userAccesses", true)
@@ -160,6 +172,7 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentUserAccesses() server.ToolHa
 	}
 }
 
+// HandleUpdateEnvironmentTeamAccesses returns an MCP tool handler that updates environment team accesses.
 func (s *PortainerMCPServer) HandleUpdateEnvironmentTeamAccesses() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -167,6 +180,9 @@ func (s *PortainerMCPServer) HandleUpdateEnvironmentTeamAccesses() server.ToolHa
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		teamAccesses, err := parser.GetArrayOfObjects("teamAccesses", true)

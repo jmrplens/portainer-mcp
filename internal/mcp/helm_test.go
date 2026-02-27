@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListHelmRepositories verifies the HandleListHelmRepositories MCP tool handler.
 func TestHandleListHelmRepositories(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -70,6 +71,7 @@ func TestHandleListHelmRepositories(t *testing.T) {
 	}
 }
 
+// TestHandleAddHelmRepository verifies the HandleAddHelmRepository MCP tool handler.
 func TestHandleAddHelmRepository(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -126,6 +128,7 @@ func TestHandleAddHelmRepository(t *testing.T) {
 	}
 }
 
+// TestHandleRemoveHelmRepository verifies the HandleRemoveHelmRepository MCP tool handler.
 func TestHandleRemoveHelmRepository(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -175,6 +178,7 @@ func TestHandleRemoveHelmRepository(t *testing.T) {
 	}
 }
 
+// TestHandleSearchHelmCharts verifies the HandleSearchHelmCharts MCP tool handler.
 func TestHandleSearchHelmCharts(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -227,6 +231,7 @@ func TestHandleSearchHelmCharts(t *testing.T) {
 	}
 }
 
+// TestHandleInstallHelmChart verifies the HandleInstallHelmChart MCP tool handler.
 func TestHandleInstallHelmChart(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -298,7 +303,7 @@ func TestHandleInstallHelmChart(t *testing.T) {
 				assert.Len(t, result.Content, 1)
 				textContent, ok := result.Content[0].(mcp.TextContent)
 				assert.True(t, ok)
-				assert.Contains(t, textContent.Text, "successfully")
+				assert.Contains(t, textContent.Text, "my-nginx")
 			}
 
 			mockClient.AssertExpectations(t)
@@ -306,6 +311,7 @@ func TestHandleInstallHelmChart(t *testing.T) {
 	}
 }
 
+// TestHandleListHelmReleases verifies the HandleListHelmReleases MCP tool handler.
 func TestHandleListHelmReleases(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -375,6 +381,7 @@ func TestHandleListHelmReleases(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteHelmRelease verifies the HandleDeleteHelmRelease MCP tool handler.
 func TestHandleDeleteHelmRelease(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -430,6 +437,7 @@ func TestHandleDeleteHelmRelease(t *testing.T) {
 	}
 }
 
+// TestHandleGetHelmReleaseHistory verifies the HandleGetHelmReleaseHistory MCP tool handler.
 func TestHandleGetHelmReleaseHistory(t *testing.T) {
 	tests := []struct {
 		name          string

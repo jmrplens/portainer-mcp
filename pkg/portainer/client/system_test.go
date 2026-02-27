@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestGetSystemStatus verifies get system status behavior.
 func TestGetSystemStatus(t *testing.T) {
 	tests := []struct {
 		name          string

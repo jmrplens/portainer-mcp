@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetCustomTemplates verifies get custom templates behavior.
 func TestGetCustomTemplates(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -69,6 +70,7 @@ func TestGetCustomTemplates(t *testing.T) {
 	}
 }
 
+// TestGetCustomTemplate verifies get custom template behavior.
 func TestGetCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -118,6 +120,7 @@ func TestGetCustomTemplate(t *testing.T) {
 	}
 }
 
+// TestGetCustomTemplateFile verifies get custom template file behavior.
 func TestGetCustomTemplateFile(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -165,6 +168,7 @@ func TestGetCustomTemplateFile(t *testing.T) {
 	}
 }
 
+// TestCreateCustomTemplate verifies create custom template behavior.
 func TestCreateCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -227,6 +231,7 @@ func TestCreateCustomTemplate(t *testing.T) {
 	}
 }
 
+// TestDeleteCustomTemplate verifies delete custom template behavior.
 func TestDeleteCustomTemplate(t *testing.T) {
 	tests := []struct {
 		name          string

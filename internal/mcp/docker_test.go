@@ -23,6 +23,17 @@ func createMockHttpResponse(statusCode int, body string) *http.Response {
 	}
 }
 
+// trackingCloser wraps a reader and tracks whether Close() was called.
+type trackingCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (tc *trackingCloser) Close() error {
+	tc.closed = true
+	return nil
+}
+
 // errorReader simulates an error during io.ReadAll
 type errorReader struct{}
 
@@ -34,6 +45,7 @@ func (r *errorReader) Close() error {
 	return nil
 }
 
+// TestHandleDockerProxy_ParameterValidation verifies the HandleDockerProxy_ParameterValidation MCP tool handler.
 func TestHandleDockerProxy_ParameterValidation(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -154,6 +166,7 @@ func TestHandleDockerProxy_ParameterValidation(t *testing.T) {
 	}
 }
 
+// TestHandleDockerProxy_ClientInteraction verifies the HandleDockerProxy_ClientInteraction MCP tool handler.
 func TestHandleDockerProxy_ClientInteraction(t *testing.T) {
 	type testCase struct {
 		name  string
@@ -304,6 +317,7 @@ func TestHandleDockerProxy_ClientInteraction(t *testing.T) {
 	}
 }
 
+// TestHandleGetDockerDashboard verifies the HandleGetDockerDashboard MCP tool handler.
 func TestHandleGetDockerDashboard(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -386,4 +400,24 @@ func TestHandleGetDockerDashboard(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+// TestHandleDockerProxy_ClosesResponseBody verifies the HandleDockerProxy_ClosesResponseBody MCP tool handler.
+func TestHandleDockerProxy_ClosesResponseBody(t *testing.T) {
+tc := &trackingCloser{Reader: strings.NewReader(`{"status":"ok"}`)}
+mockClient := new(MockPortainerClient)
+mockClient.On("ProxyDockerRequest", mock.AnythingOfType("models.DockerProxyRequestOptions")).
+Return(&http.Response{StatusCode: http.StatusOK, Body: tc}, nil)
+
+server := &PortainerMCPServer{cli: mockClient}
+request := CreateMCPRequest(map[string]any{
+"environmentId": float64(1),
+"dockerAPIPath": "/containers/json",
+"method":        "GET",
+})
+
+handler := server.HandleDockerProxy()
+_, err := handler(context.Background(), request)
+assert.NoError(t, err)
+assert.True(t, tc.closed, "response body should be closed after handler returns")
 }

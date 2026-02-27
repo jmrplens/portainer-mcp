@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddKubernetesProxyFeatures registers the Kubernetes proxy and resource management tools on the MCP server.
 func (s *PortainerMCPServer) AddKubernetesProxyFeatures() {
 	s.addToolIfExists(ToolKubernetesProxyStripped, s.HandleKubernetesProxyStripped())
 
@@ -22,6 +22,7 @@ func (s *PortainerMCPServer) AddKubernetesProxyFeatures() {
 	}
 }
 
+// HandleKubernetesProxyStripped returns an MCP tool handler that handles kubernetes proxy stripped.
 func (s *PortainerMCPServer) HandleKubernetesProxyStripped() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -29,6 +30,9 @@ func (s *PortainerMCPServer) HandleKubernetesProxyStripped() server.ToolHandlerF
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		kubernetesAPIPath, err := parser.GetString("kubernetesAPIPath", true)
@@ -79,6 +83,13 @@ func (s *PortainerMCPServer) HandleKubernetesProxyStripped() server.ToolHandlerF
 	}
 }
 
+// HandleKubernetesProxy proxies arbitrary Kubernetes API requests to a Portainer environment.
+//
+// SECURITY NOTE: This handler allows the caller to invoke any Kubernetes API endpoint
+// on the target environment. There is no allowlist restricting which API paths are
+// permitted. Access control relies entirely on the Portainer API token permissions and
+// the read-only mode flag. Operators should be aware that this grants broad Kubernetes
+// API access to whoever holds the MCP server's Portainer token.
 func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -86,6 +97,9 @@ func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		method, err := parser.GetString("method", true)
@@ -143,8 +157,9 @@ func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to send Kubernetes API request", err), nil
 		}
+		defer response.Body.Close()
 
-		responseBody, err := io.ReadAll(response.Body)
+		responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxProxyResponseSize))
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to read Kubernetes API response", err), nil
 		}
@@ -153,12 +168,14 @@ func (s *PortainerMCPServer) HandleKubernetesProxy() server.ToolHandlerFunc {
 	}
 }
 
+// AddKubernetesNativeFeatures registers the Kubernetes proxy and resource management tools on the MCP server.
 func (s *PortainerMCPServer) AddKubernetesNativeFeatures() {
 	s.addToolIfExists(ToolGetKubernetesDashboard, s.HandleGetKubernetesDashboard())
 	s.addToolIfExists(ToolListKubernetesNamespaces, s.HandleListKubernetesNamespaces())
 	s.addToolIfExists(ToolGetKubernetesConfig, s.HandleGetKubernetesConfig())
 }
 
+// HandleGetKubernetesDashboard returns an MCP tool handler that retrieves kubernetes dashboard.
 func (s *PortainerMCPServer) HandleGetKubernetesDashboard() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -167,21 +184,20 @@ func (s *PortainerMCPServer) HandleGetKubernetesDashboard() server.ToolHandlerFu
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		dashboard, err := s.cli.GetKubernetesDashboard(environmentId)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get kubernetes dashboard", err), nil
 		}
 
-		jsonData, err := json.Marshal(dashboard)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes dashboard", err), nil
-		}
-
-		return mcp.NewToolResultText(string(jsonData)), nil
+		return jsonResult(dashboard, "failed to marshal kubernetes dashboard")
 	}
 }
 
+// HandleListKubernetesNamespaces returns an MCP tool handler that lists kubernetes namespaces.
 func (s *PortainerMCPServer) HandleListKubernetesNamespaces() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -190,21 +206,20 @@ func (s *PortainerMCPServer) HandleListKubernetesNamespaces() server.ToolHandler
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		namespaces, err := s.cli.GetKubernetesNamespaces(environmentId)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get kubernetes namespaces", err), nil
 		}
 
-		jsonData, err := json.Marshal(namespaces)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes namespaces", err), nil
-		}
-
-		return mcp.NewToolResultText(string(jsonData)), nil
+		return jsonResult(namespaces, "failed to marshal kubernetes namespaces")
 	}
 }
 
+// HandleGetKubernetesConfig returns an MCP tool handler that retrieves kubernetes config.
 func (s *PortainerMCPServer) HandleGetKubernetesConfig() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -212,6 +227,9 @@ func (s *PortainerMCPServer) HandleGetKubernetesConfig() server.ToolHandlerFunc 
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		config, err := s.cli.GetKubernetesConfig(environmentId)
@@ -223,11 +241,7 @@ func (s *PortainerMCPServer) HandleGetKubernetesConfig() server.ToolHandlerFunc 
 		case string:
 			return mcp.NewToolResultText(v), nil
 		default:
-			jsonData, err := json.Marshal(config)
-			if err != nil {
-				return mcp.NewToolResultErrorFromErr("failed to marshal kubernetes config", err), nil
-			}
-			return mcp.NewToolResultText(string(jsonData)), nil
+			return jsonResult(config, "failed to marshal kubernetes config")
 		}
 	}
 }

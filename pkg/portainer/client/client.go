@@ -1,3 +1,8 @@
+// Package client provides the Portainer API client implementation.
+// It defines the PortainerAPIClient interface and its HTTP-based implementation
+// that communicates with the Portainer server API. The client handles
+// authentication, request construction, and response transformation between
+// raw API models and the local model types used by the MCP server.
 package client
 
 import (

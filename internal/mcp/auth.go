@@ -2,13 +2,13 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddAuthFeatures registers the authentication management tools on the MCP server.
 func (s *PortainerMCPServer) AddAuthFeatures() {
 	s.addToolIfExists(ToolAuthenticate, s.HandleAuthenticateUser())
 
@@ -17,6 +17,7 @@ func (s *PortainerMCPServer) AddAuthFeatures() {
 	}
 }
 
+// HandleAuthenticateUser returns an MCP tool handler that authenticates user.
 func (s *PortainerMCPServer) HandleAuthenticateUser() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -36,15 +37,11 @@ func (s *PortainerMCPServer) HandleAuthenticateUser() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to authenticate user", err), nil
 		}
 
-		data, err := json.Marshal(authResponse)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal authentication response", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(authResponse, "failed to marshal authentication response")
 	}
 }
 
+// HandleLogout returns an MCP tool handler that logs out authentication.
 func (s *PortainerMCPServer) HandleLogout() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		err := s.cli.Logout()

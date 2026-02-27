@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetEnvironments verifies the HandleGetEnvironments MCP tool handler.
 func TestHandleGetEnvironments(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -77,6 +78,7 @@ func TestHandleGetEnvironments(t *testing.T) {
 	}
 }
 
+// TestHandleGetEnvironment verifies the HandleGetEnvironment MCP tool handler.
 func TestHandleGetEnvironment(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -167,6 +169,7 @@ func TestHandleGetEnvironment(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteEnvironment verifies the HandleDeleteEnvironment MCP tool handler.
 func TestHandleDeleteEnvironment(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -250,6 +253,7 @@ func TestHandleDeleteEnvironment(t *testing.T) {
 	}
 }
 
+// TestHandleSnapshotEnvironment verifies the HandleSnapshotEnvironment MCP tool handler.
 func TestHandleSnapshotEnvironment(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -333,6 +337,7 @@ func TestHandleSnapshotEnvironment(t *testing.T) {
 	}
 }
 
+// TestHandleSnapshotAllEnvironments verifies the HandleSnapshotAllEnvironments MCP tool handler.
 func TestHandleSnapshotAllEnvironments(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -384,6 +389,7 @@ func TestHandleSnapshotAllEnvironments(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentTags verifies the HandleUpdateEnvironmentTags MCP tool handler.
 func TestHandleUpdateEnvironmentTags(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -487,6 +493,7 @@ func TestHandleUpdateEnvironmentTags(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentUserAccesses verifies the HandleUpdateEnvironmentUserAccesses MCP tool handler.
 func TestHandleUpdateEnvironmentUserAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -620,6 +627,7 @@ func TestHandleUpdateEnvironmentUserAccesses(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentTeamAccesses verifies the HandleUpdateEnvironmentTeamAccesses MCP tool handler.
 func TestHandleUpdateEnvironmentTeamAccesses(t *testing.T) {
 	tests := []struct {
 		name          string

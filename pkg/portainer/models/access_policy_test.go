@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertAccessPolicyRole verifies the ConvertAccessPolicyRole model conversion function.
 func TestConvertAccessPolicyRole(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -55,6 +56,7 @@ func TestConvertAccessPolicyRole(t *testing.T) {
 	}
 }
 
+// TestConvertAccesses verifies the ConvertAccesses model conversion function.
 func TestConvertAccesses(t *testing.T) {
 	t.Run("user accesses", func(t *testing.T) {
 		policies := models.PortainerUserAccessPolicies{

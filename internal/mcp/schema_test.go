@@ -2,6 +2,7 @@ package mcp
 
 import "testing"
 
+// TestIsValidAccessLevel verifies is valid access level behavior.
 func TestIsValidAccessLevel(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -27,6 +28,7 @@ func TestIsValidAccessLevel(t *testing.T) {
 	}
 }
 
+// TestIsValidUserRole verifies is valid user role behavior.
 func TestIsValidUserRole(t *testing.T) {
 	tests := []struct {
 		name     string

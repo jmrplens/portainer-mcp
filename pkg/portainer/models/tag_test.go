@@ -6,6 +6,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertTagToEnvironmentTag verifies the ConvertTagToEnvironmentTag model conversion function.
 func TestConvertTagToEnvironmentTag(t *testing.T) {
 	tests := []struct {
 		name         string

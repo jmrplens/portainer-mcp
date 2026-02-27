@@ -23,6 +23,10 @@ type EdgeJob struct {
 // Returns:
 //   - A local EdgeJob model
 func ConvertEdgeJobToLocal(raw *apimodels.PortainerEdgeJob) EdgeJob {
+	if raw == nil {
+		return EdgeJob{}
+	}
+
 	edgeGroups := make([]int, len(raw.EdgeGroups))
 	for i, g := range raw.EdgeGroups {
 		edgeGroups[i] = int(g)
@@ -60,6 +64,10 @@ type EdgeUpdateSchedule struct {
 // Returns:
 //   - A local EdgeUpdateSchedule model
 func ConvertEdgeUpdateScheduleToLocal(raw *apimodels.EdgeupdateschedulesDecoratedUpdateSchedule) EdgeUpdateSchedule {
+	if raw == nil {
+		return EdgeUpdateSchedule{}
+	}
+
 	edgeGroupIds := make([]int, len(raw.EdgeGroupIds))
 	for i, g := range raw.EdgeGroupIds {
 		edgeGroupIds[i] = int(g)

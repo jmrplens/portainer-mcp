@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertEdgeGroupToGroup verifies the ConvertEdgeGroupToGroup model conversion function.
 func TestConvertEdgeGroupToGroup(t *testing.T) {
 	tests := []struct {
 		name      string

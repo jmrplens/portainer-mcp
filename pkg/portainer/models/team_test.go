@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertToTeam verifies the ConvertToTeam model conversion function.
 func TestConvertToTeam(t *testing.T) {
 	tests := []struct {
 		name         string

@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestInt64ToIntSlice verifies int64 to int slice behavior.
 func TestInt64ToIntSlice(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -48,6 +49,7 @@ func TestInt64ToIntSlice(t *testing.T) {
 	}
 }
 
+// TestIntToInt64Slice verifies int to int64 slice behavior.
 func TestIntToInt64Slice(t *testing.T) {
 	tests := []struct {
 		name string
@@ -96,6 +98,7 @@ func TestIntToInt64Slice(t *testing.T) {
 	}
 }
 
+// TestIntToInt64Map verifies int to int64 map behavior.
 func TestIntToInt64Map(t *testing.T) {
 	tests := []struct {
 		name  string

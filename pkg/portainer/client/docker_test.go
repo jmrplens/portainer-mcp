@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/portainer/client-api-go/v2/client"
+	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 )
 
+// TestProxyDockerRequest verifies proxy docker request behavior.
 func TestProxyDockerRequest(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -107,6 +109,53 @@ func TestProxyDockerRequest(t *testing.T) {
 				}
 			}
 
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetDockerDashboard verifies retrieval of Docker dashboard data for an environment.
+func TestGetDockerDashboard(t *testing.T) {
+	tests := []struct {
+		name          string
+		envID         int
+		mockResult    *apimodels.DockerDashboardResponse
+		mockError     error
+		expectedError bool
+	}{
+		{
+			name:  "successful retrieval",
+			envID: 1,
+			mockResult: &apimodels.DockerDashboardResponse{
+				Networks: 4,
+				Volumes:  3,
+				Stacks:   2,
+				Services: 3,
+			},
+		},
+		{
+			name:          "API error",
+			envID:         99,
+			mockError:     errors.New("environment not found"),
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("GetDockerDashboard", int64(tt.envID)).Return(tt.mockResult, tt.mockError)
+
+			c := &PortainerClient{cli: mockAPI}
+			result, err := c.GetDockerDashboard(tt.envID)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, 4, result.Networks)
+				assert.Equal(t, 2, result.Stacks)
+			}
 			mockAPI.AssertExpectations(t)
 		})
 	}

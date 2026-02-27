@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListWebhooks verifies the HandleListWebhooks MCP tool handler.
 func TestHandleListWebhooks(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -74,6 +75,7 @@ func TestHandleListWebhooks(t *testing.T) {
 	}
 }
 
+// TestHandleCreateWebhook verifies the HandleCreateWebhook MCP tool handler.
 func TestHandleCreateWebhook(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -182,6 +184,7 @@ func TestHandleCreateWebhook(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteWebhook verifies the HandleDeleteWebhook MCP tool handler.
 func TestHandleDeleteWebhook(t *testing.T) {
 	tests := []struct {
 		name        string

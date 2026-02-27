@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertEndpointToEnvironment verifies the ConvertEndpointToEnvironment model conversion function.
 func TestConvertEndpointToEnvironment(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -110,6 +111,7 @@ func TestConvertEndpointToEnvironment(t *testing.T) {
 	}
 }
 
+// TestConvertEnvironmentStatus verifies the ConvertEnvironmentStatus model conversion function.
 func TestConvertEnvironmentStatus(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -168,6 +170,7 @@ func TestConvertEnvironmentStatus(t *testing.T) {
 	}
 }
 
+// TestConvertEnvironmentType verifies the ConvertEnvironmentType model conversion function.
 func TestConvertEnvironmentType(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetEnvironmentGroups verifies the HandleGetEnvironmentGroups MCP tool handler.
 func TestHandleGetEnvironmentGroups(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -76,6 +77,7 @@ func TestHandleGetEnvironmentGroups(t *testing.T) {
 	}
 }
 
+// TestHandleCreateEnvironmentGroup verifies the HandleCreateEnvironmentGroup MCP tool handler.
 func TestHandleCreateEnvironmentGroup(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -180,6 +182,7 @@ func TestHandleCreateEnvironmentGroup(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentGroupName verifies the HandleUpdateEnvironmentGroupName MCP tool handler.
 func TestHandleUpdateEnvironmentGroupName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -285,6 +288,7 @@ func TestHandleUpdateEnvironmentGroupName(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentGroupEnvironments verifies the HandleUpdateEnvironmentGroupEnvironments MCP tool handler.
 func TestHandleUpdateEnvironmentGroupEnvironments(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -391,6 +395,7 @@ func TestHandleUpdateEnvironmentGroupEnvironments(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateEnvironmentGroupTags verifies the HandleUpdateEnvironmentGroupTags MCP tool handler.
 func TestHandleUpdateEnvironmentGroupTags(t *testing.T) {
 	tests := []struct {
 		name        string

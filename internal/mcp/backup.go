@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddBackupFeatures registers the backup and restore management tools on the MCP server.
 func (s *PortainerMCPServer) AddBackupFeatures() {
 	s.addToolIfExists(ToolGetBackupStatus, s.HandleGetBackupStatus())
 	s.addToolIfExists(ToolGetBackupS3Settings, s.HandleGetBackupS3Settings())
@@ -21,6 +21,7 @@ func (s *PortainerMCPServer) AddBackupFeatures() {
 	}
 }
 
+// HandleGetBackupStatus returns an MCP tool handler that retrieves backup status.
 func (s *PortainerMCPServer) HandleGetBackupStatus() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		status, err := s.cli.GetBackupStatus()
@@ -28,15 +29,11 @@ func (s *PortainerMCPServer) HandleGetBackupStatus() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get backup status", err), nil
 		}
 
-		data, err := json.Marshal(status)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal backup status", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(status, "failed to marshal backup status")
 	}
 }
 
+// HandleGetBackupS3Settings returns an MCP tool handler that retrieves backup s3 settings.
 func (s *PortainerMCPServer) HandleGetBackupS3Settings() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		settings, err := s.cli.GetBackupS3Settings()
@@ -44,15 +41,11 @@ func (s *PortainerMCPServer) HandleGetBackupS3Settings() server.ToolHandlerFunc 
 			return mcp.NewToolResultErrorFromErr("failed to get backup S3 settings", err), nil
 		}
 
-		data, err := json.Marshal(settings)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal backup S3 settings", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(settings, "failed to marshal backup S3 settings")
 	}
 }
 
+// HandleCreateBackup returns an MCP tool handler that creates backup.
 func (s *PortainerMCPServer) HandleCreateBackup() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -71,6 +64,7 @@ func (s *PortainerMCPServer) HandleCreateBackup() server.ToolHandlerFunc {
 	}
 }
 
+// HandleBackupToS3 returns an MCP tool handler that creates a backup to s3.
 func (s *PortainerMCPServer) HandleBackupToS3() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -129,6 +123,7 @@ func (s *PortainerMCPServer) HandleBackupToS3() server.ToolHandlerFunc {
 	}
 }
 
+// HandleRestoreFromS3 returns an MCP tool handler that restores from a backup from s3.
 func (s *PortainerMCPServer) HandleRestoreFromS3() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)

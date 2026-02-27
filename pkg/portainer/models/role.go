@@ -15,8 +15,13 @@ type Role struct {
 
 // ConvertToRole converts a raw PortainereeRole to a local Role
 func ConvertToRole(raw *apimodels.PortainereeRole) Role {
-	role := Role{
-		Authorizations: map[string]bool(raw.Authorizations),
+	if raw == nil {
+		return Role{}
+	}
+
+	role := Role{}
+	if raw.Authorizations != nil {
+		role.Authorizations = map[string]bool(raw.Authorizations)
 	}
 
 	if raw.ID != nil {

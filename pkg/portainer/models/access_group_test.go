@@ -7,6 +7,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/models"
 )
 
+// TestConvertEndpointGroupToAccessGroup verifies the ConvertEndpointGroupToAccessGroup model conversion function.
 func TestConvertEndpointGroupToAccessGroup(t *testing.T) {
 	tests := []struct {
 		name     string

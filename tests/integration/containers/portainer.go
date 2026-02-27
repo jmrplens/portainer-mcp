@@ -1,3 +1,5 @@
+// Package containers provides Docker container management for integration tests.
+// It handles Portainer container lifecycle (start, stop, cleanup) using testcontainers.
 package containers
 
 import (

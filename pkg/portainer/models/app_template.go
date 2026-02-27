@@ -18,6 +18,10 @@ type AppTemplate struct {
 
 // ConvertToAppTemplate converts a raw SDK PortainerTemplate to the local AppTemplate model.
 func ConvertToAppTemplate(raw *apimodels.PortainerTemplate) AppTemplate {
+	if raw == nil {
+		return AppTemplate{}
+	}
+
 	return AppTemplate{
 		ID:          int(raw.ID),
 		Title:       raw.Title,

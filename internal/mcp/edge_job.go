@@ -2,14 +2,15 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddEdgeJobFeatures registers the edge job and edge update schedule management tools on the MCP server.
 func (s *PortainerMCPServer) AddEdgeJobFeatures() {
 	s.addToolIfExists(ToolListEdgeJobs, s.HandleListEdgeJobs())
 	s.addToolIfExists(ToolGetEdgeJob, s.HandleGetEdgeJob())
@@ -21,6 +22,7 @@ func (s *PortainerMCPServer) AddEdgeJobFeatures() {
 	}
 }
 
+// HandleListEdgeJobs returns an MCP tool handler that lists edge jobs.
 func (s *PortainerMCPServer) HandleListEdgeJobs() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		jobs, err := s.cli.GetEdgeJobs()
@@ -28,15 +30,11 @@ func (s *PortainerMCPServer) HandleListEdgeJobs() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to list edge jobs", err), nil
 		}
 
-		data, err := json.Marshal(jobs)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal edge jobs", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(jobs, "failed to marshal edge jobs")
 	}
 }
 
+// HandleGetEdgeJob returns an MCP tool handler that retrieves edge job.
 func (s *PortainerMCPServer) HandleGetEdgeJob() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -45,21 +43,20 @@ func (s *PortainerMCPServer) HandleGetEdgeJob() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		job, err := s.cli.GetEdgeJob(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get edge job", err), nil
 		}
 
-		data, err := json.Marshal(job)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal edge job", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(job, "failed to marshal edge job")
 	}
 }
 
+// HandleGetEdgeJobFile returns an MCP tool handler that retrieves edge job file.
 func (s *PortainerMCPServer) HandleGetEdgeJobFile() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -67,6 +64,9 @@ func (s *PortainerMCPServer) HandleGetEdgeJobFile() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		content, err := s.cli.GetEdgeJobFile(id)
@@ -78,6 +78,7 @@ func (s *PortainerMCPServer) HandleGetEdgeJobFile() server.ToolHandlerFunc {
 	}
 }
 
+// HandleCreateEdgeJob returns an MCP tool handler that creates edge job.
 func (s *PortainerMCPServer) HandleCreateEdgeJob() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -90,6 +91,10 @@ func (s *PortainerMCPServer) HandleCreateEdgeJob() server.ToolHandlerFunc {
 		cronExpression, err := parser.GetString("cronExpression", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid cronExpression parameter", err), nil
+		}
+
+		if !isValidCronExpression(cronExpression) {
+			return mcp.NewToolResultErrorFromErr("invalid cronExpression parameter", fmt.Errorf("cron expression must have 5 fields (minute hour day month weekday)")), nil
 		}
 
 		fileContent, err := parser.GetString("fileContent", true)
@@ -111,6 +116,7 @@ func (s *PortainerMCPServer) HandleCreateEdgeJob() server.ToolHandlerFunc {
 	}
 }
 
+// HandleDeleteEdgeJob returns an MCP tool handler that deletes edge job.
 func (s *PortainerMCPServer) HandleDeleteEdgeJob() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -118,6 +124,9 @@ func (s *PortainerMCPServer) HandleDeleteEdgeJob() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteEdgeJob(id)
@@ -129,10 +138,19 @@ func (s *PortainerMCPServer) HandleDeleteEdgeJob() server.ToolHandlerFunc {
 	}
 }
 
+// isValidCronExpression performs basic validation of a cron expression.
+// It checks that the expression has exactly 5 fields (minute hour day month weekday).
+func isValidCronExpression(expr string) bool {
+	fields := strings.Fields(strings.TrimSpace(expr))
+	return len(fields) == 5
+}
+
+// AddEdgeUpdateScheduleFeatures registers the edge job and edge update schedule management tools on the MCP server.
 func (s *PortainerMCPServer) AddEdgeUpdateScheduleFeatures() {
 	s.addToolIfExists(ToolListEdgeUpdateSchedules, s.HandleListEdgeUpdateSchedules())
 }
 
+// HandleListEdgeUpdateSchedules returns an MCP tool handler that lists edge update schedules.
 func (s *PortainerMCPServer) HandleListEdgeUpdateSchedules() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		schedules, err := s.cli.GetEdgeUpdateSchedules()
@@ -140,11 +158,6 @@ func (s *PortainerMCPServer) HandleListEdgeUpdateSchedules() server.ToolHandlerF
 			return mcp.NewToolResultErrorFromErr("failed to list edge update schedules", err), nil
 		}
 
-		data, err := json.Marshal(schedules)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal edge update schedules", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(schedules, "failed to marshal edge update schedules")
 	}
 }

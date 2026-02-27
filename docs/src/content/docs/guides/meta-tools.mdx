@@ -1,0 +1,300 @@
+---
+title: Meta-Tools Guide
+description: Understand how the 15 grouped meta-tools work and what actions are available.
+---
+
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+## Overview
+
+By default, Portainer MCP exposes **15 meta-tools** instead of 98 individual tools. Each meta-tool groups related operations under a single tool with an `action` parameter that routes to the correct handler.
+
+### Why Meta-Tools?
+
+LLMs work more effectively when they have fewer tools to choose from. With 98 individual tools, the AI assistant must decide which specific tool to call, which increases the chance of selecting the wrong one or getting confused.
+
+With 15 meta-tools, the assistant only needs to:
+1. Pick the right **domain** (e.g., `manage_stacks`)
+2. Choose the right **action** (e.g., `list_stacks`)
+
+This approach reduces tool selection errors and improves the overall AI assistant experience.
+
+### How It Works
+
+Each meta-tool call includes:
+- **`action`** (required, enum) — the specific operation to perform
+- Additional parameters as needed by the selected action
+
+```json
+{
+  "tool": "manage_stacks",
+  "arguments": {
+    "action": "list_stacks"
+  }
+}
+```
+
+```json
+{
+  "tool": "manage_environments",
+  "arguments": {
+    "action": "get_environment",
+    "id": 1
+  }
+}
+```
+
+Parameters are passed through directly to the underlying handler. Each action accepts the same parameters as its granular tool counterpart — see the [Tools Reference](/portainer-mcp/reference/api-reference/) for parameter details.
+
+---
+
+## Meta-Tool Reference
+
+### manage\_environments <Badge text="16 actions" variant="note" />
+
+Manage environments (endpoints), environment groups, and environment tags.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_environments` | List all environments | ✅ |
+| `get_environment` | Get details of a specific environment | ✅ |
+| `delete_environment` | Delete an environment | ❌ |
+| `snapshot_environment` | Trigger snapshot for one environment | ❌ |
+| `snapshot_all_environments` | Trigger snapshot for all environments | ❌ |
+| `update_environment_tags` | Update tags on an environment | ❌ |
+| `update_environment_user_accesses` | Update user access policies | ❌ |
+| `update_environment_team_accesses` | Update team access policies | ❌ |
+| `list_environment_groups` | List all environment groups | ✅ |
+| `create_environment_group` | Create a new environment group | ❌ |
+| `update_environment_group_name` | Update group name | ❌ |
+| `update_environment_group_environments` | Update group membership | ❌ |
+| `update_environment_group_tags` | Update group tags | ❌ |
+| `list_environment_tags` | List all environment tags | ✅ |
+| `create_environment_tag` | Create a new tag | ❌ |
+| `delete_environment_tag` | Delete a tag | ❌ |
+
+---
+
+### manage\_stacks <Badge text="13 actions" variant="note" />
+
+Manage Docker Compose and Edge stacks.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_stacks` | List all edge stacks | ✅ |
+| `list_regular_stacks` | List non-edge stacks | ✅ |
+| `get_stack` | Get stack details | ✅ |
+| `get_stack_file` | Get stack compose file | ✅ |
+| `inspect_stack_file` | Inspect stack compose file | ✅ |
+| `create_stack` | Create a new stack | ❌ |
+| `update_stack` | Update an existing stack | ❌ |
+| `delete_stack` | Delete a stack | ❌ |
+| `update_stack_git` | Update stack git configuration | ❌ |
+| `redeploy_stack_git` | Redeploy stack from git | ❌ |
+| `start_stack` | Start a stopped stack | ❌ |
+| `stop_stack` | Stop a running stack | ❌ |
+| `migrate_stack` | Migrate stack to another environment | ❌ |
+
+---
+
+### manage\_access\_groups <Badge text="7 actions" variant="note" />
+
+Manage access groups and their user/team access policies.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_access_groups` | List all access groups | ✅ |
+| `create_access_group` | Create a new access group | ❌ |
+| `update_access_group_name` | Update group name | ❌ |
+| `update_access_group_user_accesses` | Update user access policies | ❌ |
+| `update_access_group_team_accesses` | Update team access policies | ❌ |
+| `add_environment_to_access_group` | Add environment to group | ❌ |
+| `remove_environment_from_access_group` | Remove environment from group | ❌ |
+
+---
+
+### manage\_users <Badge text="5 actions" variant="note" />
+
+Manage Portainer users.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_users` | List all users | ✅ |
+| `get_user` | Get user details | ✅ |
+| `create_user` | Create a new user | ❌ |
+| `delete_user` | Delete a user | ❌ |
+| `update_user_role` | Update user role | ❌ |
+
+---
+
+### manage\_teams <Badge text="6 actions" variant="note" />
+
+Manage teams and team membership.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_teams` | List all teams | ✅ |
+| `get_team` | Get team details | ✅ |
+| `create_team` | Create a new team | ❌ |
+| `delete_team` | Delete a team | ❌ |
+| `update_team_name` | Update team name | ❌ |
+| `update_team_members` | Update team membership | ❌ |
+
+---
+
+### manage\_docker <Badge text="2 actions" variant="note" />
+
+Interact with Docker environments.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `get_docker_dashboard` | Get Docker environment dashboard | ✅ |
+| `docker_proxy` | Proxy arbitrary Docker API calls | ❌ |
+
+---
+
+### manage\_kubernetes <Badge text="5 actions" variant="note" />
+
+Interact with Kubernetes environments.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `get_kubernetes_resource_stripped` | Get K8s resource (metadata stripped) | ✅ |
+| `get_kubernetes_dashboard` | Get K8s environment dashboard | ✅ |
+| `list_kubernetes_namespaces` | List all namespaces | ✅ |
+| `get_kubernetes_config` | Get kubeconfig | ✅ |
+| `kubernetes_proxy` | Proxy arbitrary K8s API calls | ❌ |
+
+---
+
+### manage\_helm <Badge text="8 actions" variant="note" />
+
+Manage Helm repositories, charts, and releases.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_helm_repositories` | List Helm repositories | ✅ |
+| `search_helm_charts` | Search for charts | ✅ |
+| `list_helm_releases` | List installed releases | ✅ |
+| `get_helm_release_history` | Get release revision history | ✅ |
+| `add_helm_repository` | Add a Helm repository | ❌ |
+| `remove_helm_repository` | Remove a Helm repository | ❌ |
+| `install_helm_chart` | Install a chart | ❌ |
+| `delete_helm_release` | Delete a release | ❌ |
+
+---
+
+### manage\_registries <Badge text="5 actions" variant="note" />
+
+Manage Docker registries (Quay, Azure, DockerHub, GitLab, ECR, custom).
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_registries` | List all registries | ✅ |
+| `get_registry` | Get registry details | ✅ |
+| `create_registry` | Create a new registry | ❌ |
+| `update_registry` | Update a registry | ❌ |
+| `delete_registry` | Delete a registry | ❌ |
+
+---
+
+### manage\_templates <Badge text="7 actions" variant="note" />
+
+Manage custom templates and application templates.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_custom_templates` | List custom templates | ✅ |
+| `get_custom_template` | Get custom template details | ✅ |
+| `get_custom_template_file` | Get custom template file content | ✅ |
+| `create_custom_template` | Create a custom template | ❌ |
+| `delete_custom_template` | Delete a custom template | ❌ |
+| `list_app_templates` | List application templates | ✅ |
+| `get_app_template_file` | Get app template file content | ✅ |
+
+---
+
+### manage\_backups <Badge text="5 actions" variant="note" />
+
+Manage Portainer server backups (local and S3).
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `get_backup_status` | Get last backup status | ✅ |
+| `get_backup_s3_settings` | Get S3 backup settings | ✅ |
+| `create_backup` | Create a local backup | ❌ |
+| `backup_to_s3` | Backup to S3 | ❌ |
+| `restore_from_s3` | Restore from S3 backup | ❌ |
+
+---
+
+### manage\_webhooks <Badge text="3 actions" variant="note" />
+
+Manage webhooks for services and containers.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_webhooks` | List all webhooks | ✅ |
+| `create_webhook` | Create a new webhook | ❌ |
+| `delete_webhook` | Delete a webhook | ❌ |
+
+---
+
+### manage\_edge <Badge text="6 actions" variant="note" />
+
+Manage Edge jobs and Edge update schedules.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `list_edge_jobs` | List all edge jobs | ✅ |
+| `get_edge_job` | Get edge job details | ✅ |
+| `get_edge_job_file` | Get edge job script content | ✅ |
+| `create_edge_job` | Create a new edge job | ❌ |
+| `delete_edge_job` | Delete an edge job | ❌ |
+| `list_edge_update_schedules` | List edge update schedules | ✅ |
+
+---
+
+### manage\_settings <Badge text="5 actions" variant="note" />
+
+Manage Portainer server settings and SSL configuration.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `get_settings` | Get current settings | ✅ |
+| `get_public_settings` | Get public (unauthenticated) settings | ✅ |
+| `update_settings` | Update server settings | ❌ |
+| `get_ssl_settings` | Get SSL configuration | ✅ |
+| `update_ssl_settings` | Update SSL configuration | ❌ |
+
+---
+
+### manage\_system <Badge text="5 actions" variant="note" />
+
+System information, roles, authentication, and message of the day.
+
+| Action | Description | Read-Only |
+|:-------|:-----------|:---------:|
+| `get_system_status` | Get system status and version | ✅ |
+| `list_roles` | List all available roles | ✅ |
+| `get_motd` | Get message of the day | ✅ |
+| `authenticate` | Authenticate a user | ✅ |
+| `logout` | Log out current session | ❌ |
+
+---
+
+## Read-Only Mode with Meta-Tools
+
+When `-read-only` is enabled, each meta-tool's `action` enum is filtered to include only read-only actions. For example, `manage_users` would only offer `list_users` and `get_user`.
+
+If all actions in a group are write-only, the entire meta-tool is omitted. This ensures the AI assistant cannot accidentally discover or invoke write operations.
+
+## Switching to Granular Tools
+
+To use the 98 individual tools instead:
+
+```bash
+./portainer-mcp -server "..." -token "..." -granular-tools
+```
+
+In granular mode, each tool is registered separately with its own name (e.g., `get_environments`, `create_stack`, etc.). See the [Tools Reference](/portainer-mcp/reference/api-reference/) for the complete list.

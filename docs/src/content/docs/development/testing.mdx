@@ -1,0 +1,312 @@
+---
+title: Testing Guide
+description: Comprehensive guide to writing and running tests for the Portainer MCP server.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Test Organization
+
+```
+portainer-mcp/
+├── internal/mcp/
+│   ├── *_test.go               # Unit tests for each handler domain
+│   ├── mocks_test.go           # Shared mock PortainerClient
+│   ├── metatool_test.go        # Meta-tool routing tests
+│   ├── schema_test.go          # Tool definition validation
+│   └── server_test.go          # Server initialization tests
+├── internal/k8sutil/
+│   └── stripper_test.go        # K8s metadata stripping tests
+├── internal/tooldef/
+│   └── tooldef_test.go         # Embedded YAML loading tests
+├── pkg/toolgen/
+│   ├── yaml_test.go            # YAML parsing tests
+│   └── param_test.go           # Parameter extraction tests
+├── pkg/portainer/models/
+│   └── *_test.go               # Model conversion tests
+└── tests/integration/
+    ├── helpers/test_env.go     # Test environment setup
+    └── *_test.go               # Integration tests
+```
+
+## Running Tests
+
+<Tabs>
+<TabItem label="All Tests">
+```bash
+make test-all
+```
+Runs both unit and integration tests. Integration tests require Docker.
+</TabItem>
+<TabItem label="Unit Only">
+```bash
+make test
+# or
+go test -v $(go list ./... | grep -v /tests/integration)
+```
+</TabItem>
+<TabItem label="Integration Only">
+```bash
+make test-integration
+# or
+go test -v ./tests/...
+```
+</TabItem>
+<TabItem label="Specific Test">
+```bash
+# Single test function
+go test -v ./internal/mcp/ -run TestHandleGetEnvironments
+
+# All tests in a package
+go test -v ./pkg/portainer/models/
+
+# Tests matching a pattern
+go test -v ./internal/mcp/ -run "TestHandle.*Stack"
+```
+</TabItem>
+<TabItem label="Coverage">
+```bash
+make test-coverage
+go tool cover -html=coverage.out -o coverage.html
+# Open coverage.html in your browser
+```
+</TabItem>
+</Tabs>
+
+## Unit Test Pattern
+
+All unit tests follow the **table-driven** pattern:
+
+```go
+func TestHandleCreateUser(t *testing.T) {
+    tests := []struct {
+        name      string
+        params    map[string]interface{}
+        setupMock func(*MockPortainerClient)
+        wantErr   bool
+        checkResult func(t *testing.T, result *mcp.CallToolResult)
+    }{
+        {
+            name: "creates user successfully",
+            params: map[string]interface{}{
+                "username": "alice",
+                "password": "securePass123",
+                "role":     float64(2),
+            },
+            setupMock: func(m *MockPortainerClient) {
+                m.CreateUserFunc = func(username, password string, role int) error {
+                    assert.Equal(t, "alice", username)
+                    assert.Equal(t, "securePass123", password)
+                    assert.Equal(t, 2, role)
+                    return nil
+                }
+            },
+            wantErr: false,
+        },
+        {
+            name:    "fails with missing username",
+            params:  map[string]interface{}{"password": "x", "role": float64(1)},
+            wantErr: true,
+        },
+        {
+            name: "fails when API returns error",
+            params: map[string]interface{}{
+                "username": "alice",
+                "password": "x",
+                "role":     float64(2),
+            },
+            setupMock: func(m *MockPortainerClient) {
+                m.CreateUserFunc = func(string, string, int) error {
+                    return fmt.Errorf("user already exists")
+                }
+            },
+            wantErr: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            mock := &MockPortainerClient{}
+            if tt.setupMock != nil {
+                tt.setupMock(mock)
+            }
+            server := NewTestServer(mock)
+
+            result, err := server.HandleCreateUser(tt.params)
+
+            if tt.wantErr {
+                assert.Error(t, err)
+                return
+            }
+            assert.NoError(t, err)
+            assert.NotNil(t, result)
+            if tt.checkResult != nil {
+                tt.checkResult(t, result)
+            }
+        })
+    }
+}
+```
+
+### Test Case Categories
+
+Every handler test should include at minimum:
+
+| Category | What to test |
+|----------|-------------|
+| **Happy path** | Valid params → expected result |
+| **Missing required params** | Each required param missing → error |
+| **Invalid param types** | Wrong types → error |
+| **Client errors** | API returns error → properly wrapped error |
+| **Edge cases** | Empty strings, zero IDs, boundary values |
+
+## Mock Client
+
+The shared mock lives in `internal/mcp/mocks_test.go`:
+
+```go
+type MockPortainerClient struct {
+    GetEnvironmentsFunc func() ([]models.Environment, error)
+    CreateUserFunc      func(string, string, int) error
+    // ... one function field per interface method
+}
+
+func (m *MockPortainerClient) GetEnvironments() ([]models.Environment, error) {
+    if m.GetEnvironmentsFunc != nil {
+        return m.GetEnvironmentsFunc()
+    }
+    return nil, nil // Default: return zero value
+}
+```
+
+<Aside type="tip">
+Only set the mock functions you need for each test case. Unset functions return zero values, making it easy to test individual code paths.
+</Aside>
+
+## Model Conversion Tests
+
+Model tests verify the raw → local conversion functions:
+
+```go
+func TestConvertEnvironment(t *testing.T) {
+    raw := &apimodels.PortainerEndpoint{
+        ID:   1,
+        Name: "production",
+        Type: 1,
+    }
+
+    result := models.ConvertEnvironment(raw)
+
+    assert.Equal(t, 1, result.ID)
+    assert.Equal(t, "production", result.Name)
+}
+
+func TestConvertEnvironment_NilInput(t *testing.T) {
+    result := models.ConvertEnvironment(nil)
+    assert.Equal(t, models.Environment{}, result)
+}
+```
+
+**Coverage target**: All model conversion functions should have tests for:
+- Valid input with all fields populated
+- Nil input (should return zero value, not panic)
+- Partial input (missing optional fields)
+- Nested struct nil checks
+
+## Integration Tests
+
+### Test Environment
+
+`tests/integration/helpers/test_env.go` provides:
+
+```go
+type TestEnv struct {
+    MCPServer  *mcp.Server          // MCP server connected to real Portainer
+    RawClient  *portainer.APIClient // Raw SDK client for ground-truth comparison
+    Cleanup    func()               // Stops containers, removes resources
+}
+
+func SetupTestEnv(t *testing.T) *TestEnv {
+    // 1. Start Portainer container via testcontainers-go
+    // 2. Wait for API to be ready
+    // 3. Create admin user and get API token
+    // 4. Initialize both raw client and MCP server
+    // 5. Return TestEnv with cleanup function
+}
+```
+
+### Writing Integration Tests
+
+```go
+func TestIntegrationStackCRUD(t *testing.T) {
+    if testing.Short() {
+        t.Skip("skipping integration test")
+    }
+
+    env := helpers.SetupTestEnv(t)
+    defer env.Cleanup()
+
+    // Create via MCP
+    createResult, err := env.MCPServer.HandleCreateStack(map[string]interface{}{
+        "name":          "test-stack",
+        "file":          "services:\n  web:\n    image: nginx",
+        "environmentId": float64(1),
+    })
+    require.NoError(t, err)
+
+    // Verify via raw client
+    stacks, err := env.RawClient.Stacks.StackList(nil, nil)
+    require.NoError(t, err)
+    assert.Len(t, stacks.Payload, 1)
+    assert.Equal(t, "test-stack", stacks.Payload[0].Name)
+}
+```
+
+## Validation Tests
+
+For tools with input validation (compose YAML, cron expressions, URLs):
+
+```go
+func TestHandleCreateEdgeJob_InvalidCron(t *testing.T) {
+    params := map[string]interface{}{
+        "name":           "test-job",
+        "fileContent":    "echo hello",
+        "cronExpression": "not a valid cron",
+    }
+
+    server := NewTestServer(&MockPortainerClient{})
+    _, err := server.HandleCreateEdgeJob(params)
+
+    assert.Error(t, err)
+    assert.Contains(t, err.Error(), "invalid cron expression")
+}
+```
+
+## Test Utilities
+
+### `testify` Assertion Patterns
+
+```go
+// Basic assertions
+assert.Equal(t, expected, actual)
+assert.NotNil(t, result)
+assert.Error(t, err)
+assert.NoError(t, err)
+assert.Contains(t, str, "substring")
+assert.Len(t, slice, 3)
+
+// Fatal assertions (stop test on failure)
+require.NoError(t, err)   // Use for setup steps
+require.NotNil(t, result) // Use when subsequent assertions depend on non-nil
+```
+
+### JSON Result Checking
+
+```go
+func assertResultContains(t *testing.T, result *mcp.CallToolResult, key string) {
+    t.Helper()
+    assert.NotNil(t, result)
+    content := result.Content[0].(mcp.TextContent)
+    assert.Contains(t, content.Text, key)
+}
+```

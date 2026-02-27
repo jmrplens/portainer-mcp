@@ -2,14 +2,13 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddHelmFeatures registers the Helm chart and release management tools on the MCP server.
 func (s *PortainerMCPServer) AddHelmFeatures() {
 	s.addToolIfExists(ToolListHelmRepositories, s.HandleListHelmRepositories())
 	s.addToolIfExists(ToolSearchHelmCharts, s.HandleSearchHelmCharts())
@@ -24,6 +23,7 @@ func (s *PortainerMCPServer) AddHelmFeatures() {
 	}
 }
 
+// HandleListHelmRepositories returns an MCP tool handler that lists helm repositories.
 func (s *PortainerMCPServer) HandleListHelmRepositories() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -32,21 +32,20 @@ func (s *PortainerMCPServer) HandleListHelmRepositories() server.ToolHandlerFunc
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
 		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		repos, err := s.cli.GetHelmRepositories(userId)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to list helm repositories", err), nil
 		}
 
-		data, err := json.Marshal(repos)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal helm repositories", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(repos, "failed to marshal helm repositories")
 	}
 }
 
+// HandleAddHelmRepository returns an MCP tool handler that registers helm repository.
 func (s *PortainerMCPServer) HandleAddHelmRepository() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -55,10 +54,17 @@ func (s *PortainerMCPServer) HandleAddHelmRepository() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
 		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		url, err := parser.GetString("url", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid url parameter", err), nil
+		}
+
+		if err := validateURL(url); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
 		}
 
 		repo, err := s.cli.CreateHelmRepository(userId, url)
@@ -66,15 +72,11 @@ func (s *PortainerMCPServer) HandleAddHelmRepository() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to add helm repository", err), nil
 		}
 
-		data, err := json.Marshal(repo)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal helm repository", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(repo, "failed to marshal helm repository")
 	}
 }
 
+// HandleRemoveHelmRepository returns an MCP tool handler that removes helm repository.
 func (s *PortainerMCPServer) HandleRemoveHelmRepository() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -83,10 +85,16 @@ func (s *PortainerMCPServer) HandleRemoveHelmRepository() server.ToolHandlerFunc
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid userId parameter", err), nil
 		}
+		if err := validatePositiveID("userId", userId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		repositoryId, err := parser.GetInt("repositoryId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid repositoryId parameter", err), nil
+		}
+		if err := validatePositiveID("repositoryId", repositoryId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteHelmRepository(userId, repositoryId)
@@ -98,6 +106,7 @@ func (s *PortainerMCPServer) HandleRemoveHelmRepository() server.ToolHandlerFunc
 	}
 }
 
+// HandleSearchHelmCharts returns an MCP tool handler that searches for helm charts.
 func (s *PortainerMCPServer) HandleSearchHelmCharts() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -105,6 +114,10 @@ func (s *PortainerMCPServer) HandleSearchHelmCharts() server.ToolHandlerFunc {
 		repo, err := parser.GetString("repo", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid repo parameter", err), nil
+		}
+
+		if err := validateURL(repo); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
 		}
 
 		chart, err := parser.GetString("chart", false)
@@ -121,6 +134,7 @@ func (s *PortainerMCPServer) HandleSearchHelmCharts() server.ToolHandlerFunc {
 	}
 }
 
+// HandleInstallHelmChart returns an MCP tool handler that installs helm chart.
 func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -128,6 +142,9 @@ func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		chart, err := parser.GetString("chart", true)
@@ -143,6 +160,10 @@ func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 		repo, err := parser.GetString("repo", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid repo parameter", err), nil
+		}
+
+		if err := validateURL(repo); err != nil {
+			return mcp.NewToolResultErrorFromErr("invalid repository URL", err), nil
 		}
 
 		namespace, err := parser.GetString("namespace", false)
@@ -165,15 +186,11 @@ func (s *PortainerMCPServer) HandleInstallHelmChart() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to install helm chart", err), nil
 		}
 
-		data, err := json.Marshal(release)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal helm release", err), nil
-		}
-
-		return mcp.NewToolResultText(fmt.Sprintf("Helm chart installed successfully: %s", string(data))), nil
+		return jsonResult(release, "failed to marshal helm release")
 	}
 }
 
+// HandleListHelmReleases returns an MCP tool handler that lists helm releases.
 func (s *PortainerMCPServer) HandleListHelmReleases() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -181,6 +198,9 @@ func (s *PortainerMCPServer) HandleListHelmReleases() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		namespace, err := parser.GetString("namespace", false)
@@ -203,15 +223,11 @@ func (s *PortainerMCPServer) HandleListHelmReleases() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to list helm releases", err), nil
 		}
 
-		data, err := json.Marshal(releases)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal helm releases", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(releases, "failed to marshal helm releases")
 	}
 }
 
+// HandleDeleteHelmRelease returns an MCP tool handler that deletes helm release.
 func (s *PortainerMCPServer) HandleDeleteHelmRelease() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -219,6 +235,9 @@ func (s *PortainerMCPServer) HandleDeleteHelmRelease() server.ToolHandlerFunc {
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		release, err := parser.GetString("release", true)
@@ -240,6 +259,7 @@ func (s *PortainerMCPServer) HandleDeleteHelmRelease() server.ToolHandlerFunc {
 	}
 }
 
+// HandleGetHelmReleaseHistory returns an MCP tool handler that retrieves helm release history.
 func (s *PortainerMCPServer) HandleGetHelmReleaseHistory() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -247,6 +267,9 @@ func (s *PortainerMCPServer) HandleGetHelmReleaseHistory() server.ToolHandlerFun
 		environmentId, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", environmentId); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		name, err := parser.GetString("name", true)
@@ -264,11 +287,6 @@ func (s *PortainerMCPServer) HandleGetHelmReleaseHistory() server.ToolHandlerFun
 			return mcp.NewToolResultErrorFromErr("failed to get helm release history", err), nil
 		}
 
-		data, err := json.Marshal(history)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal helm release history", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(history, "failed to marshal helm release history")
 	}
 }

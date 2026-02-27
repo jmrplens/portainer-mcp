@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListEdgeJobs verifies the HandleListEdgeJobs MCP tool handler.
 func TestHandleListEdgeJobs(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -70,6 +71,7 @@ func TestHandleListEdgeJobs(t *testing.T) {
 	}
 }
 
+// TestHandleGetEdgeJob verifies the HandleGetEdgeJob MCP tool handler.
 func TestHandleGetEdgeJob(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -143,6 +145,7 @@ func TestHandleGetEdgeJob(t *testing.T) {
 	}
 }
 
+// TestHandleGetEdgeJobFile verifies the HandleGetEdgeJobFile MCP tool handler.
 func TestHandleGetEdgeJobFile(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -210,6 +213,7 @@ func TestHandleGetEdgeJobFile(t *testing.T) {
 	}
 }
 
+// TestHandleCreateEdgeJob verifies the HandleCreateEdgeJob MCP tool handler.
 func TestHandleCreateEdgeJob(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -293,6 +297,7 @@ func TestHandleCreateEdgeJob(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteEdgeJob verifies the HandleDeleteEdgeJob MCP tool handler.
 func TestHandleDeleteEdgeJob(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -363,6 +368,7 @@ func TestHandleDeleteEdgeJob(t *testing.T) {
 	}
 }
 
+// TestHandleListEdgeUpdateSchedules verifies the HandleListEdgeUpdateSchedules MCP tool handler.
 func TestHandleListEdgeUpdateSchedules(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -1,0 +1,176 @@
+---
+title: Getting Started
+description: Get Portainer MCP running with your AI assistant in under 5 minutes.
+sidebar:
+  order: 2
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Prerequisites
+
+- A running **Portainer 2.31.2** instance (Business Edition or Community Edition)
+- An **API token** from your Portainer instance
+- An MCP-compatible AI assistant (Claude Desktop, VS Code with Copilot, Cursor, etc.)
+
+## Installation
+
+Choose any of the methods below:
+
+<Tabs>
+<TabItem label="Homebrew" icon="apple">
+```bash
+brew install portainer/tap/portainer-mcp
+```
+</TabItem>
+
+<TabItem label="Go install" icon="seti:go">
+```bash
+go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@latest
+```
+</TabItem>
+
+<TabItem label="Docker" icon="seti:docker">
+```bash
+docker pull ghcr.io/portainer/portainer-mcp:latest
+```
+</TabItem>
+
+<TabItem label="Binary" icon="down-caret">
+Download from [GitHub Releases](https://github.com/portainer/portainer-mcp/releases/latest):
+
+| Platform | Architecture | Archive |
+|:---------|:------------|:--------|
+| Linux | amd64 | `portainer-mcp_*_linux_amd64.tar.gz` |
+| Linux | arm64 | `portainer-mcp_*_linux_arm64.tar.gz` |
+| macOS | amd64 (Intel) | `portainer-mcp_*_darwin_amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `portainer-mcp_*_darwin_arm64.tar.gz` |
+| Windows | amd64 | `portainer-mcp_*_windows_amd64.zip` |
+| Windows | arm64 | `portainer-mcp_*_windows_arm64.zip` |
+
+```bash
+# Example: Linux amd64
+curl -L -o portainer-mcp.tar.gz \
+  https://github.com/portainer/portainer-mcp/releases/latest/download/portainer-mcp_linux_amd64.tar.gz
+tar xzf portainer-mcp.tar.gz
+chmod +x portainer-mcp
+```
+
+All releases include SHA256 checksums in `checksums.txt`.
+</TabItem>
+
+<TabItem label="From source" icon="github">
+Requires **Go 1.24+** and **Make**:
+
+```bash
+git clone https://github.com/portainer/portainer-mcp.git
+cd portainer-mcp
+make build
+# Binary: dist/portainer-mcp
+```
+
+Cross-compile for a specific platform:
+
+```bash
+make PLATFORM=linux ARCH=arm64 build
+```
+</TabItem>
+</Tabs>
+
+## Get a Portainer API Token
+
+<Steps>
+1. Log in to your Portainer instance
+2. Go to **My Account** → **API Keys**
+3. Click **Add API Key**, give it a name
+4. Copy the generated token (starts with `ptr_`)
+</Steps>
+
+<Aside type="caution">
+Keep your API token secure. It provides full access to your Portainer instance unless you use `-read-only` mode.
+</Aside>
+
+## Configure Your AI Assistant
+
+<Tabs>
+  <TabItem label="Claude Desktop">
+    Edit your Claude Desktop configuration file:
+
+    - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+    - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+    ```json
+    {
+      "mcpServers": {
+        "portainer": {
+          "command": "/path/to/portainer-mcp",
+          "args": [
+            "-server", "https://your-portainer:9443",
+            "-token", "ptr_your_api_token"
+          ]
+        }
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="VS Code (Copilot)">
+    Create `.vscode/mcp.json` in your workspace:
+
+    ```json
+    {
+      "servers": {
+        "portainer": {
+          "type": "stdio",
+          "command": "/path/to/portainer-mcp",
+          "args": [
+            "-server", "https://your-portainer:9443",
+            "-token", "ptr_your_api_token"
+          ]
+        }
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Cursor">
+    Go to **Cursor Settings → MCP** and add:
+
+    ```json
+    {
+      "mcpServers": {
+        "portainer": {
+          "command": "/path/to/portainer-mcp",
+          "args": [
+            "-server", "https://your-portainer:9443",
+            "-token", "ptr_your_api_token"
+          ]
+        }
+      }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+## Verify It Works
+
+Once configured, ask your AI assistant:
+
+> "What environments are available in Portainer?"
+
+You should see the assistant call `manage_environments` with `action: list_environments` and return your environment list.
+
+### More Examples
+
+```
+"Show me the Docker dashboard for environment 1"
+"List all stacks and their status"
+"Create a new team called 'developers'"
+"Search for nginx Helm charts"
+"What's the system status of Portainer?"
+```
+
+## Next Steps
+
+- [Configuration](/portainer-mcp/configuration/) — all CLI flags and options
+- [Meta-Tools Guide](/portainer-mcp/guides/meta-tools/) — understand the 15 grouped tools
+- [Tools Reference](/portainer-mcp/reference/api-reference/) — complete parameter details for all 98 tools
+- [Security](/portainer-mcp/guides/security/) — security considerations and read-only mode

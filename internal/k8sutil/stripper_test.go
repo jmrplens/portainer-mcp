@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// TestProcessRawKubernetesAPIResponse verifies process raw kubernetes a p i response behavior.
 func TestProcessRawKubernetesAPIResponse(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -502,6 +503,7 @@ func TestProcessRawKubernetesAPIResponse(t *testing.T) {
 	}
 }
 
+// TestRemoveManagedFieldsFromUnstructuredObject verifies remove managed fields from unstructured object behavior.
 func TestRemoveManagedFieldsFromUnstructuredObject(t *testing.T) {
 	tests := []struct {
 		name           string

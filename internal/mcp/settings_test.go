@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetSettings verifies the HandleGetSettings MCP tool handler.
 func TestHandleGetSettings(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -95,6 +96,7 @@ func TestHandleGetSettings(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateSettings verifies the HandleUpdateSettings MCP tool handler.
 func TestHandleUpdateSettings(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -192,6 +194,7 @@ func TestHandleUpdateSettings(t *testing.T) {
 	}
 }
 
+// TestHandleGetPublicSettings verifies the HandleGetPublicSettings MCP tool handler.
 func TestHandleGetPublicSettings(t *testing.T) {
 	tests := []struct {
 		name          string

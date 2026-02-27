@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddStackFeatures registers the stack management tools on the MCP server.
 func (s *PortainerMCPServer) AddStackFeatures() {
 	s.addToolIfExists(ToolListStacks, s.HandleGetStacks())
 	s.addToolIfExists(ToolListRegularStacks, s.HandleListRegularStacks())
@@ -29,6 +29,7 @@ func (s *PortainerMCPServer) AddStackFeatures() {
 	}
 }
 
+// HandleGetStacks returns an MCP tool handler that retrieves stacks.
 func (s *PortainerMCPServer) HandleGetStacks() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		stacks, err := s.cli.GetStacks()
@@ -36,15 +37,11 @@ func (s *PortainerMCPServer) HandleGetStacks() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get stacks", err), nil
 		}
 
-		data, err := json.Marshal(stacks)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stacks", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stacks, "failed to marshal stacks")
 	}
 }
 
+// HandleListRegularStacks returns an MCP tool handler that lists regular stacks.
 func (s *PortainerMCPServer) HandleListRegularStacks() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		stacks, err := s.cli.GetRegularStacks()
@@ -52,15 +49,11 @@ func (s *PortainerMCPServer) HandleListRegularStacks() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to list regular stacks", err), nil
 		}
 
-		data, err := json.Marshal(stacks)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal regular stacks", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stacks, "failed to marshal regular stacks")
 	}
 }
 
+// HandleGetStackFile returns an MCP tool handler that retrieves stack file.
 func (s *PortainerMCPServer) HandleGetStackFile() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -68,6 +61,9 @@ func (s *PortainerMCPServer) HandleGetStackFile() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		stackFile, err := s.cli.GetStackFile(id)
@@ -79,6 +75,7 @@ func (s *PortainerMCPServer) HandleGetStackFile() server.ToolHandlerFunc {
 	}
 }
 
+// HandleCreateStack returns an MCP tool handler that creates stack.
 func (s *PortainerMCPServer) HandleCreateStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -87,10 +84,16 @@ func (s *PortainerMCPServer) HandleCreateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid name parameter", err), nil
 		}
+		if err := validateName(name); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		file, err := parser.GetString("file", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid file parameter", err), nil
+		}
+		if err := validateComposeYAML(file); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		environmentGroupIds, err := parser.GetArrayOfIntegers("environmentGroupIds", true)
@@ -107,6 +110,7 @@ func (s *PortainerMCPServer) HandleCreateStack() server.ToolHandlerFunc {
 	}
 }
 
+// HandleUpdateStack returns an MCP tool handler that updates stack.
 func (s *PortainerMCPServer) HandleUpdateStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -115,10 +119,16 @@ func (s *PortainerMCPServer) HandleUpdateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		file, err := parser.GetString("file", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid file parameter", err), nil
+		}
+		if err := validateComposeYAML(file); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		environmentGroupIds, err := parser.GetArrayOfIntegers("environmentGroupIds", true)
@@ -135,6 +145,7 @@ func (s *PortainerMCPServer) HandleUpdateStack() server.ToolHandlerFunc {
 	}
 }
 
+// HandleInspectStack returns an MCP tool handler that retrieves detailed information about stack.
 func (s *PortainerMCPServer) HandleInspectStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -143,21 +154,20 @@ func (s *PortainerMCPServer) HandleInspectStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		stack, err := s.cli.InspectStack(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to inspect stack", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }
 
+// HandleDeleteStack returns an MCP tool handler that deletes stack.
 func (s *PortainerMCPServer) HandleDeleteStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -166,10 +176,16 @@ func (s *PortainerMCPServer) HandleDeleteStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		removeVolumes, err := parser.GetBoolean("removeVolumes", false)
@@ -186,6 +202,7 @@ func (s *PortainerMCPServer) HandleDeleteStack() server.ToolHandlerFunc {
 	}
 }
 
+// HandleInspectStackFile returns an MCP tool handler that retrieves detailed information about stack file.
 func (s *PortainerMCPServer) HandleInspectStackFile() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -193,6 +210,9 @@ func (s *PortainerMCPServer) HandleInspectStackFile() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		content, err := s.cli.InspectStackFile(id)
@@ -204,6 +224,7 @@ func (s *PortainerMCPServer) HandleInspectStackFile() server.ToolHandlerFunc {
 	}
 }
 
+// HandleUpdateStackGit returns an MCP tool handler that updates stack git.
 func (s *PortainerMCPServer) HandleUpdateStackGit() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -212,10 +233,16 @@ func (s *PortainerMCPServer) HandleUpdateStackGit() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		referenceName, err := parser.GetString("referenceName", false)
@@ -233,15 +260,11 @@ func (s *PortainerMCPServer) HandleUpdateStackGit() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to update stack git", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }
 
+// HandleRedeployStackGit returns an MCP tool handler that redeploys stack git.
 func (s *PortainerMCPServer) HandleRedeployStackGit() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -250,10 +273,16 @@ func (s *PortainerMCPServer) HandleRedeployStackGit() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		pullImage, err := parser.GetBoolean("pullImage", false)
@@ -271,15 +300,11 @@ func (s *PortainerMCPServer) HandleRedeployStackGit() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to redeploy stack", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }
 
+// HandleStartStack returns an MCP tool handler that starts stack.
 func (s *PortainerMCPServer) HandleStartStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -288,10 +313,16 @@ func (s *PortainerMCPServer) HandleStartStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		stack, err := s.cli.StartStack(id, endpointID)
@@ -299,15 +330,11 @@ func (s *PortainerMCPServer) HandleStartStack() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to start stack", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }
 
+// HandleStopStack returns an MCP tool handler that stops stack.
 func (s *PortainerMCPServer) HandleStopStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -316,10 +343,16 @@ func (s *PortainerMCPServer) HandleStopStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
+		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		stack, err := s.cli.StopStack(id, endpointID)
@@ -327,15 +360,11 @@ func (s *PortainerMCPServer) HandleStopStack() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to stop stack", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }
 
+// HandleMigrateStack returns an MCP tool handler that migrates stack.
 func (s *PortainerMCPServer) HandleMigrateStack() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -344,15 +373,24 @@ func (s *PortainerMCPServer) HandleMigrateStack() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		endpointID, err := parser.GetInt("environmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid environmentId parameter", err), nil
 		}
+		if err := validatePositiveID("environmentId", endpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		targetEndpointID, err := parser.GetInt("targetEnvironmentId", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid targetEnvironmentId parameter", err), nil
+		}
+		if err := validatePositiveID("targetEnvironmentId", targetEndpointID); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		name, err := parser.GetString("name", false)
@@ -365,11 +403,6 @@ func (s *PortainerMCPServer) HandleMigrateStack() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to migrate stack", err), nil
 		}
 
-		data, err := json.Marshal(stack)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal stack", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(stack, "failed to marshal stack")
 	}
 }

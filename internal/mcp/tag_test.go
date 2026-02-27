@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetEnvironmentTags verifies the HandleGetEnvironmentTags MCP tool handler.
 func TestHandleGetEnvironmentTags(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -82,6 +83,7 @@ func TestHandleGetEnvironmentTags(t *testing.T) {
 	}
 }
 
+// TestHandleCreateEnvironmentTag verifies the HandleCreateEnvironmentTag MCP tool handler.
 func TestHandleCreateEnvironmentTag(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -169,6 +171,7 @@ func TestHandleCreateEnvironmentTag(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteEnvironmentTag verifies the HandleDeleteEnvironmentTag MCP tool handler.
 func TestHandleDeleteEnvironmentTag(t *testing.T) {
 	tests := []struct {
 		name        string

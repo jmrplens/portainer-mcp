@@ -89,6 +89,7 @@ func min(a, b int) int {
 // ==================== READ-ONLY TESTS ====================
 // These tests only read data, never modify anything.
 
+// TestLive_ReadOnly verifies live_ read only behavior.
 func TestLive_ReadOnly(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -415,6 +416,7 @@ func TestLive_ReadOnly(t *testing.T) {
 // ==================== CRUD LIFECYCLE TESTS ====================
 // These tests create temporary resources, verify them, and clean up.
 
+// TestLive_CRUD_Tags verifies live_ c r u d_ tags behavior.
 func TestLive_CRUD_Tags(t *testing.T) {
 	env := newLiveEnv(t)
 	const testTagName = "mcp-live-test-tag"
@@ -452,6 +454,7 @@ func TestLive_CRUD_Tags(t *testing.T) {
 	assert.NotZero(t, tagID)
 }
 
+// TestLive_CRUD_Teams verifies live_ c r u d_ teams behavior.
 func TestLive_CRUD_Teams(t *testing.T) {
 	env := newLiveEnv(t)
 	const testTeamName = "mcp-live-test-team"
@@ -506,6 +509,7 @@ func TestLive_CRUD_Teams(t *testing.T) {
 	assert.Equal(t, newName, data["name"])
 }
 
+// TestLive_CRUD_Users verifies live_ c r u d_ users behavior.
 func TestLive_CRUD_Users(t *testing.T) {
 	env := newLiveEnv(t)
 	const testUsername = "mcp-live-test-user"
@@ -561,6 +565,7 @@ func TestLive_CRUD_Users(t *testing.T) {
 	assert.Equal(t, "admin", data["role"])
 }
 
+// TestLive_CRUD_Registries verifies live_ c r u d_ registries behavior.
 func TestLive_CRUD_Registries(t *testing.T) {
 	env := newLiveEnv(t)
 	const testRegistryName = "mcp-live-test-registry"
@@ -617,6 +622,7 @@ func TestLive_CRUD_Registries(t *testing.T) {
 	assert.Equal(t, testRegistryName+"-updated", data["name"])
 }
 
+// TestLive_CRUD_CustomTemplates verifies live_ c r u d_ custom templates behavior.
 func TestLive_CRUD_CustomTemplates(t *testing.T) {
 	env := newLiveEnv(t)
 	const testTemplateName = "mcp-live-test-template"
@@ -668,6 +674,7 @@ func TestLive_CRUD_CustomTemplates(t *testing.T) {
 
 // ==================== SETTINGS TESTS (save/restore) ====================
 
+// TestLive_Settings verifies live_ settings behavior.
 func TestLive_Settings(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -704,6 +711,7 @@ func TestLive_Settings(t *testing.T) {
 
 // ==================== AUTH TESTS ====================
 
+// TestLive_Auth verifies live_ auth behavior.
 func TestLive_Auth(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -728,6 +736,7 @@ func TestLive_Auth(t *testing.T) {
 
 // ==================== DOCKER PROXY TESTS (read-only) ====================
 
+// TestLive_DockerProxy verifies live_ docker proxy behavior.
 func TestLive_DockerProxy(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -784,6 +793,7 @@ func TestLive_DockerProxy(t *testing.T) {
 
 // ==================== DOCKER DASHBOARD ====================
 
+// TestLive_DockerDashboard verifies live_ docker dashboard behavior.
 func TestLive_DockerDashboard(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -819,6 +829,7 @@ func TestLive_DockerDashboard(t *testing.T) {
 
 // ==================== ENVIRONMENT SNAPSHOT (safe) ====================
 
+// TestLive_EnvironmentSnapshot verifies live_ environment snapshot behavior.
 func TestLive_EnvironmentSnapshot(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -855,6 +866,7 @@ func TestLive_EnvironmentSnapshot(t *testing.T) {
 
 // ==================== KUBERNETES TESTS (read-only) ====================
 
+// TestLive_Kubernetes verifies live_ kubernetes behavior.
 func TestLive_Kubernetes(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -895,6 +907,7 @@ func TestLive_Kubernetes(t *testing.T) {
 
 // ==================== HELM TESTS (read-only) ====================
 
+// TestLive_Helm verifies live_ helm behavior.
 func TestLive_Helm(t *testing.T) {
 	env := newLiveEnv(t)
 
@@ -938,6 +951,7 @@ func TestLive_Helm(t *testing.T) {
 
 // ==================== ACCESS GROUP CRUD ====================
 
+// TestLive_CRUD_AccessGroups verifies live_ c r u d_ access groups behavior.
 func TestLive_CRUD_AccessGroups(t *testing.T) {
 	env := newLiveEnv(t)
 	const testGroupName = "mcp-live-test-access-group"

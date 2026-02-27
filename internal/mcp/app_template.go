@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -24,12 +23,7 @@ func (s *PortainerMCPServer) HandleListAppTemplates() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to list app templates", err), nil
 		}
 
-		data, err := json.Marshal(templates)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal app templates", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(templates, "failed to marshal app templates")
 	}
 }
 

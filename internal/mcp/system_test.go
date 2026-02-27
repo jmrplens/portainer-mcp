@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetSystemStatus verifies the HandleGetSystemStatus MCP tool handler.
 func TestHandleGetSystemStatus(t *testing.T) {
 	tests := []struct {
 		name        string

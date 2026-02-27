@@ -8,6 +8,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/portainer/models"
 )
 
+// GetSettings retrieves settings.
 func (c *PortainerClient) GetSettings() (models.PortainerSettings, error) {
 	settings, err := c.cli.GetSettings()
 	if err != nil {

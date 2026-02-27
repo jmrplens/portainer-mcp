@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -10,6 +9,7 @@ import (
 	"github.com/portainer/portainer-mcp/pkg/toolgen"
 )
 
+// AddUserFeatures registers the user management tools on the MCP server.
 func (s *PortainerMCPServer) AddUserFeatures() {
 	s.addToolIfExists(ToolListUsers, s.HandleGetUsers())
 	s.addToolIfExists(ToolGetUser, s.HandleGetUser())
@@ -21,6 +21,7 @@ func (s *PortainerMCPServer) AddUserFeatures() {
 	}
 }
 
+// HandleGetUsers returns an MCP tool handler that retrieves users.
 func (s *PortainerMCPServer) HandleGetUsers() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		users, err := s.cli.GetUsers()
@@ -28,15 +29,11 @@ func (s *PortainerMCPServer) HandleGetUsers() server.ToolHandlerFunc {
 			return mcp.NewToolResultErrorFromErr("failed to get users", err), nil
 		}
 
-		data, err := json.Marshal(users)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal users", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(users, "failed to marshal users")
 	}
 }
 
+// HandleUpdateUserRole returns an MCP tool handler that updates user role.
 func (s *PortainerMCPServer) HandleUpdateUserRole() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -44,6 +41,9 @@ func (s *PortainerMCPServer) HandleUpdateUserRole() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		role, err := parser.GetString("role", true)
@@ -64,6 +64,7 @@ func (s *PortainerMCPServer) HandleUpdateUserRole() server.ToolHandlerFunc {
 	}
 }
 
+// HandleCreateUser returns an MCP tool handler that creates user.
 func (s *PortainerMCPServer) HandleCreateUser() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -96,6 +97,7 @@ func (s *PortainerMCPServer) HandleCreateUser() server.ToolHandlerFunc {
 	}
 }
 
+// HandleGetUser returns an MCP tool handler that retrieves user.
 func (s *PortainerMCPServer) HandleGetUser() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -104,21 +106,20 @@ func (s *PortainerMCPServer) HandleGetUser() server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
 		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		user, err := s.cli.GetUser(id)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get user", err), nil
 		}
 
-		data, err := json.Marshal(user)
-		if err != nil {
-			return mcp.NewToolResultErrorFromErr("failed to marshal user", err), nil
-		}
-
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(user, "failed to marshal user")
 	}
 }
 
+// HandleDeleteUser returns an MCP tool handler that deletes user.
 func (s *PortainerMCPServer) HandleDeleteUser() server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		parser := toolgen.NewParameterParser(request)
@@ -126,6 +127,9 @@ func (s *PortainerMCPServer) HandleDeleteUser() server.ToolHandlerFunc {
 		id, err := parser.GetInt("id", true)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("invalid id parameter", err), nil
+		}
+		if err := validatePositiveID("id", id); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		err = s.cli.DeleteUser(id)

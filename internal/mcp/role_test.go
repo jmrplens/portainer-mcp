@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListRoles verifies the HandleListRoles MCP tool handler.
 func TestHandleListRoles(t *testing.T) {
 	tests := []struct {
 		name        string

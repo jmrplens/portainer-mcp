@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleAuthenticateUser verifies the HandleAuthenticateUser MCP tool handler.
 func TestHandleAuthenticateUser(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -115,6 +116,7 @@ func TestHandleAuthenticateUser(t *testing.T) {
 	}
 }
 
+// TestHandleLogout verifies the HandleLogout MCP tool handler.
 func TestHandleLogout(t *testing.T) {
 	tests := []struct {
 		name        string

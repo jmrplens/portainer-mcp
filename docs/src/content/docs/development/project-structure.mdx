@@ -1,0 +1,147 @@
+---
+title: Project Structure
+description: Detailed breakdown of every package, file, and layer in the Portainer MCP codebase.
+---
+
+import { FileTree, Aside } from '@astrojs/starlight/components';
+
+## Repository Layout
+
+<FileTree>
+- cmd/
+  - portainer-mcp/
+    - mcp.go — CLI entry point, flags, server bootstrap
+  - token-count/
+    - token.go — Utility to estimate tool-definition token counts
+- internal/
+  - mcp/
+    - server.go — Server struct, PortainerClient interface, registration
+    - schema.go — Tool name constants (ToolXxx)
+    - metatool_registry.go — Meta-tool definitions and action routing tables
+    - metatool_handler.go — Generic meta-tool dispatch handler
+    - utils.go — Shared utilities (JSON serialization, response helpers)
+    - access_group.go — Access group CRUD handlers
+    - app_template.go — Application template handlers
+    - auth.go — Authentication handler
+    - backup.go — Backup / restore handlers
+    - custom_template.go — Custom template handlers
+    - docker.go — Docker proxy and dashboard
+    - edge_job.go — Edge job handlers
+    - environment.go — Environment + group + tag handlers
+    - group.go — Environment group handlers
+    - helm.go — Helm chart / release / repository handlers
+    - kubernetes.go — Kubernetes proxy + native handlers
+    - motd.go — Message of the Day handler
+    - registry.go — Container registry handlers
+    - role.go — Role listing handler
+    - settings.go — Server settings handler
+    - ssl.go — SSL certificate handlers
+    - stack.go — Stack CRUD handlers
+    - system.go — System info handler
+    - tag.go — Tag handlers
+    - team.go — Team + membership handlers
+    - user.go — User CRUD handlers
+    - webhook.go — Webhook handlers
+    - mocks_test.go — Shared mock client for unit tests
+    - *_test.go — Unit tests per domain
+  - tooldef/
+    - tooldef.go — Embedded tools.yaml loader
+    - tooldef_test.go
+  - k8sutil/
+    - stripper.go — Removes verbose K8s metadata from responses
+    - stripper_test.go
+- pkg/
+  - portainer/
+    - client/
+      - adapter.go — Swagger/go-openapi transport adapter
+      - client.go — NewPortainerClient constructor + options
+      - access_group.go — Access group API calls
+      - app_template.go — App template API calls
+      - … (one file per domain)
+    - models/
+      - access_group.go — AccessGroup + conversion from raw
+      - environment.go — Environment + EnvironmentGroup
+      - … (one file per domain)
+  - toolgen/
+    - yaml.go — YAML → MCP tool definition parser
+    - param.go — Parameter extraction helpers (GetRequiredString, GetInt, etc.)
+    - result.go — Response formatting utilities
+    - yaml_test.go
+    - param_test.go
+- tests/
+  - integration/
+    - helpers/
+      - test_env.go — Test environment setup (Docker + raw client + MCP server)
+    - *_test.go — Integration tests per domain
+- tools.yaml — All 98 tool definitions (embedded at build time)
+- .goreleaser.yaml — GoReleaser multi-platform release config
+- Makefile — Build, test, lint, format targets
+- docs/ — Starlight documentation site (this site)
+</FileTree>
+
+## Layer Diagram
+
+```
+┌─────────────────────────────────────────────────┐
+│                 AI Assistant (LLM)               │
+│          Claude, VS Code Copilot, Cursor         │
+└──────────────────────┬──────────────────────────┘
+                       │ MCP Protocol (stdio)
+┌──────────────────────▼──────────────────────────┐
+│                  MCP Server                      │
+│  cmd/portainer-mcp/mcp.go                        │
+│  ┌─────────────────────────────────────────────┐ │
+│  │  Meta-Tool Layer (15 grouped tools)         │ │
+│  │  internal/mcp/metatool_*.go                 │ │
+│  ├─────────────────────────────────────────────┤ │
+│  │  Granular Tool Layer (98 individual tools)  │ │
+│  │  internal/mcp/<domain>.go handlers          │ │
+│  ├─────────────────────────────────────────────┤ │
+│  │  Tool Definition Layer                      │ │
+│  │  tools.yaml → internal/tooldef + pkg/toolgen│ │
+│  └─────────────────────────────────────────────┘ │
+└──────────────────────┬──────────────────────────┘
+                       │ Go function calls
+┌──────────────────────▼──────────────────────────┐
+│              Wrapper Client                      │
+│  pkg/portainer/client/*.go                       │
+│  pkg/portainer/models/*.go (local models)        │
+└──────────────────────┬──────────────────────────┘
+                       │ Swagger / go-openapi
+┌──────────────────────▼──────────────────────────┐
+│          Raw Client SDK                          │
+│  portainer/client-api-go/v2                      │
+│  (auto-generated Swagger client)                 │
+└──────────────────────┬──────────────────────────┘
+                       │ HTTPS REST
+┌──────────────────────▼──────────────────────────┐
+│            Portainer Server API                   │
+└──────────────────────────────────────────────────┘
+```
+
+## Key Source Files
+
+| File | Purpose |
+|------|---------|
+| `cmd/portainer-mcp/mcp.go` | CLI flags, server initialization, version check |
+| `internal/mcp/server.go` | `PortainerClient` interface (~170 methods), `Server` struct, `AddXxxFeatures()` registration |
+| `internal/mcp/schema.go` | `ToolXxx` string constants mapping tool names |
+| `internal/mcp/metatool_registry.go` | Maps 15 meta-tools → action lists → handler functions |
+| `internal/mcp/metatool_handler.go` | Generic handler that routes `action` param to the correct granular handler |
+| `tools.yaml` | YAML definitions for all 98 tools (names, descriptions, parameters, annotations) |
+| `pkg/toolgen/yaml.go` | Parses `tools.yaml` into MCP `Tool` objects |
+| `pkg/toolgen/param.go` | `GetRequiredString()`, `GetInt()`, etc. — extracts typed parameters from `map[string]interface{}` |
+| `pkg/portainer/client/adapter.go` | Creates the HTTP transport for the Swagger client |
+| `pkg/portainer/client/client.go` | `NewPortainerClient()` constructor with functional options |
+
+<Aside type="tip">
+The `PortainerClient` interface in `server.go` is the central contract. Every handler depends on it, and the mock in `mocks_test.go` implements it for unit tests.
+</Aside>
+
+## Build Artifacts
+
+| Target | Output |
+|--------|--------|
+| `make build` | `dist/portainer-mcp` (current platform) |
+| `make release` | `dist/portainer-mcp` (trimmed, production) |
+| `goreleaser release` | Multi-platform binaries, Docker images, checksums |

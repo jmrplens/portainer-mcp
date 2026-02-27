@@ -1,3 +1,6 @@
+// Package k8sutil provides utilities for processing Kubernetes API responses.
+// It includes functions to strip verbose metadata fields (such as managedFields)
+// from JSON payloads to reduce response size.
 package k8sutil
 
 import (
@@ -58,7 +61,9 @@ func ProcessRawKubernetesAPIResponse(httpResp *http.Response) ([]byte, error) {
 	}
 	defer httpResp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(httpResp.Body)
+	// Limit response body to 10MB to prevent OOM on large responses
+	const maxResponseSize = 10 * 1024 * 1024
+	bodyBytes, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

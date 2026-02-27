@@ -24,6 +24,10 @@ type CustomTemplate struct {
 // Returns:
 //   - A local CustomTemplate model
 func ConvertCustomTemplateToLocal(raw *apimodels.PortainereeCustomTemplate) CustomTemplate {
+	if raw == nil {
+		return CustomTemplate{}
+	}
+
 	return CustomTemplate{
 		ID:              int(raw.ID),
 		Title:           raw.Title,

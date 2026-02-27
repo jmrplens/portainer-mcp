@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// TestGetAccessGroups verifies get access groups behavior.
 func TestGetAccessGroups(t *testing.T) {
 	tests := []struct {
 		name                  string
@@ -144,6 +145,7 @@ func TestGetAccessGroups(t *testing.T) {
 	}
 }
 
+// TestCreateAccessGroup verifies create access group behavior.
 func TestCreateAccessGroup(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -190,6 +192,7 @@ func TestCreateAccessGroup(t *testing.T) {
 	}
 }
 
+// TestUpdateAccessGroupName verifies update access group name behavior.
 func TestUpdateAccessGroupName(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -231,6 +234,7 @@ func TestUpdateAccessGroupName(t *testing.T) {
 	}
 }
 
+// TestUpdateAccessGroupUserAccesses verifies update access group user accesses behavior.
 func TestUpdateAccessGroupUserAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -277,6 +281,7 @@ func TestUpdateAccessGroupUserAccesses(t *testing.T) {
 	}
 }
 
+// TestUpdateAccessGroupTeamAccesses verifies update access group team accesses behavior.
 func TestUpdateAccessGroupTeamAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -323,6 +328,7 @@ func TestUpdateAccessGroupTeamAccesses(t *testing.T) {
 	}
 }
 
+// TestAddEnvironmentToAccessGroup verifies add environment to access group behavior.
 func TestAddEnvironmentToAccessGroup(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -364,6 +370,7 @@ func TestAddEnvironmentToAccessGroup(t *testing.T) {
 	}
 }
 
+// TestRemoveEnvironmentFromAccessGroup verifies remove environment from access group behavior.
 func TestRemoveEnvironmentFromAccessGroup(t *testing.T) {
 	tests := []struct {
 		name          string

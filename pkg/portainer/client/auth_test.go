@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestAuthenticateUser verifies authenticate user behavior.
 func TestAuthenticateUser(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -59,6 +60,7 @@ func TestAuthenticateUser(t *testing.T) {
 	}
 }
 
+// TestLogout verifies logout behavior.
 func TestLogout(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -1,0 +1,11 @@
+/* Custom styles for Portainer MCP docs */
+:root {
+  --sl-color-accent-low: #0db7ed20;
+  --sl-color-accent: #0db7ed;
+  --sl-color-accent-high: #0a8ab5;
+}
+
+/* Code blocks */
+.expressive-code pre {
+  border-radius: 0.5rem;
+}

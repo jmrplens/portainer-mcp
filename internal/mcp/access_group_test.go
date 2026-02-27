@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleGetAccessGroups verifies the HandleGetAccessGroups MCP tool handler.
 func TestHandleGetAccessGroups(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -77,6 +78,7 @@ func TestHandleGetAccessGroups(t *testing.T) {
 	}
 }
 
+// TestHandleCreateAccessGroup verifies the HandleCreateAccessGroup MCP tool handler.
 func TestHandleCreateAccessGroup(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -206,6 +208,7 @@ func TestHandleCreateAccessGroup(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateAccessGroupName verifies the HandleUpdateAccessGroupName MCP tool handler.
 func TestHandleUpdateAccessGroupName(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -307,6 +310,7 @@ func TestHandleUpdateAccessGroupName(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateAccessGroupUserAccesses verifies the HandleUpdateAccessGroupUserAccesses MCP tool handler.
 func TestHandleUpdateAccessGroupUserAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -444,6 +448,7 @@ func TestHandleUpdateAccessGroupUserAccesses(t *testing.T) {
 	}
 }
 
+// TestHandleUpdateAccessGroupTeamAccesses verifies the HandleUpdateAccessGroupTeamAccesses MCP tool handler.
 func TestHandleUpdateAccessGroupTeamAccesses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -581,6 +586,7 @@ func TestHandleUpdateAccessGroupTeamAccesses(t *testing.T) {
 	}
 }
 
+// TestHandleAddEnvironmentToAccessGroup verifies the HandleAddEnvironmentToAccessGroup MCP tool handler.
 func TestHandleAddEnvironmentToAccessGroup(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -682,6 +688,7 @@ func TestHandleAddEnvironmentToAccessGroup(t *testing.T) {
 	}
 }
 
+// TestHandleRemoveEnvironmentFromAccessGroup verifies the HandleRemoveEnvironmentFromAccessGroup MCP tool handler.
 func TestHandleRemoveEnvironmentFromAccessGroup(t *testing.T) {
 	tests := []struct {
 		name        string

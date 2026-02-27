@@ -1,0 +1,105 @@
+---
+title: Troubleshooting & FAQ
+description: Common issues and frequently asked questions about Portainer MCP Server.
+sidebar:
+  order: 30
+---
+
+import { Aside, Steps, Badge } from '@astrojs/starlight/components';
+
+## Frequently Asked Questions
+
+### What Portainer version is required?
+
+Portainer MCP Server is tested and validated against a specific Portainer CE/EE version.
+The required version is checked automatically at startup. You can bypass this check with
+the `-disable-version-check` flag, but this is **not recommended** for production use.
+
+### What is the difference between meta-tools and granular tools?
+
+By default, the server exposes **15 meta-tools** — grouped interfaces where related
+operations (list, create, update, delete) are selected via an `action` parameter. This
+reduces token usage and simplifies discovery for LLM-based clients.
+
+If your MCP client works better with individual tools, use the `-granular-tools` flag
+to expose all **98 individual tools** instead.
+
+### Can I use this in read-only mode?
+
+Yes. Pass the `-read-only` flag to restrict the server to read-only operations only.
+All write/delete/update tools are excluded when this flag is active.
+
+### Does the server support HTTPS / TLS?
+
+Yes. The server connects to the Portainer API over HTTPS by default. If your Portainer
+instance uses a self-signed certificate, pass `-skip-tls-verify` to disable certificate
+validation.
+
+<Aside type="caution">
+  Skipping TLS verification is not recommended for production environments.
+</Aside>
+
+---
+
+## Common Issues
+
+### Connection refused or timeout
+
+<Steps>
+1. Verify the Portainer server is running and accessible from the machine running the MCP server.
+2. Check the `-server` URL includes the correct scheme (`https://`) and port.
+3. Ensure no firewall or network policy is blocking the connection.
+4. Try accessing the Portainer API directly: `curl -k https://your-server:9443/api/status`
+</Steps>
+
+### Version mismatch error at startup
+
+The server validates compatibility with your Portainer version. If you see:
+
+```
+Error: Portainer version X.Y.Z is not compatible with this MCP server
+```
+
+Options:
+- **Upgrade Portainer** to the supported version.
+- **Bypass the check** with `-disable-version-check` (use at your own risk).
+
+### Authentication failed (401 Unauthorized)
+
+- Verify your API token is valid and not expired.
+- Ensure the token has sufficient permissions for the operations you need.
+- Admin tokens are required for most management operations.
+
+### Tool not found errors
+
+If your MCP client reports a tool is not available:
+
+- In **meta-tool mode** (default), use the grouped tool name with the `action` parameter.
+- In **granular mode** (`-granular-tools`), individual tool names are available.
+- In **read-only mode** (`-read-only`), write operations are excluded.
+
+### Docker / Kubernetes proxy errors
+
+Proxy operations forward requests to the Docker or Kubernetes API through Portainer.
+Common issues:
+
+- **Environment not found**: Verify the environment ID exists in Portainer.
+- **Permission denied**: The API token must have access to the target environment.
+- **Invalid API path**: The path must start with `/` and follow the Docker/Kubernetes API specification.
+
+### Build errors after cloning
+
+<Steps>
+1. Ensure Go 1.24+ is installed: `go version`
+2. Run `go mod download` to fetch dependencies.
+3. Build with `make build` or `go build ./...`
+4. If using the docs site, install pnpm and run `cd docs && pnpm install`
+</Steps>
+
+---
+
+## Getting Help
+
+- **GitHub Issues**: [portainer/portainer-mcp/issues](https://github.com/portainer/portainer-mcp/issues)
+- **Contributing Guide**: See the [Contributing](/portainer-mcp/development/contributing/) page.
+- **Security Issues**: See the [Security Policy](/portainer-mcp/guides/security/) page.

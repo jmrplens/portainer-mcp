@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestHandleListAppTemplates verifies the HandleListAppTemplates MCP tool handler.
 func TestHandleListAppTemplates(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -93,6 +94,7 @@ func TestHandleListAppTemplates(t *testing.T) {
 	}
 }
 
+// TestHandleGetAppTemplateFile verifies the HandleGetAppTemplateFile MCP tool handler.
 func TestHandleGetAppTemplateFile(t *testing.T) {
 	tests := []struct {
 		name          string

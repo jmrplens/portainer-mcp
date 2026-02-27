@@ -6,10 +6,8 @@ import "slices"
 const (
 	ToolCreateEnvironmentGroup             = "createEnvironmentGroup"
 	ToolListEnvironmentGroups              = "listEnvironmentGroups"
-	ToolUpdateEnvironmentGroup             = "updateEnvironmentGroup"
 	ToolCreateAccessGroup                  = "createAccessGroup"
 	ToolListAccessGroups                   = "listAccessGroups"
-	ToolUpdateAccessGroup                  = "updateAccessGroup"
 	ToolAddEnvironmentToAccessGroup        = "addEnvironmentToAccessGroup"
 	ToolRemoveEnvironmentFromAccessGroup   = "removeEnvironmentFromAccessGroup"
 	ToolListEnvironments                   = "listEnvironments"
@@ -17,7 +15,6 @@ const (
 	ToolDeleteEnvironment                  = "deleteEnvironment"
 	ToolSnapshotEnvironment                = "snapshotEnvironment"
 	ToolSnapshotAllEnvironments            = "snapshotAllEnvironments"
-	ToolUpdateEnvironment                  = "updateEnvironment"
 	ToolGetStackFile                       = "getStackFile"
 	ToolCreateStack                        = "createStack"
 	ToolListStacks                         = "listStacks"
@@ -155,4 +152,49 @@ func isValidAccessLevel(access string) bool {
 // isValidUserRole checks if a given string is a valid user role
 func isValidUserRole(role string) bool {
 	return slices.Contains(AllUserRoles, role)
+}
+
+// isValidHTTPMethod checks if a given string is a valid HTTP method for proxy requests
+func isValidHTTPMethod(method string) bool {
+	validMethods := []string{"GET", "POST", "PUT", "DELETE", "HEAD", "PATCH"}
+	return slices.Contains(validMethods, method)
+}
+
+// Registry type constants as used by the Portainer API
+const (
+	RegistryTypeQuay      = 1 // Quay.io
+	RegistryTypeAzure     = 2 // Azure Container Registry
+	RegistryTypeCustom    = 3 // Custom registry
+	RegistryTypeGitLab    = 4 // GitLab
+	RegistryTypeProGet    = 5 // ProGet
+	RegistryTypeDockerHub = 6 // DockerHub
+	RegistryTypeECR       = 7 // Amazon ECR
+)
+
+// Template type constants as used by the Portainer API
+const (
+	TemplateTypeSwarm      = 1 // Swarm
+	TemplateTypeCompose    = 2 // Compose
+	TemplateTypeKubernetes = 3 // Kubernetes
+)
+
+// Webhook type constants.
+const (
+	WebhookTypeService   = 1 // Service webhook
+	WebhookTypeContainer = 2 // Container webhook
+)
+
+// isValidRegistryType checks if a given integer is a valid registry type.
+func isValidRegistryType(t int) bool {
+	return t >= RegistryTypeQuay && t <= RegistryTypeECR
+}
+
+// isValidTemplateType checks if a given integer is a valid custom template type.
+func isValidTemplateType(t int) bool {
+	return t >= TemplateTypeSwarm && t <= TemplateTypeKubernetes
+}
+
+// isValidWebhookType checks if a given integer is a valid webhook type.
+func isValidWebhookType(t int) bool {
+	return t >= WebhookTypeService && t <= WebhookTypeContainer
 }

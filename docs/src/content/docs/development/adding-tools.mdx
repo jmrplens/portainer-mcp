@@ -1,0 +1,268 @@
+---
+title: Adding Tools
+description: Step-by-step guide for adding new tools to the Portainer MCP server, from YAML definition to meta-tool integration.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Adding a new tool requires changes across several files. This guide walks through the complete process.
+
+## Overview
+
+Every tool goes through these layers:
+
+1. **Definition** → `tools.yaml` (name, description, parameters, annotations)
+2. **Constant** → `internal/mcp/schema.go` (tool name constant)
+3. **Handler** → `internal/mcp/<domain>.go` (business logic)
+4. **Client method** → `pkg/portainer/client/` (API call)
+5. **Local model** → `pkg/portainer/models/` (response type)
+6. **Registration** → `AddXxxFeatures()` function
+7. **Meta-tool** → `internal/mcp/metatool_registry.go` (action mapping)
+8. **Tests** → Unit + optionally integration
+
+## Step-by-Step
+
+<Steps>
+1. ### Define the tool in `tools.yaml`
+
+   ```yaml
+   - name: getContainerLogs
+     description: "Retrieve logs from a Docker container"
+     parameters:
+       - name: environmentId
+         type: number
+         description: "Environment ID where the container runs"
+         required: true
+       - name: containerId
+         type: string
+         description: "Docker container ID or name"
+         required: true
+       - name: tail
+         type: number
+         description: "Number of lines from the end (default: 100)"
+         required: false
+     annotations:
+       readOnlyHint: true
+       destructiveHint: false
+       idempotentHint: true
+       openWorldHint: true
+   ```
+
+   <Aside type="caution">
+   Use the `parameters:` key (array format), not `inputSchema:`. The parser in `pkg/toolgen/yaml.go` only recognizes this format.
+   </Aside>
+
+   **Parameter types**: `string`, `number`, `integer`, `boolean`, `object`, `array`
+
+   **Annotations** control tool behavior:
+   | Annotation | Meaning |
+   |-----------|---------|
+   | `readOnlyHint` | `true` = available in read-only mode |
+   | `destructiveHint` | `true` = deletes or irreversibly modifies data |
+   | `idempotentHint` | `true` = safe to retry |
+   | `openWorldHint` | `true` = interacts with external systems |
+
+2. ### Add the tool constant
+
+   In `internal/mcp/schema.go`:
+
+   ```go
+   const ToolGetContainerLogs = "getContainerLogs"
+   ```
+
+   Constants ensure type-safe references across handler registration and meta-tools.
+
+3. ### Implement the handler
+
+   Create or extend a file in `internal/mcp/`:
+
+   ```go
+   // HandleGetContainerLogs retrieves logs from a Docker container.
+   //
+   // Parameters:
+   //   - environmentId (number, required): Environment ID
+   //   - containerId (string, required): Container ID or name
+   //   - tail (number, optional): Lines from end (default 100)
+   //
+   // Returns: Container log output as text
+   func (s *Server) HandleGetContainerLogs(params map[string]interface{}) (*mcp.CallToolResult, error) {
+       envID, err := toolgen.GetRequiredInt(params, "environmentId")
+       if err != nil {
+           return nil, fmt.Errorf("invalid environmentId parameter: %w", err)
+       }
+
+       containerID, err := toolgen.GetRequiredString(params, "containerId")
+       if err != nil {
+           return nil, fmt.Errorf("invalid containerId parameter: %w", err)
+       }
+
+       tail := toolgen.GetIntDefault(params, "tail", 100)
+
+       logs, err := s.client.GetContainerLogs(envID, containerID, tail)
+       if err != nil {
+           return nil, fmt.Errorf("failed to get container logs: %w", err)
+       }
+
+       return toolResultJSON(logs)
+   }
+   ```
+
+   **Key conventions:**
+   - Godoc comment with Parameters/Returns sections
+   - `GetRequired*` for required params (returns error if missing)
+   - `Get*Default` for optional params (returns default value)
+   - Error wrapping with `fmt.Errorf("context: %w", err)`
+   - Return `toolResultJSON()` for structured data or `toolResultText()` for plain text
+
+4. ### Add the client method
+
+   **Interface** — add to `PortainerClient` in `internal/mcp/server.go`:
+
+   ```go
+   GetContainerLogs(environmentID int, containerID string, tail int) (string, error)
+   ```
+
+   **Implementation** — add in `pkg/portainer/client/docker.go`:
+
+   ```go
+   func (c *PortainerClient) GetContainerLogs(environmentID int, containerID string, tail int) (string, error) {
+       // Call Portainer API via the raw SDK client
+       resp, err := c.cli.Docker.ContainerLogs(...)
+       if err != nil {
+           return "", fmt.Errorf("failed to get container logs: %w", err)
+       }
+       return resp.Payload, nil
+   }
+   ```
+
+5. ### Add local model (if needed)
+
+   If the tool returns structured data, create a model in `pkg/portainer/models/`:
+
+   ```go
+   type ContainerLog struct {
+       ContainerID string `json:"containerId"`
+       Output      string `json:"output"`
+       Lines       int    `json:"lines"`
+   }
+
+   // ConvertContainerLog transforms the raw API response into a local model.
+   func ConvertContainerLog(raw *apimodels.ContainerLogResponse) ContainerLog {
+       return ContainerLog{
+           ContainerID: raw.ID,
+           Output:      raw.Output,
+           Lines:       raw.LineCount,
+       }
+   }
+   ```
+
+6. ### Register the handler
+
+   In the appropriate `AddXxxFeatures()` function in `internal/mcp/`:
+
+   ```go
+   func (s *Server) AddDockerFeatures(reg ToolRegistrar) {
+       // ... existing tools ...
+       reg.AddTool(tools[ToolGetContainerLogs], s.HandleGetContainerLogs)
+   }
+   ```
+
+7. ### Add to a meta-tool group
+
+   In `internal/mcp/metatool_registry.go`, add the action to the appropriate meta-tool:
+
+   ```go
+   // In the manage_docker meta-tool definition:
+   {
+       ActionName:  "get_container_logs",
+       ToolName:    ToolGetContainerLogs,
+       HandlerFunc: s.HandleGetContainerLogs,
+       ReadOnly:    true,
+   },
+   ```
+
+   Remember to update the meta-tool's `description` to mention the new action.
+
+8. ### Write tests
+
+   **Unit test** in `internal/mcp/docker_test.go`:
+
+   ```go
+   func TestHandleGetContainerLogs(t *testing.T) {
+       tests := []struct {
+           name    string
+           params  map[string]interface{}
+           mock    func(*MockClient)
+           wantErr bool
+       }{
+           {
+               name: "valid request",
+               params: map[string]interface{}{
+                   "environmentId": float64(1),
+                   "containerId":   "abc123",
+               },
+               mock: func(m *MockClient) {
+                   m.GetContainerLogsFunc = func(envID int, cID string, tail int) (string, error) {
+                       return "log output", nil
+                   }
+               },
+           },
+           {
+               name:    "missing environment ID",
+               params:  map[string]interface{}{"containerId": "abc"},
+               wantErr: true,
+           },
+           {
+               name:    "missing container ID",
+               params:  map[string]interface{}{"environmentId": float64(1)},
+               wantErr: true,
+           },
+       }
+       for _, tt := range tests {
+           t.Run(tt.name, func(t *testing.T) {
+               mock := &MockClient{}
+               if tt.mock != nil {
+                   tt.mock(mock)
+               }
+               s := &Server{client: mock}
+               result, err := s.HandleGetContainerLogs(tt.params)
+               if tt.wantErr {
+                   assert.Error(t, err)
+               } else {
+                   assert.NoError(t, err)
+                   assert.NotNil(t, result)
+               }
+           })
+       }
+   }
+   ```
+
+   **Mock** — add to `mocks_test.go`:
+
+   ```go
+   GetContainerLogsFunc func(int, string, int) (string, error)
+
+   func (m *MockClient) GetContainerLogs(envID int, containerID string, tail int) (string, error) {
+       if m.GetContainerLogsFunc != nil {
+           return m.GetContainerLogsFunc(envID, containerID, tail)
+       }
+       return "", nil
+   }
+   ```
+</Steps>
+
+## Checklist
+
+After implementing a new tool, verify:
+
+- [ ] `tools.yaml` definition with correct parameter types and annotations
+- [ ] Tool constant in `schema.go`
+- [ ] Handler with proper error wrapping and parameter validation
+- [ ] Client interface method + implementation
+- [ ] Local model with conversion function (if applicable)
+- [ ] Handler registered in `AddXxxFeatures()`
+- [ ] Action added to meta-tool in `metatool_registry.go`
+- [ ] Unit tests covering success, missing params, and error cases
+- [ ] `go build ./...` passes
+- [ ] `go vet ./...` is clean
+- [ ] `go test ./...` passes
