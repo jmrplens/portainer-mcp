@@ -4,8 +4,8 @@ import starlight from "@astrojs/starlight";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://portainer.github.io",
-  base: "/portainer-mcp",
+  site: "https://jmrplens.github.io",
+  base: "/portainer-mcp-enhanced",
   integrations: [
     starlight({
       title: "Portainer MCP",
@@ -15,12 +15,12 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/portainer/portainer-mcp",
+          href: "https://github.com/jmrplens/portainer-mcp-enhanced",
         },
       ],
       editLink: {
         baseUrl:
-          "https://github.com/portainer/portainer-mcp/edit/main/docs/",
+          "https://github.com/jmrplens/portainer-mcp-enhanced/edit/main/docs/",
       },
       sidebar: [
         {
