@@ -18,10 +18,10 @@ The server authenticates to Portainer using an **API token** passed via the `-to
 
 ```bash
 # Good: token from environment variable
-./portainer-mcp -server "https://portainer:9443" -token "$PORTAINER_TOKEN"
+./portainer-mcp-enhanced -server "https://portainer:9443" -token "$PORTAINER_TOKEN"
 
 # Bad: token hardcoded in config
-./portainer-mcp -server "https://portainer:9443" -token "ptr_abc123..."
+./portainer-mcp-enhanced -server "https://portainer:9443" -token "ptr_abc123..."
 ```
 
 ## TLS / Certificate Verification

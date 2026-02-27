@@ -3,8 +3,8 @@ package client
 import (
 	"fmt"
 
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/utils"
 )
 
 // GetEnvironments retrieves all environments from the Portainer server.

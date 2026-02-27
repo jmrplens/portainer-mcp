@@ -23,14 +23,14 @@ import { Aside } from '@astrojs/starlight/components';
 
 **Default mode** (15 meta-tools):
 ```bash
-./portainer-mcp \
+./portainer-mcp-enhanced \
   -server "https://portainer.example.com:9443" \
   -token "ptr_abc123..."
 ```
 
 **Read-only monitoring**:
 ```bash
-./portainer-mcp \
+./portainer-mcp-enhanced \
   -server "https://portainer.example.com:9443" \
   -token "ptr_abc123..." \
   -read-only
@@ -38,7 +38,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **Granular tools** (backward-compatible 98 individual tools):
 ```bash
-./portainer-mcp \
+./portainer-mcp-enhanced \
   -server "https://portainer.example.com:9443" \
   -token "ptr_abc123..." \
   -granular-tools
@@ -46,7 +46,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **Self-signed certificate**:
 ```bash
-./portainer-mcp \
+./portainer-mcp-enhanced \
   -server "https://portainer.local:9443" \
   -token "ptr_abc123..." \
   -skip-tls-verify
@@ -74,7 +74,7 @@ By default, the server registers **15 grouped meta-tools**. Each meta-tool cover
 
 This is the recommended mode for AI assistants because it reduces the tool selection surface from 98 to 15, significantly improving LLM tool selection accuracy.
 
-See the [Meta-Tools Guide](/portainer-mcp/guides/meta-tools/) for details.
+See the [Meta-Tools Guide](/portainer-mcp-enhanced/guides/meta-tools/) for details.
 
 ### Granular Tools
 

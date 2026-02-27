@@ -11,9 +11,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/portainer/portainer-mcp/pkg/portainer/client"
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
-	"github.com/portainer/portainer-mcp/pkg/toolgen"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/client"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/toolgen"
 	"github.com/rs/zerolog/log"
 )
 

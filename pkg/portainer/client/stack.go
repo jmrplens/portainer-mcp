@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/utils"
 )
 
 // GetStacks retrieves all stacks from the Portainer server.

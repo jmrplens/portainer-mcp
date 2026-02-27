@@ -9,3 +9,16 @@
 .expressive-code pre {
   border-radius: 0.5rem;
 }
+
+/* Fix Starlight tab labels wrapping to two lines */
+starlight-tabs [role="tablist"] {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+starlight-tabs [role="tab"] {
+  white-space: nowrap;
+  flex-shrink: 0;
+}

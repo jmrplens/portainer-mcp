@@ -55,24 +55,28 @@ func newTestAdapter(rt http.RoundTripper) *portainerAPIAdapter {
 var errTransport = fmt.Errorf("transport error")
 
 // ---------------------------------------------------------------------------
-// detectSchemes & newPortainerAPIAdapter – partial coverage improvements
+// parseHostScheme & newPortainerAPIAdapter – partial coverage improvements
 // ---------------------------------------------------------------------------
 
-func TestDetectSchemes(t *testing.T) {
+func TestParseHostScheme(t *testing.T) {
 	tests := []struct {
-		name   string
-		host   string
-		expect []string
+		name       string
+		host       string
+		wantScheme string
+		wantHost   string
 	}{
-		{"https default", "portainer.example.com", []string{"https"}},
-		{"explicit http", "http://portainer.local", []string{"http"}},
-		{"explicit HTTP uppercase", "HTTP://portainer.local", []string{"http"}},
-		{"https explicit", "https://portainer.example.com", []string{"https"}},
+		{"https default", "portainer.example.com", "https", "portainer.example.com"},
+		{"explicit http", "http://portainer.local", "http", "portainer.local"},
+		{"explicit HTTP uppercase", "HTTP://portainer.local", "http", "portainer.local"},
+		{"https explicit", "https://portainer.example.com", "https", "portainer.example.com"},
+		{"http with port", "http://192.168.0.40:31017", "http", "192.168.0.40:31017"},
+		{"bare host with port", "192.168.0.40:31017", "https", "192.168.0.40:31017"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectSchemes(tc.host)
-			assert.Equal(t, tc.expect, got)
+			scheme, cleanHost := parseHostScheme(tc.host)
+			assert.Equal(t, tc.wantScheme, scheme)
+			assert.Equal(t, tc.wantHost, cleanHost)
 		})
 	}
 }

@@ -96,7 +96,7 @@ func EnvironmentFromAPI(raw *apimodels.PortainerEndpoint) *Environment {
 ```go
 import (
     // Local models — default import name
-    "github.com/portainer/portainer-mcp/pkg/portainer/models"
+    "github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 
     // Raw API models — aliased to distinguish
     apimodels "github.com/portainer/client-api-go/v2/pkg/models"

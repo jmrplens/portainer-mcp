@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -17,10 +17,10 @@ pre:
 	mkdir -p dist
 
 build: pre
-	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp ./cmd/portainer-mcp
+	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp-enhanced ./cmd/portainer-mcp-enhanced
 
 release: pre
-	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build -trimpath --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp ./cmd/portainer-mcp
+	GOOS=$(PLATFORM) GOARCH=$(ARCH) CGO_ENABLED=0 go build -trimpath --ldflags '$(LDFLAGS_STRING)' -o dist/portainer-mcp-enhanced ./cmd/portainer-mcp-enhanced
 
 fmt:
 	gofmt -s -w .
@@ -33,7 +33,7 @@ lint: vet
 	@which golangci-lint > /dev/null 2>&1 && golangci-lint run ./... || true
 
 inspector: build
-	npx @modelcontextprotocol/inspector dist/portainer-mcp
+	npx @modelcontextprotocol/inspector dist/portainer-mcp-enhanced
 
 test:
 	go test -v $(shell go list ./... | grep -v /tests/integration)

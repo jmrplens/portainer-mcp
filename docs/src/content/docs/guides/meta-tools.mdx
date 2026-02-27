@@ -44,7 +44,7 @@ Each meta-tool call includes:
 }
 ```
 
-Parameters are passed through directly to the underlying handler. Each action accepts the same parameters as its granular tool counterpart — see the [Tools Reference](/portainer-mcp/reference/api-reference/) for parameter details.
+Parameters are passed through directly to the underlying handler. Each action accepts the same parameters as its granular tool counterpart — see the [Tools Reference](/portainer-mcp-enhanced/reference/api-reference/) for parameter details.
 
 ---
 
@@ -294,7 +294,7 @@ If all actions in a group are write-only, the entire meta-tool is omitted. This 
 To use the 98 individual tools instead:
 
 ```bash
-./portainer-mcp -server "..." -token "..." -granular-tools
+./portainer-mcp-enhanced -server "..." -token "..." -granular-tools
 ```
 
-In granular mode, each tool is registered separately with its own name (e.g., `get_environments`, `create_stack`, etc.). See the [Tools Reference](/portainer-mcp/reference/api-reference/) for the complete list.
+In granular mode, each tool is registered separately with its own name (e.g., `get_environments`, `create_stack`, etc.). See the [Tools Reference](/portainer-mcp-enhanced/reference/api-reference/) for the complete list.

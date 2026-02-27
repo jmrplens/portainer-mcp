@@ -3,7 +3,7 @@ package client
 import (
 	"fmt"
 
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 )
 
 // GetUsers retrieves all users from the Portainer server.

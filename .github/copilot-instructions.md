@@ -2,7 +2,7 @@
 applyTo: "**"
 ---
 - This is a Go project (1.24+). Build with `make build`, test with `go test ./...`.
-- Module: `github.com/portainer/portainer-mcp`. MCP SDK: `github.com/mark3labs/mcp-go` v0.32.0.
+- Module: `github.com/jmrplens/portainer-mcp-enhanced`. MCP SDK: `github.com/mark3labs/mcp-go` v0.32.0.
 - CGO_ENABLED=0 — produces a statically linked binary.
 - Use `gofmt -s` for formatting. Run `go vet ./...` before committing.
 - Error wrapping: `fmt.Errorf("context: %w", err)` — always provide operation context.

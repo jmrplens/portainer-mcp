@@ -22,25 +22,25 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) s
 <details open>
 <summary><b>🖥️ System & Docker Dashboard</b></summary>
 
-![System & Docker Dashboard demo](docs/demo-1-system-docker.webp)
+![System & Docker Dashboard demo](docs/src/assets/demo-1-system-docker.gif)
 </details>
 
 <details>
 <summary><b>👥 Users, Teams & Stacks</b></summary>
 
-![Users, Teams & Stacks demo](docs/demo-2-users-stacks.webp)
+![Users, Teams & Stacks demo](docs/src/assets/demo-2-users-stacks.gif)
 </details>
 
 <details>
 <summary><b>🌐 Edge & Kubernetes</b></summary>
 
-![Edge & Kubernetes demo](docs/demo-3-edge-helm.webp)
+![Edge & Kubernetes demo](docs/src/assets/demo-3-edge-helm.gif)
 </details>
 
 <details>
 <summary><b>💾 Backup & Docker Proxy</b></summary>
 
-![Backup & Docker Proxy demo](docs/demo-4-backup-proxy.webp)
+![Backup & Docker Proxy demo](docs/src/assets/demo-4-backup-proxy.gif)
 </details>
 
 ## Quickstart
@@ -49,7 +49,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) s
 
 **Go install**:
 ```bash
-go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@latest
+go install github.com/jmrplens/portainer-mcp-enhanced/cmd/portainer-mcp-enhanced@latest
 ```
 
 **Docker**:
@@ -61,7 +61,7 @@ docker pull ghcr.io/jmrplens/portainer-mcp-enhanced:latest
 ```bash
 git clone https://github.com/jmrplens/portainer-mcp-enhanced.git
 cd portainer-mcp-enhanced
-make build    # → dist/portainer-mcp
+make build    # → dist/portainer-mcp-enhanced
 ```
 
 Or download a pre-built binary from [Releases](https://github.com/jmrplens/portainer-mcp-enhanced/releases/latest) (Linux, macOS, Windows — amd64/arm64, with SHA256 checksums).
@@ -82,7 +82,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 {
   "mcpServers": {
     "portainer": {
-      "command": "/path/to/portainer-mcp",
+      "command": "/path/to/portainer-mcp-enhanced",
       "args": [
         "-server", "https://your-portainer:9443",
         "-token", "ptr_your_api_token"
@@ -103,7 +103,7 @@ Create `.vscode/mcp.json` in your workspace:
   "servers": {
     "portainer": {
       "type": "stdio",
-      "command": "/path/to/portainer-mcp",
+      "command": "/path/to/portainer-mcp-enhanced",
       "args": [
         "-server", "https://your-portainer:9443",
         "-token", "ptr_your_api_token"
@@ -123,7 +123,7 @@ Go to **Cursor Settings → MCP** and add:
 {
   "mcpServers": {
     "portainer": {
-      "command": "/path/to/portainer-mcp",
+      "command": "/path/to/portainer-mcp-enhanced",
       "args": [
         "-server", "https://your-portainer:9443",
         "-token", "ptr_your_api_token"

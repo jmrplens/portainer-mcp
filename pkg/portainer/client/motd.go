@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 )
 
 // GetMOTD retrieves the message of the day from the Portainer server.

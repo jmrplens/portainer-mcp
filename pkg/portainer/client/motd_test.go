@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 	"github.com/stretchr/testify/assert"
 )
 

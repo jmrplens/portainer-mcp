@@ -54,4 +54,4 @@ jobs:
         continue-on-error: true
         with:
           coverage-file-name: "coverage.out"
-          root-package: "github.com/portainer/portainer-mcp"
+          root-package: "github.com/jmrplens/portainer-mcp-enhanced"

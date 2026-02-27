@@ -10,7 +10,7 @@ Thank you for your interest in contributing! Whether you're fixing a bug, adding
 # Clone and build
 git clone https://github.com/jmrplens/portainer-mcp-enhanced.git
 cd portainer-mcp-enhanced
-make build          # → dist/portainer-mcp
+make build          # → dist/portainer-mcp-enhanced
 
 # Run tests
 make test           # Unit tests
@@ -35,7 +35,7 @@ go vet ./...
 
 ```
 portainer-mcp/
-├── cmd/portainer-mcp/         # CLI entry point (flags, startup)
+├── cmd/portainer-mcp-enhanced/         # CLI entry point (flags, startup)
 ├── internal/
 │   ├── mcp/                   # MCP server core
 │   │   ├── server.go          #   Server struct, interfaces, registration

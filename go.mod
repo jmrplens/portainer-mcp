@@ -1,4 +1,4 @@
-module github.com/portainer/portainer-mcp
+module github.com/jmrplens/portainer-mcp-enhanced
 
 go 1.24.2
 

@@ -7,9 +7,9 @@ import (
 
 	mcpmodels "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/portainer/portainer-mcp/internal/mcp"
-	"github.com/portainer/portainer-mcp/tests/integration/containers"
-	"github.com/portainer/portainer-mcp/tests/integration/helpers"
+	"github.com/jmrplens/portainer-mcp-enhanced/internal/mcp"
+	"github.com/jmrplens/portainer-mcp-enhanced/tests/integration/containers"
+	"github.com/jmrplens/portainer-mcp-enhanced/tests/integration/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

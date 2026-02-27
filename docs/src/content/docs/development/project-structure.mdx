@@ -89,7 +89,7 @@ import { FileTree, Aside } from '@astrojs/starlight/components';
                        │ MCP Protocol (stdio)
 ┌──────────────────────▼──────────────────────────┐
 │                  MCP Server                      │
-│  cmd/portainer-mcp/mcp.go                        │
+│  cmd/portainer-mcp-enhanced/mcp.go                        │
 │  ┌─────────────────────────────────────────────┐ │
 │  │  Meta-Tool Layer (15 grouped tools)         │ │
 │  │  internal/mcp/metatool_*.go                 │ │
@@ -123,7 +123,7 @@ import { FileTree, Aside } from '@astrojs/starlight/components';
 
 | File | Purpose |
 |------|---------|
-| `cmd/portainer-mcp/mcp.go` | CLI flags, server initialization, version check |
+| `cmd/portainer-mcp-enhanced/mcp.go` | CLI flags, server initialization, version check |
 | `internal/mcp/server.go` | `PortainerClient` interface (~170 methods), `Server` struct, `AddXxxFeatures()` registration |
 | `internal/mcp/schema.go` | `ToolXxx` string constants mapping tool names |
 | `internal/mcp/metatool_registry.go` | Maps 15 meta-tools → action lists → handler functions |

@@ -18,7 +18,7 @@ import (
 	"github.com/portainer/client-api-go/v2/pkg/client/auth"
 	"github.com/portainer/client-api-go/v2/pkg/client/users"
 	"github.com/portainer/client-api-go/v2/pkg/models"
-	"github.com/portainer/portainer-mcp/internal/mcp"
+	"github.com/jmrplens/portainer-mcp-enhanced/internal/mcp"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

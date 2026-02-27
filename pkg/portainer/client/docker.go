@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/portainer/client-api-go/v2/client"
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 )
 
 // GetDockerDashboard retrieves the Docker dashboard data for a specific environment.

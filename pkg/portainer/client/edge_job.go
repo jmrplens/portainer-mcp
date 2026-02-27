@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/models"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
 )
 
 // GetEdgeJobs retrieves all edge jobs from the Portainer server.

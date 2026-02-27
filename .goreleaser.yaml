@@ -10,8 +10,8 @@ before:
 
 builds:
   - id: portainer-mcp
-    main: ./cmd/portainer-mcp
-    binary: portainer-mcp
+    main: ./cmd/portainer-mcp-enhanced
+    binary: portainer-mcp-enhanced
     env:
       - CGO_ENABLED=0
     flags:
@@ -86,7 +86,7 @@ release:
 
     **Go install:**
     ```bash
-    go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@{{.Tag}}
+    go install github.com/jmrplens/portainer-mcp-enhanced/cmd/portainer-mcp-enhanced@{{.Tag}}
     ```
 
     **Docker:**

@@ -12,10 +12,10 @@ ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
-    -o /portainer-mcp ./cmd/portainer-mcp
+    -o /portainer-mcp-enhanced ./cmd/portainer-mcp-enhanced
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /portainer-mcp /usr/local/bin/portainer-mcp
+COPY --from=builder /portainer-mcp-enhanced /usr/local/bin/portainer-mcp-enhanced
 COPY tools.yaml /tools.yaml
-ENTRYPOINT ["/usr/local/bin/portainer-mcp"]
+ENTRYPOINT ["/usr/local/bin/portainer-mcp-enhanced"]

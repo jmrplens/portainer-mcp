@@ -14,7 +14,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/portainer/portainer-mcp/internal/mcp"
+	"github.com/jmrplens/portainer-mcp-enhanced/internal/mcp"
 	"github.com/stretchr/testify/require"
 )
 

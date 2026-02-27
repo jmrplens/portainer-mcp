@@ -7,7 +7,7 @@ import (
 	"flag"
 	"os"
 
-	"github.com/portainer/portainer-mcp/pkg/toolgen"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/toolgen"
 	"github.com/rs/zerolog/log"
 )
 

@@ -6,7 +6,7 @@ MCP (Model Context Protocol) server in Go that connects AI assistants to Portain
 
 ```bash
 # Build
-make build                    # builds dist/portainer-mcp
+make build                    # builds dist/portainer-mcp-enhanced
 make PLATFORM=linux ARCH=amd64 build  # cross-compile
 
 # Test
@@ -21,7 +21,7 @@ make vet                      # go vet ./...
 make lint                     # vet + additional checks
 
 # Run
-dist/portainer-mcp \
+dist/portainer-mcp-enhanced \
   --server https://portainer.example.com \
   --token <api-token> \
   --tools tools.yaml

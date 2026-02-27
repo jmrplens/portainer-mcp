@@ -6,8 +6,8 @@ package main
 import (
 	"flag"
 
-	"github.com/portainer/portainer-mcp/internal/mcp"
-	"github.com/portainer/portainer-mcp/internal/tooldef"
+	"github.com/jmrplens/portainer-mcp-enhanced/internal/mcp"
+	"github.com/jmrplens/portainer-mcp-enhanced/internal/tooldef"
 	"github.com/rs/zerolog/log"
 )
 

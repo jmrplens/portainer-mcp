@@ -21,7 +21,7 @@ The server acts as a bridge between MCP-compatible AI assistants and the Portain
 
 ```
 portainer-mcp/
-├── cmd/portainer-mcp/     # Entry point, CLI flag parsing
+├── cmd/portainer-mcp-enhanced/     # Entry point, CLI flag parsing
 │   └── mcp.go             # main(), flag definitions, server bootstrap
 ├── internal/
 │   ├── mcp/               # MCP server implementation
@@ -44,7 +44,7 @@ portainer-mcp/
 
 ## Key Components
 
-### Entry Point (`cmd/portainer-mcp/mcp.go`)
+### Entry Point (`cmd/portainer-mcp-enhanced/mcp.go`)
 
 Parses CLI flags, creates the Portainer client, and starts the MCP server. Handles:
 - Flag validation (required `-server` and `-token`)

@@ -4,7 +4,7 @@ import (
 	"time"
 
 	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
-	"github.com/portainer/portainer-mcp/pkg/portainer/utils"
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/utils"
 )
 
 // Stack represents a Portainer edge stack deployed via edge groups.

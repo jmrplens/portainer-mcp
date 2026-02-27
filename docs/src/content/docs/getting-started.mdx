@@ -18,9 +18,11 @@ import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 Choose any of the methods below:
 
 <Tabs>
-<TabItem label="Go install" icon="seti:go">
+<TabItem label="Go" icon="seti:go">
+Requires **Go 1.24+**:
+
 ```bash
-go install github.com/portainer/portainer-mcp/cmd/portainer-mcp@latest
+go install github.com/jmrplens/portainer-mcp-enhanced/cmd/portainer-mcp-enhanced@latest
 ```
 </TabItem>
 
@@ -47,7 +49,7 @@ Download from [GitHub Releases](https://github.com/jmrplens/portainer-mcp-enhanc
 curl -L -o portainer-mcp-enhanced.tar.gz \
   https://github.com/jmrplens/portainer-mcp-enhanced/releases/latest/download/portainer-mcp-enhanced_linux_amd64.tar.gz
 tar xzf portainer-mcp-enhanced.tar.gz
-chmod +x portainer-mcp
+chmod +x portainer-mcp-enhanced
 ```
 
 All releases include SHA256 checksums in `checksums.txt`.
@@ -60,7 +62,7 @@ Requires **Go 1.24+** and **Make**:
 git clone https://github.com/jmrplens/portainer-mcp-enhanced.git
 cd portainer-mcp-enhanced
 make build
-# Binary: dist/portainer-mcp
+# Binary: dist/portainer-mcp-enhanced
 ```
 
 Cross-compile for a specific platform:
@@ -97,7 +99,7 @@ Keep your API token secure. It provides full access to your Portainer instance u
     {
       "mcpServers": {
         "portainer": {
-          "command": "/path/to/portainer-mcp",
+          "command": "/path/to/portainer-mcp-enhanced",
           "args": [
             "-server", "https://your-portainer:9443",
             "-token", "ptr_your_api_token"
@@ -115,7 +117,7 @@ Keep your API token secure. It provides full access to your Portainer instance u
       "servers": {
         "portainer": {
           "type": "stdio",
-          "command": "/path/to/portainer-mcp",
+          "command": "/path/to/portainer-mcp-enhanced",
           "args": [
             "-server", "https://your-portainer:9443",
             "-token", "ptr_your_api_token"
@@ -132,7 +134,7 @@ Keep your API token secure. It provides full access to your Portainer instance u
     {
       "mcpServers": {
         "portainer": {
-          "command": "/path/to/portainer-mcp",
+          "command": "/path/to/portainer-mcp-enhanced",
           "args": [
             "-server", "https://your-portainer:9443",
             "-token", "ptr_your_api_token"
