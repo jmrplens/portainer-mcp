@@ -108,7 +108,7 @@ release:
 #     directory: Formula
 #     homepage: "https://github.com/jmrplens/portainer-mcp-enhanced"
 #     description: "Enhanced MCP server for AI-powered Portainer container management"
-#     license: "MIT"
+#     license: "Zlib"
 #     install: |
 #       bin.install "portainer-mcp"
 #     skip_upload: auto
