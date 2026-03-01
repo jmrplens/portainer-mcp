@@ -113,45 +113,24 @@ release:
 #       bin.install "portainer-mcp"
 #     skip_upload: auto
 
-# Docker images via GHCR
-dockers:
-  - image_templates:
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-amd64"
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/jmrplens/portainer-mcp-enhanced"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.created={{ .Date }}"
-    goarch: amd64
+# Docker images via GHCR (multi-arch manifest, no per-arch tags)
+dockers_v2:
+  - images:
+      - "ghcr.io/jmrplens/portainer-mcp-enhanced"
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
     dockerfile: Dockerfile.goreleaser
     extra_files:
       - tools.yaml
-
-  - image_templates:
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-arm64"
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/jmrplens/portainer-mcp-enhanced"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.created={{ .Date }}"
-    goarch: arm64
-    dockerfile: Dockerfile.goreleaser
-    extra_files:
-      - tools.yaml
-
-docker_manifests:
-  - name_template: "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}"
-    image_templates:
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-amd64"
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-arm64"
-
-  - name_template: "ghcr.io/jmrplens/portainer-mcp-enhanced:latest"
-    image_templates:
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-amd64"
-      - "ghcr.io/jmrplens/portainer-mcp-enhanced:{{ .Tag }}-arm64"
+    labels:
+      "org.opencontainers.image.title": "{{ .ProjectName }}"
+      "org.opencontainers.image.description": "Enhanced MCP server for AI-powered Portainer container management"
+      "org.opencontainers.image.source": "https://github.com/jmrplens/portainer-mcp-enhanced"
+      "org.opencontainers.image.license": "Zlib"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.created": "{{ .Date }}"
