@@ -119,7 +119,7 @@ dockers_v2:
       - "ghcr.io/jmrplens/portainer-mcp-enhanced"
     tags:
       - "v{{ .Version }}"
-      - latest
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms:
       - linux/amd64
       - linux/arm64
