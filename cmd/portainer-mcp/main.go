@@ -55,7 +55,7 @@ func run(args []string) error {
 
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	// Flags win over the environment, but only when explicitly provided:
@@ -78,7 +78,7 @@ func run(args []string) error {
 	})
 
 	if err := cfg.Validate(); err != nil {
-		return err
+		return fmt.Errorf("validate configuration: %w", err)
 	}
 
 	logger := logging.New(cfg.LogLevel)
