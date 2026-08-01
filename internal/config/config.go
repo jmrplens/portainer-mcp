@@ -64,13 +64,26 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	skipTLSVerify, err := envBool("PORTAINER_SKIP_TLS_VERIFY")
+	if err != nil {
+		return nil, err
+	}
+	readOnly, err := envBool("PORTAINER_READ_ONLY")
+	if err != nil {
+		return nil, err
+	}
+	safeMode, err := envBool("PORTAINER_SAFE_MODE")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		URL:           strings.TrimRight(os.Getenv("PORTAINER_URL"), "/"),
 		Token:         os.Getenv("PORTAINER_TOKEN"),
-		SkipTLSVerify: envBool("PORTAINER_SKIP_TLS_VERIFY"),
+		SkipTLSVerify: skipTLSVerify,
 		ToolSurface:   surface,
-		ReadOnly:      envBool("PORTAINER_READ_ONLY"),
-		SafeMode:      envBool("PORTAINER_SAFE_MODE"),
+		ReadOnly:      readOnly,
+		SafeMode:      safeMode,
 		LogLevel:      level,
 	}, nil
 }
@@ -103,9 +116,20 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func envBool(key string) bool {
-	v, err := strconv.ParseBool(os.Getenv(key))
-	return err == nil && v
+// envBool parses a boolean environment variable. An unset variable is false;
+// a variable set to something ParseBool rejects is an error, never a silent
+// false — read-only and safe mode are security controls, and a typo such as
+// PORTAINER_READ_ONLY=yes must not disable one without saying so.
+func envBool(key string) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: want a boolean such as true or false", key, raw)
+	}
+	return v, nil
 }
 
 func parseLevel(s string) (slog.Level, error) {

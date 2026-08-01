@@ -88,3 +88,24 @@ func TestValidate_Complete_ReturnsNil(t *testing.T) {
 		t.Errorf("Validate() error = %v, want nil", err)
 	}
 }
+
+func TestLoad_MalformedReadOnly_ReturnsError(t *testing.T) {
+	t.Setenv("PORTAINER_READ_ONLY", "yes")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_READ_ONLY")
+	}
+}
+
+func TestLoad_MalformedSafeMode_ReturnsError(t *testing.T) {
+	t.Setenv("PORTAINER_SAFE_MODE", "on")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SAFE_MODE")
+	}
+}
+
+func TestLoad_MalformedSkipTLSVerify_ReturnsError(t *testing.T) {
+	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "sure")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SKIP_TLS_VERIFY")
+	}
+}
