@@ -75,12 +75,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Reject fmt.Print and log.Print outside tests
+      - name: Reject any path that could write to stdout
         run: |
-          if grep -rnE '(fmt\.Print(f|ln)?\(|log\.Print(f|ln)?\()' \
-               --include='*.go' cmd internal \
-             | grep -v '_test\.go:' \
-             | grep -v 'os.Stderr'; then
-            echo "::error::stdout writes corrupt the MCP JSON-RPC transport"
-            exit 1
+          fail=0
+
+          # os.Stdout must never be referenced in our code: in stdio mode the
+          # MCP SDK owns standard output, and any other writer corrupts the
+          # JSON-RPC stream. This catches os.Stdout.Write, io.Copy(os.Stdout, …),
+          # json.NewEncoder(os.Stdout) and fmt.Fprintf(os.Stdout, …) alike.
+          if grep -rnE 'os\.Stdout' --include='*.go' cmd internal | grep -v '_test\.go:'; then
+            echo "::error::os.Stdout must never be referenced — the MCP SDK owns the transport"
+            fail=1
           fi
+
+          # Bare print calls go to stdout (fmt.Print*) or are debug leftovers
+          # (the print/println builtins). log.Print* is banned for consistency:
+          # this project logs through internal/logging.
+          if grep -rnE '(^|[^.[:alnum:]_])(fmt\.Print(f|ln)?|log\.Print(f|ln)?|print|println)\(' \
+               --include='*.go' cmd internal | grep -v '_test\.go:'; then
+            echo "::error::bare print calls write to stdout, which carries the MCP JSON-RPC transport"
+            fail=1
+          fi
+
+          exit $fail
