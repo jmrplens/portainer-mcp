@@ -1,0 +1,163 @@
+package client
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/models"
+)
+
+// TestGetEnvironmentTags verifies get environment tags behavior.
+func TestGetEnvironmentTags(t *testing.T) {
+	tests := []struct {
+		name          string
+		mockTags      []*apimodels.PortainerTag
+		mockError     error
+		expectedTags  []models.EnvironmentTag
+		expectedError bool
+	}{
+		{
+			name: "successful retrieval",
+			mockTags: []*apimodels.PortainerTag{
+				{ID: 1, Name: "prod"},
+				{ID: 2, Name: "dev"},
+			},
+			mockError: nil,
+			expectedTags: []models.EnvironmentTag{
+				{ID: 1, Name: "prod", EnvironmentIds: []int{}},
+				{ID: 2, Name: "dev", EnvironmentIds: []int{}},
+			},
+			expectedError: false,
+		},
+		{
+			name:          "empty tags list",
+			mockTags:      []*apimodels.PortainerTag{},
+			mockError:     nil,
+			expectedTags:  []models.EnvironmentTag{},
+			expectedError: false,
+		},
+		{
+			name:          "api error",
+			mockTags:      nil,
+			mockError:     fmt.Errorf("api error"),
+			expectedTags:  nil,
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("ListTags").Return(tt.mockTags, tt.mockError)
+
+			client := &PortainerClient{
+				cli: mockAPI,
+			}
+
+			tags, err := client.GetEnvironmentTags()
+
+			if tt.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedTags, tags)
+			}
+
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestCreateEnvironmentTag verifies create environment tag behavior.
+func TestCreateEnvironmentTag(t *testing.T) {
+	tests := []struct {
+		name          string
+		tagName       string
+		mockID        int64
+		mockError     error
+		expectedID    int
+		expectedError bool
+	}{
+		{
+			name:          "successful creation",
+			tagName:       "prod",
+			mockID:        1,
+			mockError:     nil,
+			expectedID:    1,
+			expectedError: false,
+		},
+		{
+			name:          "api error",
+			tagName:       "dev",
+			mockID:        0,
+			mockError:     fmt.Errorf("api error"),
+			expectedID:    0,
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("CreateTag", tt.tagName).Return(tt.mockID, tt.mockError)
+
+			client := &PortainerClient{
+				cli: mockAPI,
+			}
+
+			id, err := client.CreateEnvironmentTag(tt.tagName)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedID, id)
+			}
+
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// TestDeleteEnvironmentTag verifies delete environment tag behavior.
+func TestDeleteEnvironmentTag(t *testing.T) {
+	tests := []struct {
+		name          string
+		tagID         int
+		mockError     error
+		expectedError bool
+	}{
+		{
+			name:  "successful deletion",
+			tagID: 1,
+		},
+		{
+			name:          "delete error",
+			tagID:         1,
+			mockError:     errors.New("failed to delete tag"),
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAPI := new(MockPortainerAPI)
+			mockAPI.On("DeleteTag", int64(tt.tagID)).Return(tt.mockError)
+
+			client := &PortainerClient{cli: mockAPI}
+
+			err := client.DeleteEnvironmentTag(tt.tagID)
+
+			if tt.expectedError {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			mockAPI.AssertExpectations(t)
+		})
+	}
+}

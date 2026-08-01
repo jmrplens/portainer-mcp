@@ -1,0 +1,92 @@
+package models
+
+import (
+	"time"
+
+	apimodels "github.com/portainer/client-api-go/v2/pkg/models"
+
+	"github.com/jmrplens/portainer-mcp-enhanced/pkg/portainer/utils"
+)
+
+// Stack represents a Portainer edge stack deployed via edge groups.
+type Stack struct {
+	ID                  int    `json:"id"`
+	Name                string `json:"name"`
+	CreatedAt           string `json:"created_at"`
+	EnvironmentGroupIds []int  `json:"group_ids"`
+}
+
+// ConvertEdgeStackToStack converts a raw Portainer edge stack into a simplified Stack model.
+func ConvertEdgeStackToStack(rawEdgeStack *apimodels.PortainereeEdgeStack) Stack {
+	if rawEdgeStack == nil {
+		return Stack{}
+	}
+
+	createdAt := time.Unix(rawEdgeStack.CreationDate, 0).Format(time.RFC3339)
+
+	return Stack{
+		ID:                  int(rawEdgeStack.ID),
+		Name:                rawEdgeStack.Name,
+		CreatedAt:           createdAt,
+		EnvironmentGroupIds: utils.Int64ToIntSlice(rawEdgeStack.EdgeGroups),
+	}
+}
+
+// RegularStack represents a regular (non-edge) stack in Portainer
+type RegularStack struct {
+	ID             int    `json:"id"`
+	Name           string `json:"name"`
+	Type           int    `json:"type"`
+	Status         int    `json:"status"`
+	EndpointID     int    `json:"endpoint_id"`
+	EntryPoint     string `json:"entry_point,omitempty"`
+	SwarmID        string `json:"swarm_id,omitempty"`
+	CreatedBy      string `json:"created_by,omitempty"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	FilesystemPath string `json:"filesystem_path,omitempty"`
+}
+
+// DeleteStackOptions configures stack deletion behavior.
+type DeleteStackOptions struct {
+	EndpointID    int
+	RemoveVolumes bool
+}
+
+// UpdateStackGitOptions configures git update behavior for a stack.
+type UpdateStackGitOptions struct {
+	EndpointID    int
+	ReferenceName string
+	Prune         bool
+}
+
+// RedeployStackGitOptions configures git redeployment behavior for a stack.
+type RedeployStackGitOptions struct {
+	EndpointID int
+	PullImage  bool
+	Prune      bool
+}
+
+// ConvertRegularStack converts a raw PortainereeStack to a RegularStack
+func ConvertRegularStack(raw *apimodels.PortainereeStack) RegularStack {
+	if raw == nil {
+		return RegularStack{}
+	}
+
+	createdAt := ""
+	if raw.CreationDate > 0 {
+		createdAt = time.Unix(raw.CreationDate, 0).Format(time.RFC3339)
+	}
+
+	return RegularStack{
+		ID:             int(raw.ID),
+		Name:           raw.Name,
+		Type:           int(raw.Type),
+		Status:         int(raw.Status),
+		EndpointID:     int(raw.EndpointID),
+		EntryPoint:     raw.EntryPoint,
+		SwarmID:        raw.SwarmID,
+		CreatedBy:      raw.CreatedBy,
+		CreatedAt:      createdAt,
+		FilesystemPath: raw.FilesystemPath,
+	}
+}

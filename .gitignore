@@ -1,0 +1,13 @@
+dist
+.dev
+.tmptools.yaml
+
+# Secretos y configuración local — nunca versionar
+.env
+.env.*
+!.env.example
+*.license
+
+# Artefactos de trabajo local — no se versionan
+plan/
+docs/superpowers/
