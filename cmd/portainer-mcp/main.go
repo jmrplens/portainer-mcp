@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -45,6 +46,11 @@ func run(args []string) error {
 		safeMode      = fs.Bool("safe-mode", false, "intercept mutating tools and return a preview")
 	)
 	if err := fs.Parse(args); err != nil {
+		// flag already printed usage to stderr for -h/-help; that is a
+		// successful, expected exit, not a failure worth an error prefix.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return fmt.Errorf("parse flags: %w", err)
 	}
 

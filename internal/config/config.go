@@ -53,10 +53,8 @@ func Load() (*Config, error) {
 	}
 
 	surface := ToolSurface(strings.ToLower(envOr("TOOL_SURFACE", string(SurfaceDynamic))))
-	switch surface {
-	case SurfaceDynamic, SurfaceMeta, SurfaceIndividual:
-	default:
-		return nil, fmt.Errorf("invalid TOOL_SURFACE %q: want dynamic, meta or individual", surface)
+	if err := validateToolSurface(surface); err != nil {
+		return nil, fmt.Errorf("invalid TOOL_SURFACE: %w", err)
 	}
 
 	level, err := parseLevel(envOr("LOG_LEVEL", "info"))
@@ -89,7 +87,19 @@ func Load() (*Config, error) {
 }
 
 // Validate reports whether the configuration is usable for stdio mode.
+//
+// It re-validates fields that Load already checks, and normalises c.URL by
+// trimming a trailing slash. This is what makes Validate a single gate for
+// both the environment path (Load) and the CLI flag path in cmd/portainer-mcp,
+// where a flag can override a field Load already validated with a value that
+// was never checked or normalised.
 func (c *Config) Validate() error {
+	c.URL = strings.TrimRight(c.URL, "/")
+
+	if err := validateToolSurface(c.ToolSurface); err != nil {
+		return fmt.Errorf("invalid tool surface: %w", err)
+	}
+
 	if c.URL == "" {
 		return errors.New("PORTAINER_URL is required")
 	}
@@ -107,6 +117,18 @@ func (c *Config) Validate() error {
 		return errors.New("PORTAINER_TOKEN is required")
 	}
 	return nil
+}
+
+// validateToolSurface reports whether s is one of the supported tool
+// surfaces. It is the single source of truth for that check, used by both
+// Load (environment path) and Validate (CLI flag path).
+func validateToolSurface(s ToolSurface) error {
+	switch s {
+	case SurfaceDynamic, SurfaceMeta, SurfaceIndividual:
+		return nil
+	default:
+		return fmt.Errorf("%q: want dynamic, meta or individual", s)
+	}
 }
 
 func envOr(key, fallback string) string {

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
 
@@ -55,7 +55,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.2
 
   govulncheck:
     name: govulncheck
@@ -66,7 +66,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - name: Scan
         run: govulncheck ./...
 
@@ -75,15 +75,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
       - name: Reject any path that could write to stdout
         run: |
           fail=0
+
+          # Scan every Go package in the module, not a hardcoded directory
+          # list: later phases add packages (a generated Portainer client,
+          # additional tool surfaces) and this guard must cover them without
+          # being told about each new directory.
+          dirs=$(go list -f '{{.Dir}}' ./...)
 
           # os.Stdout must never be referenced in our code: in stdio mode the
           # MCP SDK owns standard output, and any other writer corrupts the
           # JSON-RPC stream. This catches os.Stdout.Write, io.Copy(os.Stdout, …),
           # json.NewEncoder(os.Stdout) and fmt.Fprintf(os.Stdout, …) alike.
-          if grep -rnE 'os\.Stdout' --include='*.go' cmd internal | grep -v '_test\.go:'; then
+          if grep -rnE 'os\.Stdout' --include='*.go' $dirs | grep -v '_test\.go:'; then
             echo "::error::os.Stdout must never be referenced — the MCP SDK owns the transport"
             fail=1
           fi
@@ -92,7 +101,7 @@ jobs:
           # (the print/println builtins). log.Print* is banned for consistency:
           # this project logs through internal/logging.
           if grep -rnE '(^|[^.[:alnum:]_])(fmt\.Print(f|ln)?|log\.Print(f|ln)?|print|println)\(' \
-               --include='*.go' cmd internal | grep -v '_test\.go:'; then
+               --include='*.go' $dirs | grep -v '_test\.go:'; then
             echo "::error::bare print calls write to stdout, which carries the MCP JSON-RPC transport"
             fail=1
           fi

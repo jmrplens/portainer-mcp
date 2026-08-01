@@ -6,6 +6,22 @@ import (
 )
 
 func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
+	// Hermetic: clear every variable Load reads so the ambient shell (or a
+	// later phase's new env var) cannot change the outcome. t.Setenv restores
+	// the prior value automatically, and empty is treated as unset by both
+	// envOr and envBool.
+	for _, key := range []string{
+		"PORTAINER_URL",
+		"PORTAINER_TOKEN",
+		"PORTAINER_SKIP_TLS_VERIFY",
+		"TOOL_SURFACE",
+		"PORTAINER_READ_ONLY",
+		"PORTAINER_SAFE_MODE",
+		"LOG_LEVEL",
+	} {
+		t.Setenv(key, "")
+	}
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -107,5 +123,24 @@ func TestLoad_MalformedSkipTLSVerify_ReturnsError(t *testing.T) {
 	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "sure")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SKIP_TLS_VERIFY")
+	}
+}
+
+func TestValidate_InvalidToolSurface_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{URL: "https://portainer.example.com", Token: "ptr_abc", ToolSurface: "nonsense"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an error for an invalid ToolSurface")
+	}
+}
+
+func TestValidate_TrailingSlashURL_IsNormalised(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{URL: "https://portainer.example.com/", Token: "ptr_abc", ToolSurface: SurfaceDynamic}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if cfg.URL != "https://portainer.example.com" {
+		t.Errorf("URL = %q, want the trailing slash trimmed", cfg.URL)
 	}
 }
