@@ -1,0 +1,90 @@
+package config
+
+import (
+	"log/slog"
+	"testing"
+)
+
+func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ToolSurface != SurfaceDynamic {
+		t.Errorf("ToolSurface = %q, want %q", cfg.ToolSurface, SurfaceDynamic)
+	}
+	if cfg.LogLevel != slog.LevelInfo {
+		t.Errorf("LogLevel = %v, want %v", cfg.LogLevel, slog.LevelInfo)
+	}
+	if cfg.SkipTLSVerify || cfg.ReadOnly || cfg.SafeMode {
+		t.Errorf("boolean defaults must all be false, got %+v", cfg)
+	}
+}
+
+func TestLoad_EnvironmentSet_ReadsValues(t *testing.T) {
+	t.Setenv("PORTAINER_URL", "https://portainer.example.com/")
+	t.Setenv("PORTAINER_TOKEN", "ptr_abc")
+	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "true")
+	t.Setenv("TOOL_SURFACE", "meta")
+	t.Setenv("PORTAINER_READ_ONLY", "true")
+	t.Setenv("LOG_LEVEL", "debug")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.URL != "https://portainer.example.com" {
+		t.Errorf("URL = %q, want trailing slash trimmed", cfg.URL)
+	}
+	if cfg.Token != "ptr_abc" {
+		t.Errorf("Token = %q, want %q", cfg.Token, "ptr_abc")
+	}
+	if !cfg.SkipTLSVerify || !cfg.ReadOnly {
+		t.Errorf("booleans not parsed: %+v", cfg)
+	}
+	if cfg.ToolSurface != SurfaceMeta {
+		t.Errorf("ToolSurface = %q, want %q", cfg.ToolSurface, SurfaceMeta)
+	}
+	if cfg.LogLevel != slog.LevelDebug {
+		t.Errorf("LogLevel = %v, want %v", cfg.LogLevel, slog.LevelDebug)
+	}
+}
+
+func TestLoad_InvalidSurface_ReturnsError(t *testing.T) {
+	t.Setenv("TOOL_SURFACE", "nonsense")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for an invalid TOOL_SURFACE")
+	}
+}
+
+func TestValidate_MissingURL_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Token: "ptr_abc", ToolSurface: SurfaceDynamic}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an error for a missing URL")
+	}
+}
+
+func TestValidate_MissingToken_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{URL: "https://portainer.example.com", ToolSurface: SurfaceDynamic}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an error for a missing token")
+	}
+}
+
+func TestValidate_NonHTTPURL_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{URL: "ftp://portainer.example.com", Token: "ptr_abc", ToolSurface: SurfaceDynamic}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want an error for a non-HTTP scheme")
+	}
+}
+
+func TestValidate_Complete_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{URL: "https://portainer.example.com", Token: "ptr_abc", ToolSurface: SurfaceDynamic}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() error = %v, want nil", err)
+	}
+}
