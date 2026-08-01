@@ -2,12 +2,12 @@ dist
 .dev
 .tmptools.yaml
 
-# Secretos y configuración local — nunca versionar
+# Secrets and local configuration — never commit
 .env
 .env.*
 !.env.example
 *.license
 
-# Artefactos de trabajo local — no se versionan
+# Local working artefacts — not versioned
 plan/
 docs/superpowers/

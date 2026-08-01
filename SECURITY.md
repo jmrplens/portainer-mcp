@@ -13,7 +13,7 @@
 
 Instead, report them privately via one of these methods:
 
-1. **GitHub Security Advisories**: Go to [Security → Advisories → New draft advisory](https://github.com/jmrplens/portainer-mcp-enhanced/security/advisories/new)
+1. **GitHub Security Advisories**: Go to [Security → Advisories → New draft advisory](https://github.com/jmrplens/portainer-mcp/security/advisories/new)
 2. **Email**: Send details to the repository owner listed in [CODEOWNERS](.github/CODEOWNERS)
 
 ### What to include
