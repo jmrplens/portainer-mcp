@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -75,8 +76,18 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	if !strings.HasPrefix(path, "/") {
 		return nil, fmt.Errorf("%s %s: path must start with /", method, path)
 	}
-	if strings.Contains(path, "..") {
-		return nil, fmt.Errorf("%s %s: path must not contain %q", method, path, "..")
+	// Check the decoded path: %2e%2e survives a literal ".." scan, and the
+	// server decodes before routing. Comparing whole segments rather than
+	// scanning for a substring also keeps a legitimate resource name such as
+	// "a..b" from being rejected as traversal.
+	decoded, err := url.PathUnescape(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: path is not valid percent-encoding: %w", method, path, err)
+	}
+	for _, segment := range strings.Split(decoded, "/") {
+		if segment == ".." {
+			return nil, fmt.Errorf("%s %s: path must not traverse upward", method, path)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)

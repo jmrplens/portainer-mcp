@@ -101,6 +101,12 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 				spec.Name, spec.OperationID)
 		}
 
+		// Provably redundant given the edition cross-check above, which forces
+		// every valid spec's declared edition to agree with the applicability
+		// index — so by this point Includes is always true. Kept as a backstop
+		// in case that cross-check is ever relaxed, and because the cost is one
+		// comparison. Deleting it breaks no test, which is the point: this is
+		// belt and braces, not the mechanism.
 		if !opts.Edition.Includes(spec.Edition) {
 			continue
 		}

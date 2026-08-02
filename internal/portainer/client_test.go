@@ -255,3 +255,76 @@ func TestDo_PathWithTraversal_ReturnsError(t *testing.T) {
 		t.Error("Do() error = nil, want an error for a traversal path")
 	}
 }
+
+// A percent-encoded traversal survives a literal ".." scan but the server
+// decodes it before routing, so the check must run on the decoded path.
+func TestDo_PercentEncodedTraversal_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; validation should have refused it", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/%2e%2e/%2e%2e/etc/passwd", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a percent-encoded traversal")
+	}
+}
+
+// A resource name containing two dots is not traversal and must be allowed.
+func TestDo_NameContainingTwoDots_IsAllowed(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/tags/a..b", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v, want a legitimate name containing two dots to be allowed", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotPath != "/api/tags/a..b" {
+		t.Errorf("server saw %q, want /api/tags/a..b", gotPath)
+	}
+}
+
+// Invalid percent-encoding must not reach the network. This does not pin down
+// which layer produces the error: url.NewRequestWithContext's own URL parsing
+// rejects a malformed escape such as %zz independently of Do's explicit
+// PathUnescape check, so this guards the observable contract (an error, no
+// request sent) rather than proving the explicit check is what catches it.
+func TestDo_InvalidPercentEncoding_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q for invalid percent-encoding", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/%zz", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for invalid percent-encoding")
+	}
+}
