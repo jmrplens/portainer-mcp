@@ -5,23 +5,35 @@ import (
 	"testing"
 )
 
-func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
-	// Hermetic: clear every variable Load reads so the ambient shell (or a
-	// later phase's new env var) cannot change the outcome. t.Setenv restores
-	// the prior value automatically, and empty is treated as unset by both
-	// envOr and envBool.
-	for _, key := range []string{
-		"PORTAINER_URL",
-		"PORTAINER_TOKEN",
-		"PORTAINER_SKIP_TLS_VERIFY",
-		"TOOL_SURFACE",
-		"PORTAINER_READ_ONLY",
-		"PORTAINER_SAFE_MODE",
-		"LOG_LEVEL",
-		"PORTAINER_EDITION",
-	} {
-		t.Setenv(key, "")
+// envSuffixes lists every variable Load reads, without the prefix. It is
+// declared once because two things need it: clearing the prefixed names to
+// make a test hermetic, and setting the unprefixed names to prove they are
+// ignored. A phase that adds a variable adds it here.
+var envSuffixes = []string{
+	"URL",
+	"TOKEN",
+	"SKIP_TLS_VERIFY",
+	"TOOL_SURFACE",
+	"READ_ONLY",
+	"SAFE_MODE",
+	"LOG_LEVEL",
+	"EDITION",
+}
+
+// clearPortainerEnv makes a test hermetic by clearing every variable Load
+// reads, so the ambient shell, a .env file, or a later phase's new variable
+// cannot change the outcome — including by making Load fail for a reason the
+// test does not name. t.Setenv restores prior values automatically, and empty
+// is treated as unset by both envOr and envBool.
+func clearPortainerEnv(t *testing.T) {
+	t.Helper()
+	for _, suffix := range envSuffixes {
+		t.Setenv(envPrefix+suffix, "")
 	}
+}
+
+func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
+	clearPortainerEnv(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -39,12 +51,13 @@ func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
 }
 
 func TestLoad_EnvironmentSet_ReadsValues(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_URL", "https://portainer.example.com/")
 	t.Setenv("PORTAINER_TOKEN", "ptr_abc")
 	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "true")
-	t.Setenv("TOOL_SURFACE", "meta")
+	t.Setenv("PORTAINER_TOOL_SURFACE", "meta")
 	t.Setenv("PORTAINER_READ_ONLY", "true")
-	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("PORTAINER_LOG_LEVEL", "debug")
 
 	cfg, err := Load()
 	if err != nil {
@@ -68,13 +81,15 @@ func TestLoad_EnvironmentSet_ReadsValues(t *testing.T) {
 }
 
 func TestLoad_InvalidSurface_ReturnsError(t *testing.T) {
-	t.Setenv("TOOL_SURFACE", "nonsense")
+	clearPortainerEnv(t)
+	t.Setenv("PORTAINER_TOOL_SURFACE", "nonsense")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for an invalid TOOL_SURFACE")
 	}
 }
 
 func TestLoad_EditionOverride_IsRead(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_EDITION", "ee")
 	cfg, err := Load()
 	if err != nil {
@@ -86,6 +101,7 @@ func TestLoad_EditionOverride_IsRead(t *testing.T) {
 }
 
 func TestLoad_InvalidEdition_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_EDITION", "business")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for an invalid PORTAINER_EDITION")
@@ -125,6 +141,7 @@ func TestValidate_Complete_ReturnsNil(t *testing.T) {
 }
 
 func TestLoad_MalformedReadOnly_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_READ_ONLY", "yes")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_READ_ONLY")
@@ -132,6 +149,7 @@ func TestLoad_MalformedReadOnly_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_MalformedSafeMode_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_SAFE_MODE", "on")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SAFE_MODE")
@@ -139,6 +157,7 @@ func TestLoad_MalformedSafeMode_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_MalformedSkipTLSVerify_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "sure")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SKIP_TLS_VERIFY")
@@ -161,5 +180,47 @@ func TestValidate_TrailingSlashURL_IsNormalised(t *testing.T) {
 	}
 	if cfg.URL != "https://portainer.example.com" {
 		t.Errorf("URL = %q, want the trailing slash trimmed", cfg.URL)
+	}
+}
+
+// TestLoad_UnprefixedNamesAreIgnored is the guard for the defect this prefix
+// exists to prevent. TOOL_SURFACE and LOG_LEVEL were read without the
+// PORTAINER_ prefix every other variable carries, so an unrelated process in
+// the environment — LOG_LEVEL is a common name — could change our behaviour.
+// Reading through env() makes that structurally impossible; this pins it.
+func TestLoad_UnprefixedNamesAreIgnored(t *testing.T) {
+	clearPortainerEnv(t)
+	for _, suffix := range envSuffixes {
+		t.Setenv(suffix, "")
+	}
+
+	// Values that would be visibly wrong if any of them were honoured: a
+	// non-default surface, debug logging, and both security controls off-by-
+	// default flipped on.
+	t.Setenv("TOOL_SURFACE", "individual")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("READ_ONLY", "true")
+	t.Setenv("SAFE_MODE", "true")
+	t.Setenv("URL", "https://unprefixed.example.com")
+	t.Setenv("TOKEN", "unprefixed-token")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.ToolSurface != SurfaceDynamic {
+		t.Errorf("ToolSurface = %q, want the default %q: an unprefixed TOOL_SURFACE was honoured",
+			cfg.ToolSurface, SurfaceDynamic)
+	}
+	if cfg.LogLevel != slog.LevelInfo {
+		t.Errorf("LogLevel = %v, want the default info: an unprefixed LOG_LEVEL was honoured", cfg.LogLevel)
+	}
+	if cfg.ReadOnly || cfg.SafeMode {
+		t.Errorf("ReadOnly = %v, SafeMode = %v, want both false: an unprefixed variable was honoured",
+			cfg.ReadOnly, cfg.SafeMode)
+	}
+	if cfg.URL != "" || cfg.Token != "" {
+		t.Errorf("URL = %q, Token = %q, want both empty: an unprefixed variable was honoured", cfg.URL, cfg.Token)
 	}
 }

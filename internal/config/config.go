@@ -57,7 +57,7 @@ func Load() (*Config, error) {
 
 	surface := ToolSurface(strings.ToLower(envOr("TOOL_SURFACE", string(SurfaceDynamic))))
 	if err := validateToolSurface(surface); err != nil {
-		return nil, fmt.Errorf("invalid TOOL_SURFACE: %w", err)
+		return nil, fmt.Errorf("invalid %sTOOL_SURFACE: %w", envPrefix, err)
 	}
 
 	level, err := parseLevel(envOr("LOG_LEVEL", "info"))
@@ -65,27 +65,27 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	skipTLSVerify, err := envBool("PORTAINER_SKIP_TLS_VERIFY")
+	skipTLSVerify, err := envBool("SKIP_TLS_VERIFY")
 	if err != nil {
 		return nil, err
 	}
-	readOnly, err := envBool("PORTAINER_READ_ONLY")
+	readOnly, err := envBool("READ_ONLY")
 	if err != nil {
 		return nil, err
 	}
-	safeMode, err := envBool("PORTAINER_SAFE_MODE")
+	safeMode, err := envBool("SAFE_MODE")
 	if err != nil {
 		return nil, err
 	}
 
-	configuredEdition, err := edition.Parse(os.Getenv("PORTAINER_EDITION"))
+	configuredEdition, err := edition.Parse(env("EDITION"))
 	if err != nil {
-		return nil, fmt.Errorf("invalid PORTAINER_EDITION: %w", err)
+		return nil, fmt.Errorf("invalid %sEDITION: %w", envPrefix, err)
 	}
 
 	return &Config{
-		URL:           strings.TrimRight(os.Getenv("PORTAINER_URL"), "/"),
-		Token:         os.Getenv("PORTAINER_TOKEN"),
+		URL:           strings.TrimRight(env("URL"), "/"),
+		Token:         env("TOKEN"),
 		SkipTLSVerify: skipTLSVerify,
 		ToolSurface:   surface,
 		ReadOnly:      readOnly,
@@ -140,8 +140,21 @@ func validateToolSurface(s ToolSurface) error {
 	}
 }
 
+// envPrefix is prepended to every name env, envOr and envBool look up. It is
+// applied inside those helpers rather than written at each call site so that
+// adding a variable cannot silently introduce an unprefixed one: TOOL_SURFACE
+// and LOG_LEVEL were both read without it, and LOG_LEVEL in particular is a
+// common enough name that an unrelated process in the environment could have
+// changed our log level.
+const envPrefix = "PORTAINER_"
+
+// env reads one prefixed variable. Callers pass the suffix only.
+func env(key string) string {
+	return os.Getenv(envPrefix + key)
+}
+
 func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := env(key); v != "" {
 		return v
 	}
 	return fallback
@@ -152,13 +165,13 @@ func envOr(key, fallback string) string {
 // false — read-only and safe mode are security controls, and a typo such as
 // PORTAINER_READ_ONLY=yes must not disable one without saying so.
 func envBool(key string) (bool, error) {
-	raw := os.Getenv(key)
+	raw := env(key)
 	if raw == "" {
 		return false, nil
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
-		return false, fmt.Errorf("invalid %s %q: want a boolean such as true or false", key, raw)
+		return false, fmt.Errorf("invalid %s%s %q: want a boolean such as true or false", envPrefix, key, raw)
 	}
 	return v, nil
 }
@@ -174,6 +187,6 @@ func parseLevel(s string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return 0, fmt.Errorf("invalid LOG_LEVEL %q: want debug, info, warn or error", s)
+		return 0, fmt.Errorf("invalid %sLOG_LEVEL %q: want debug, info, warn or error", envPrefix, s)
 	}
 }
