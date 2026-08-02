@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // AdminUsername and AdminPassword are the credentials every ephemeral estate
@@ -204,9 +205,14 @@ func do(c *http.Client, req *http.Request, out any) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		// Portainer answers 403 with a setup-token message. Naming it here
-		// saves the next reader a trip through Portainer's source.
-		if resp.StatusCode == http.StatusForbidden && bytes.Contains(bytes.ToLower(snippet), []byte("setup token")) {
+		// A 403 from this specific endpoint means exactly one thing: the
+		// server demands a setup token and did not get one. That is true
+		// regardless of what the server's own message happens to say, so
+		// the detection keys on the request, not on sniffing the response
+		// body for wording no version of Portainer is contractually bound
+		// to use. Naming the remedy here saves the next reader a trip
+		// through Portainer's source.
+		if resp.StatusCode == http.StatusForbidden && strings.HasSuffix(req.URL.Path, "/users/admin/init") {
 			return fmt.Errorf("%s %s: http 403: this server requires a setup token; "+
 				"start it with --no-setup-token or pass the token from its startup logs",
 				req.Method, req.URL.Path)

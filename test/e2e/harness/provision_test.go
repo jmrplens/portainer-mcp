@@ -29,8 +29,12 @@ func (f *fakePortainer) handler() http.Handler {
 	mux.HandleFunc("/api/users/admin/init", func(w http.ResponseWriter, r *http.Request) {
 		f.sawSetupToken = r.Header.Get("X-Setup-Token")
 		if f.requireSetupToken != "" && f.sawSetupToken != f.requireSetupToken {
+			// Deliberately shares no wording with the remediation text
+			// Provision's 403 branch adds: the point of that branch is to
+			// say something the server itself never says, and the test
+			// must not be satisfiable by an echo of this body alone.
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"Invalid or missing setup token"}`))
+			_, _ = w.Write([]byte(`{"message":"Access denied","details":"Unauthorized"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -109,9 +113,16 @@ func TestProvision_SetupTokenRequiredButAbsent_ReturnsInformativeError(t *testin
 	if err == nil {
 		t.Fatal("Provision() error = nil, want an error when the server demands a setup token")
 	}
-	// A bare "http 403" sends the next person to read Portainer's source.
-	if !strings.Contains(err.Error(), "setup token") {
-		t.Errorf("error = %q, want it to name the setup token", err)
+	// The server's own message says the token is missing. That is the
+	// diagnosis, and echoing it back teaches nobody anything. The value of
+	// this branch is the remedy, which the server never states: either start
+	// the container with --no-setup-token, or read the token out of its
+	// startup logs. Assert on the remedy — a generic echo of the response
+	// body cannot produce it, which is what makes this test discriminate.
+	for _, want := range []string{"--no-setup-token", "startup logs"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
 	}
 }
 
