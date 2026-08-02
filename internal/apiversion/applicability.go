@@ -21,37 +21,55 @@ type Operation struct {
 	Path   string
 }
 
-// Range is the span of versions in which an operation exists. An empty
-// MaxVersion means it is still present in the newest published spec.
-type Range struct {
+// Span is one contiguous run of versions in which an operation exists. An
+// empty MaxVersion means the operation is still present in the newest
+// published specification.
+type Span struct {
 	MinVersion string
 	MaxVersion string
 }
 
-// Applicability returns the version range for an operation.
-func Applicability(e edition.Edition, op Operation) (Range, bool) {
-	byOperation, ok := ranges[e]
+// Applicability returns every span in which an operation exists.
+//
+// Almost every operation has exactly one span. A handful have two, because
+// Portainer withdrew them and later reintroduced them — /cloud/gitcredentials
+// is absent in 2.43.0 and back in 2.44.0. Collapsing those to a single
+// first-to-last range would claim the operation exists on a version where the
+// route returns 404, so the gap is represented rather than smoothed away.
+func Applicability(e edition.Edition, op Operation) ([]Span, bool) {
+	byOperation, ok := spans[e]
 	if !ok {
-		return Range{}, false
+		return nil, false
 	}
-	r, ok := byOperation[op]
-	return r, ok
+	found, ok := byOperation[op]
+	return found, ok
 }
 
 // Available reports whether an operation exists on the given server version.
 //
 // An operation absent from the table is unavailable: the table is generated
-// from every published spec, so absence means Portainer never documented it.
-// An unparseable server version, by contrast, falls back to available — a
-// version string we cannot read is our problem, and hiding the entire API
+// from every published specification, so absence means Portainer never
+// documented it. An unparseable server version falls back to available — a
+// version string we cannot read is our problem, and hiding the whole API
 // because of it would be worse than attempting a call that may fail.
 func Available(e edition.Edition, op Operation, serverVersion string) bool {
-	r, ok := Applicability(e, op)
+	found, ok := Applicability(e, op)
 	if !ok {
 		return false
 	}
-	if r.MinVersion != "" {
-		cmp, err := compareVersions(serverVersion, r.MinVersion)
+	for _, span := range found {
+		if withinSpan(span, serverVersion) {
+			return true
+		}
+	}
+	return false
+}
+
+// withinSpan reports whether serverVersion falls inside span, treating an
+// unreadable version as inside.
+func withinSpan(span Span, serverVersion string) bool {
+	if span.MinVersion != "" {
+		cmp, err := compareVersions(serverVersion, span.MinVersion)
 		if err != nil {
 			return true
 		}
@@ -59,8 +77,8 @@ func Available(e edition.Edition, op Operation, serverVersion string) bool {
 			return false
 		}
 	}
-	if r.MaxVersion != "" {
-		cmp, err := compareVersions(serverVersion, r.MaxVersion)
+	if span.MaxVersion != "" {
+		cmp, err := compareVersions(serverVersion, span.MaxVersion)
 		if err != nil {
 			return true
 		}

@@ -145,10 +145,10 @@ func TestRun_EmptyHistoryDir_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestRun_ContiguousPresence_WritesRangesWithoutGaps exercises the common
-// case: an operation present in every version of a two-version history gets a
-// range spanning both, with an empty MaxVersion because it is still current.
-func TestRun_ContiguousPresence_WritesRangesWithoutGaps(t *testing.T) {
+// TestRun_ContiguousPresence_WritesOneSpan exercises the common case: an
+// operation present in every version of a two-version history gets a single
+// span covering both, with an empty MaxVersion because it is still current.
+func TestRun_ContiguousPresence_WritesOneSpan(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeSpec(t, dir, "ee-2.39.0.json", `{"paths": {"/stacks": {"get": {}}}}`)
@@ -164,18 +164,19 @@ func TestRun_ContiguousPresence_WritesRangesWithoutGaps(t *testing.T) {
 		t.Fatalf("read generated file: %v", err)
 	}
 	content := string(got)
-	if !strings.Contains(content, `{Method: "GET", Path: "/stacks"}: {MinVersion: "2.39.0", MaxVersion: ""}`) {
-		t.Errorf("generated file = %s, want a MinVersion of 2.39.0 and an empty MaxVersion", content)
+	if !strings.Contains(content, `{Method: "GET", Path: "/stacks"}: {{MinVersion: "2.39.0", MaxVersion: ""}}`) {
+		t.Errorf("generated file = %s, want a single span with MinVersion 2.39.0 and an empty MaxVersion", content)
 	}
 }
 
-// TestRun_GapInPresence_IsRecordedInMinAndMaxVersion exercises the exact shape
-// of the removed-then-reintroduced case: an operation present in the first
-// and last of three versions but absent from the middle one must still
-// produce a single MinVersion/MaxVersion pair, spanning the gap rather than
-// reporting it — the gap is reported separately on stderr, not encoded in the
-// table itself.
-func TestRun_GapInPresence_IsRecordedInMinAndMaxVersion(t *testing.T) {
+// TestRun_GapInPresence_ProducesTwoSpans is the regression test for the
+// flattening defect found in review: an operation present in the first and
+// last of three versions but absent from the middle one must produce TWO
+// spans — one closed at the last version where it was present before the
+// gap, one starting at the version where it reappears — never a single
+// MinVersion/MaxVersion pair that silently claims availability across the
+// gap. The gap itself is still reported separately on stderr.
+func TestRun_GapInPresence_ProducesTwoSpans(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeSpec(t, dir, "ee-2.30.0.json", `{"paths": {"/cloud/gitcredentials": {"get": {}}}}`)
@@ -192,8 +193,14 @@ func TestRun_GapInPresence_IsRecordedInMinAndMaxVersion(t *testing.T) {
 		t.Fatalf("read generated file: %v", err)
 	}
 	content := string(got)
-	if !strings.Contains(content, `{Method: "GET", Path: "/cloud/gitcredentials"}: {MinVersion: "2.30.0", MaxVersion: ""}`) {
-		t.Errorf("generated file = %s, want MinVersion 2.30.0 and empty MaxVersion (last=newest despite the gap)", content)
+	want := `{Method: "GET", Path: "/cloud/gitcredentials"}: {{MinVersion: "2.30.0", MaxVersion: "2.30.0"}, {MinVersion: "2.44.0", MaxVersion: ""}}`
+	if !strings.Contains(content, want) {
+		t.Errorf("generated file = %s, want two spans: %s", content, want)
+	}
+	// The flattened, defect-reproducing shape must never appear.
+	flattened := `{Method: "GET", Path: "/cloud/gitcredentials"}: {{MinVersion: "2.30.0", MaxVersion: ""}}`
+	if strings.Contains(content, flattened) {
+		t.Errorf("generated file = %s, contains the flattened single-span shape that hides the 2.43.0 gap", content)
 	}
 }
 
