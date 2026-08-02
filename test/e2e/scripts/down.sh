@@ -7,3 +7,4 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # naming the profile here `down` leaves it running.
 docker compose --profile edge down -v --remove-orphans
 rm -f "${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
+rm -f "${PORTAINER_E2E_EDGE_ENV:-$PWD/.edge.env}"

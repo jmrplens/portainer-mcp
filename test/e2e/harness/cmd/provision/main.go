@@ -51,6 +51,10 @@ func run() error {
 	if estatePath == "" {
 		return fmt.Errorf("%s is not set", harness.EstateFileEnv)
 	}
+	edgeEnvPath := os.Getenv(harness.EdgeEnvFileEnv)
+	if edgeEnvPath == "" {
+		return fmt.Errorf("%s is not set", harness.EdgeEnvFileEnv)
+	}
 	licence := os.Getenv(licenceEnv)
 
 	ceURL := envOrDefault(ceBaseURLEnv, defaultCEBaseURL)
@@ -104,6 +108,19 @@ func run() error {
 	if err := estate.SaveTo(estatePath); err != nil {
 		return fmt.Errorf("save estate: %w", err)
 	}
+
+	// Written only once an edge environment actually exists this run; removed
+	// otherwise so a file left over from an earlier run cannot start an agent
+	// enrolled against a server that no longer exists.
+	if estate.EdgeAgentID != "" && estate.EdgeKey != "" {
+		if err := harness.WriteEdgeEnv(edgeEnvPath, estate.EdgeAgentID, estate.EdgeKey, estate.EdgeEndpointID); err != nil {
+			return fmt.Errorf("write edge environment file: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "wrote edge environment file at %s\n", edgeEnvPath)
+	} else if err := harness.RemoveEdgeEnv(edgeEnvPath); err != nil {
+		return fmt.Errorf("remove stale edge environment file: %w", err)
+	}
+
 	fmt.Fprintf(os.Stderr, "provisioned estate at %s (business edition: %t)\n", estatePath, estate.HasBusinessEdition())
 	return nil
 }

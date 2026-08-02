@@ -87,6 +87,62 @@ func TestEstate_HasKubernetes_FalseWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestWriteEdgeEnv_WritesKeyValuePairsComposeReads(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	if err := WriteEdgeEnv(path, "edge-uuid", "the-key", 7); err != nil {
+		t.Fatalf("WriteEdgeEnv() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	want := "EDGE_ID=edge-uuid\nEDGE_KEY=the-key\nEDGE_ENDPOINT_ID=7\n"
+	if string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+func TestWriteEdgeEnv_IsOwnerOnly(t *testing.T) {
+	t.Parallel()
+	// It carries an enrolment key: the same treatment as the estate's API key.
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	if err := WriteEdgeEnv(path, "id", "key", 1); err != nil {
+		t.Fatalf("WriteEdgeEnv() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("permissions = %04o, want 0600", perm)
+	}
+}
+
+func TestRemoveEdgeEnv_DeletesAnExistingFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	if err := WriteEdgeEnv(path, "id", "key", 1); err != nil {
+		t.Fatalf("WriteEdgeEnv() error = %v", err)
+	}
+	if err := RemoveEdgeEnv(path); err != nil {
+		t.Fatalf("RemoveEdgeEnv() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file still exists after RemoveEdgeEnv(): err = %v", err)
+	}
+}
+
+func TestRemoveEdgeEnv_MissingFile_IsNotAnError(t *testing.T) {
+	t.Parallel()
+	// The common case: no edge environment was provisioned this run, so
+	// there was never a file to remove.
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	if err := RemoveEdgeEnv(path); err != nil {
+		t.Errorf("RemoveEdgeEnv() error = %v, want nil for a file that never existed", err)
+	}
+}
+
 func TestLoadEstate_RejectsPathTraversal(t *testing.T) {
 	t.Parallel()
 	_, err := LoadEstate("../../../../etc/passwd")

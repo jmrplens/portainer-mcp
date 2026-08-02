@@ -12,6 +12,13 @@ import (
 // file. The scripts write it; TestMain reads it.
 const EstateFileEnv = "PORTAINER_E2E_ESTATE"
 
+// EdgeEnvFileEnv names the environment variable carrying the path to the
+// derived edge environment file written alongside the estate (see
+// WriteEdgeEnv). up.sh sources it with --env-file so docker compose can start
+// the edge agent without anything parsing the estate's JSON to reach three
+// strings out of it.
+const EdgeEnvFileEnv = "PORTAINER_E2E_EDGE_ENV"
+
 // Server is one provisioned Portainer.
 type Server struct {
 	Edition string      `json:"edition"`
@@ -64,17 +71,53 @@ func (e Estate) HasKubernetes() bool {
 // SaveTo writes the estate atomically, so a reader can never observe a
 // half-written file, and with owner-only permissions, because it holds keys.
 func (e Estate) SaveTo(path string) error {
-	cleaned := filepath.Clean(path)
-	if err := rejectEscapingPath(path, cleaned); err != nil {
-		return err
-	}
 	encoded, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode estate: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(cleaned), ".estate-*")
+	return writeOwnerOnlyAtomic(path, "estate", encoded)
+}
+
+// WriteEdgeEnv writes path as a KEY=value file docker compose reads natively
+// via --env-file: EDGE_ID, EDGE_KEY and EDGE_ENDPOINT_ID. It carries the same
+// enrolment secret the estate does, so it is written through the same
+// atomic, owner-only path — see writeOwnerOnlyAtomic — and belongs next to
+// the estate in .gitignore.
+func WriteEdgeEnv(path, edgeID, edgeKey string, endpointID int) error {
+	content := fmt.Sprintf("EDGE_ID=%s\nEDGE_KEY=%s\nEDGE_ENDPOINT_ID=%d\n", edgeID, edgeKey, endpointID)
+	return writeOwnerOnlyAtomic(path, "edge environment", []byte(content))
+}
+
+// RemoveEdgeEnv deletes the derived edge environment file at path, if
+// present. The provisioner calls this unconditionally whenever a run does not
+// provision an edge environment: a file left over from an earlier run would
+// otherwise silently start an agent enrolled against a server that no longer
+// exists.
+func RemoveEdgeEnv(path string) error {
+	cleaned := filepath.Clean(path)
+	if err := rejectEscapingPath(path, cleaned); err != nil {
+		return err
+	}
+	if err := os.Remove(cleaned); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove edge environment file %s: %w", cleaned, err)
+	}
+	return nil
+}
+
+// writeOwnerOnlyAtomic writes data to path atomically — a reader can never
+// observe a half-written file — with owner-only (0600) permissions, since
+// every file written this way (the estate, the derived edge environment
+// file) carries a secret. label names what is being written in wrapped
+// errors, so a failure reads "write estate" or "write edge environment"
+// rather than a generic message that could be either.
+func writeOwnerOnlyAtomic(path, label string, data []byte) error {
+	cleaned := filepath.Clean(path)
+	if err := rejectEscapingPath(path, cleaned); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(cleaned), ".portainer-e2e-*")
 	if err != nil {
-		return fmt.Errorf("create temporary estate file: %w", err)
+		return fmt.Errorf("create temporary %s file: %w", label, err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
@@ -82,16 +125,16 @@ func (e Estate) SaveTo(path string) error {
 	// Chmod restates that guarantee rather than establishing it, so a reader
 	// should not take it as the reason TestEstate_SaveTo_IsOwnerOnly passes.
 	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("restrict estate permissions: %w", err)
+		return fmt.Errorf("restrict %s permissions: %w", label, err)
 	}
-	if _, err := tmp.Write(encoded); err != nil {
-		return fmt.Errorf("write estate: %w", err)
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write %s: %w", label, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close estate: %w", err)
+		return fmt.Errorf("close %s: %w", label, err)
 	}
 	if err := os.Rename(tmp.Name(), cleaned); err != nil {
-		return fmt.Errorf("install estate: %w", err)
+		return fmt.Errorf("install %s: %w", label, err)
 	}
 	return nil
 }

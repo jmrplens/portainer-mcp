@@ -11,6 +11,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo_root=$(cd ../.. && pwd)
 
 estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
+edge_env="${PORTAINER_E2E_EDGE_ENV:-$PWD/.edge.env}"
 
 # The Business Edition licence lives in a gitignored .env at the repository
 # root. Its absence is not an error: the Community Edition legs still run, and
@@ -26,6 +27,7 @@ fi
 docker compose up -d --wait --wait-timeout 120
 
 PORTAINER_E2E_ESTATE="$estate_file" \
+PORTAINER_E2E_EDGE_ENV="$edge_env" \
 PORTAINER_E2E_LICENCE="$licence" \
     go run ./harness/cmd/provision
 
@@ -41,12 +43,18 @@ PORTAINER_E2E_LICENCE="$licence" \
 # Passing the numeric id here fails distinctively — the agent polls and the
 # server answers "invalid Edge identifier" — not silently, but it still isn't
 # what a reader skimming for "the id" would reach for.
-endpoint_id=$(python3 -c "import json; print(json.load(open('$estate_file')).get('edge_endpoint_id') or '')")
-edge_id=$(python3 -c "import json; print(json.load(open('$estate_file')).get('edge_agent_id') or '')")
-edge_key=$(python3 -c "import json; print(json.load(open('$estate_file')).get('edge_key') or '')")
-if [[ -n "$edge_id" && -n "$edge_key" ]]; then
-    EDGE_ID="$edge_id" EDGE_KEY="$edge_key" docker compose --profile edge up -d edge
-    echo "edge agent starting for endpoint $endpoint_id (edge id $edge_id)" >&2
+#
+# The provisioner writes this file itself, alongside the estate, once it
+# knows these values; compose consumes KEY=value natively via --env-file, so
+# nothing here has to parse the estate's JSON to reach three strings out of
+# it. The estate file stays the canonical record of what was provisioned —
+# this is a derived artefact for the shell, and the provisioner removes it
+# when no edge environment exists, so a stale file from an earlier run cannot
+# enrol an agent against a server that is gone.
+if [[ -f "$edge_env" ]]; then
+    docker compose --env-file "$edge_env" --profile edge up -d edge
+    endpoint_id=$(grep '^EDGE_ENDPOINT_ID=' "$edge_env" | cut -d= -f2-)
+    echo "edge agent starting for endpoint $endpoint_id" >&2
 else
     echo "no edge endpoint provisioned: skipping the edge agent" >&2
 fi
