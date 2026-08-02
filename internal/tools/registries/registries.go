@@ -316,6 +316,11 @@ func redact(r *apigen.PortainereeRegistry) *apigen.PortainereeRegistry {
 		config := *scrubbed.ManagementConfiguration
 		config.Password = nil
 		config.AccessToken = nil
+		// Dropped whole rather than field by field: TLSConfig carries
+		// certificate and key paths that disclose the server's filesystem
+		// layout, a model has no use for them, and enumerating its fields
+		// would invite the same omission again when one is added.
+		config.TLSConfig = nil
 		scrubbed.ManagementConfiguration = &config
 	}
 	return &scrubbed

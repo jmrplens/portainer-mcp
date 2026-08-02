@@ -6,12 +6,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 )
 
 func clientFor(t *testing.T, handler http.HandlerFunc) *portainer.Client {
@@ -685,7 +687,13 @@ func TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted(t *t
 			"ManagementConfiguration": {
 				"Password": "nested-secret",
 				"AccessToken": "nested-token",
-				"Username": "keep-me"
+				"Username": "keep-me",
+				"TLSConfig": {
+					"TLS": true,
+					"TLSCACert": "/data/tls/ca.pem",
+					"TLSCert": "/data/tls/cert.pem",
+					"TLSKey": "/data/tls/key.pem"
+				}
 			}
 		}`))
 	})
@@ -698,10 +706,106 @@ func TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted(t *t
 	if err != nil {
 		t.Fatalf("marshal result: %v", err)
 	}
-	if strings.Contains(string(encoded), "nested-secret") || strings.Contains(string(encoded), "nested-token") {
-		t.Errorf("the handler returned a nested management credential to the caller: %s", encoded)
+	for _, secret := range []string{"nested-secret", "nested-token", "/data/tls/ca.pem", "/data/tls/cert.pem", "/data/tls/key.pem"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("the handler returned a nested management credential/path to the caller (%q): %s", secret, encoded)
+		}
 	}
 	if !strings.Contains(string(encoded), "keep-me") {
 		t.Error("redaction removed more than the nested credentials")
 	}
+}
+
+// ptr returns a pointer to v, for constructing fixtures against generated
+// types whose optional fields are all pointers.
+func ptr[T any](v T) *T { return &v }
+
+// TestRedact_LeavesNoCredentialShapedFieldPopulated walks the redacted struct
+// and fails on any field whose name looks like a credential. It is deliberately
+// name-based and reflective rather than a fixed list: the generated type comes
+// from Portainer's spec and will gain fields we did not anticipate, and the
+// failure mode of missing one is a credential in a model's transcript.
+//
+// Allow list, with reasons — fields the walk flags by name but which are not
+// credentials. If the walk below ever flags a field that is not a secret
+// (e.g. a KeyID, a PublicKey, or a CertificateAuthority boolean), add its
+// "Struct.Field" path here with a one-line reason rather than weakening the
+// marker list.
+var redactAllowList = map[string]string{
+	// AccessTokenExpiry is a unix timestamp for how long the access token
+	// remains valid, not the token itself. It matches the "token" marker only
+	// by name, redact deliberately leaves it populated (it discloses nothing),
+	// and it is populated in the fixture below specifically to prove this
+	// allow list is load-bearing rather than decorative.
+	"Registry.AccessTokenExpiry": "an expiry timestamp, not a credential",
+}
+
+func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
+	t.Parallel()
+	secret := "SENTINEL-SECRET"
+	registry := &apigen.PortainereeRegistry{
+		Name:     ptr("private"),
+		Password: &secret,
+		// AccessTokenExpiry is deliberately populated too: it matches the
+		// "token" marker by name but is not a credential (see the allow list
+		// above), and populating it here is what proves the allow list
+		// actually suppresses a flagged-but-legitimate field rather than the
+		// test simply never encountering one.
+		AccessTokenExpiry: ptr(1893456000),
+		// Populate every credential-shaped field the type currently has.
+		// The reflective walk below is what catches ones added later.
+	}
+	// Set AccessToken and the nested configuration through the same sentinel.
+	registry.AccessToken = &secret
+	registry.ManagementConfiguration = &apigen.PortainerRegistryManagementConfiguration{
+		Password:    &secret,
+		AccessToken: &secret,
+		TLSConfig: &apigen.PortainerTLSConfiguration{
+			TLSCACert: &secret, TLSCert: &secret, TLSKey: &secret,
+		},
+	}
+
+	encoded, err := json.Marshal(redact(registry))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Errorf("a credential survived redaction: %s", encoded)
+	}
+
+	// And catch a field we have not thought of: any populated field whose name
+	// suggests a secret must be gone after redaction.
+	suspicious := []string{"password", "token", "secret", "key", "credential", "cert"}
+	var walk func(v reflect.Value, path string)
+	walk = func(v reflect.Value, path string) {
+		for v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return
+			}
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			return
+		}
+		for i := range v.NumField() {
+			field := v.Type().Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := strings.ToLower(field.Name)
+			child := v.Field(i)
+			fieldPath := path + "." + field.Name
+			for _, marker := range suspicious {
+				if strings.Contains(name, marker) && !child.IsZero() {
+					if reason, allowed := redactAllowList[fieldPath]; allowed {
+						t.Logf("%s is populated after redaction but allow-listed: %s", fieldPath, reason)
+						continue
+					}
+					t.Errorf("%s is populated after redaction; if it is not a credential, add it to the allow list with a reason", fieldPath)
+				}
+			}
+			walk(child, fieldPath)
+		}
+	}
+	walk(reflect.ValueOf(redact(registry)), "Registry")
 }
