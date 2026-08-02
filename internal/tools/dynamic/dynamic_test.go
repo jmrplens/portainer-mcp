@@ -3,15 +3,18 @@ package dynamic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
 func connect(t *testing.T, server *mcp.Server) (*mcp.ClientSession, context.Context) {
@@ -179,17 +182,88 @@ func TestFindAction_ReportsMutatingAndDestructive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	var matches []map[string]any
-	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &matches); err != nil {
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
 		t.Fatalf("find did not return JSON: %v", err)
 	}
-	for _, m := range matches {
-		if m["action"] == "system.update" {
-			if m["mutating"] != true {
+	for _, m := range result.Matches {
+		if m.Action == "system.update" {
+			if !m.Mutating {
 				t.Error("system.update is not reported as mutating")
 			}
 			return
 		}
 	}
 	t.Error("system.update was not among the matches for \"update\"")
+}
+
+// A broad query must not return the whole catalog, and must say how much it
+// held back — a model that cannot tell it was truncated will assume it saw
+// everything and pick badly.
+func TestFindAction_ManyMatches_IsCappedAndSaysSo(t *testing.T) {
+	t.Parallel()
+	specs := make([]toolutil.ActionSpec, 0, 30)
+	for i := range 30 {
+		specs = append(specs, toolutil.ActionSpec{
+			Name:        fmt.Sprintf("tags.list%02d", i),
+			Domain:      "tags",
+			OperationID: "TagList",
+			Title:       "List tags",
+			Description: "Lists every tag defined on this Portainer instance.",
+			Edition:     edition.CE,
+			Handler:     func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+		})
+	}
+	catalog, err := actioncatalog.Build(specs, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "tags"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	var got findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &got); err != nil {
+		t.Fatalf("find did not return the expected shape: %v", err)
+	}
+	if got.Matched != 30 {
+		t.Errorf("matched = %d, want 30", got.Matched)
+	}
+	if len(got.Matches) != maxMatches {
+		t.Errorf("returned %d matches, want them capped at %d", len(got.Matches), maxMatches)
+	}
+	if got.Note == "" {
+		t.Error("a truncated result carries no note, so the model cannot tell it was truncated")
+	}
+}
+
+// A result that fits must not claim truncation.
+func TestFindAction_FewMatches_CarriesNoTruncationNote(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, tools.Deps{Client: &portainer.Client{}}))
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "system version"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var got findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Note != "" {
+		t.Errorf("note = %q, want empty when nothing was held back", got.Note)
+	}
+	if got.Matched != len(got.Matches) {
+		t.Errorf("matched = %d but %d returned; they must agree when nothing is capped", got.Matched, len(got.Matches))
+	}
 }

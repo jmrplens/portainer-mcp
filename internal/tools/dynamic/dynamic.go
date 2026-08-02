@@ -20,6 +20,13 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
+// maxMatches bounds what find returns. The catalog reaches 442 actions, and a
+// broad query would otherwise return most of it in the response body — the same
+// token cost this surface exists to avoid, just moved out of the tool list.
+// The count of total matches is always reported, so a model can tell it should
+// narrow the query rather than assume it has seen everything.
+const maxMatches = 20
+
 // Surface registers the find and execute pair.
 type Surface struct{}
 
@@ -51,6 +58,14 @@ type match struct {
 	score       int
 }
 
+// findResult wraps the matches so a truncated result can say so. A model that
+// receives a bare list has no way to tell whether it saw everything.
+type findResult struct {
+	Matched int     `json:"matched"`
+	Matches []match `json:"matches"`
+	Note    string  `json:"note,omitempty"`
+}
+
 // Register adds portainer_find_action and portainer_execute_action.
 func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps tools.Deps) error {
 	mcp.AddTool(server, &mcp.Tool{
@@ -65,7 +80,16 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 				"No action matched %q. Try broader words, or a domain name: %s",
 				in.Query, strings.Join(catalog.Domains(), ", "))}}}, nil, nil
 		}
-		encoded, err := json.MarshalIndent(matches, "", "  ")
+
+		result := findResult{Matched: len(matches), Matches: matches}
+		if len(matches) > maxMatches {
+			result.Matches = matches[:maxMatches]
+			result.Note = fmt.Sprintf(
+				"Showing the %d best matches of %d. Narrow the query to see the rest.",
+				maxMatches, len(matches))
+		}
+
+		encoded, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return nil, nil, fmt.Errorf("encode matches: %w", err)
 		}
