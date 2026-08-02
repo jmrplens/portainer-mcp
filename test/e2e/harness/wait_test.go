@@ -39,6 +39,36 @@ func TestWaitReady_ServerBecomesReady_ReturnsVersion(t *testing.T) {
 	}
 }
 
+func TestWaitReady_EmptyVersion_IsNotTreatedAsReady(t *testing.T) {
+	t.Parallel()
+	// A 200 with no version is a server that is answering but not yet
+	// serving. Accepting it hands the caller an address that will fail on
+	// the very next call, with a confusing error far from the cause.
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= 2 {
+			_, _ = w.Write([]byte(`{"Version":"","InstanceID":""}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Version":"2.44.0","InstanceID":"abc"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	version, err := WaitReady(ctx, server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+	if version != "2.44.0" {
+		t.Errorf("version = %q: an empty version was accepted as ready", version)
+	}
+	if got := calls.Load(); got < 3 {
+		t.Errorf("attempts = %d, want at least 3: the empty-version responses were treated as ready", got)
+	}
+}
+
 func TestWaitReady_NeverReady_ReturnsErrorAtDeadline(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
