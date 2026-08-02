@@ -108,6 +108,12 @@ func httpFetcher() fetcher {
 	}
 }
 
+// renameFile is os.Rename, indirected so tests can force the failure path.
+// The atomic-write contract is only observable when the rename can be made to
+// fail after the data is staged; without this seam a revert to a direct
+// os.WriteFile would pass every test.
+var renameFile = os.Rename
+
 func writeJSON(path string, value any) error {
 	encoded, err := json.MarshalIndent(value, "", " ")
 	if err != nil {
@@ -132,10 +138,7 @@ func writeJSON(path string, value any) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", tmpName, err)
 	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return fmt.Errorf("chmod %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameFile(tmpName, path); err != nil {
 		return fmt.Errorf("rename %s to %s: %w", tmpName, path, err)
 	}
 	return nil
