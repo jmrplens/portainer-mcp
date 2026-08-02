@@ -1,0 +1,50 @@
+# Two Portainer servers and an agent, on one network, all disposable.
+#
+# Both servers run with --no-setup-token: Portainer 2.44.0 otherwise refuses
+# to create the first administrator without a token printed to its logs, which
+# turns a two-line provisioning step into log scraping. The Kubernetes leg in
+# k3d-up.sh cannot pass the flag and does scrape the logs; here we do not have
+# to.
+#
+# No volumes are declared. The estate is rebuilt from empty on every run, which
+# a one-second cold start makes cheaper than reasoning about stale state.
+name: portainer-mcp-e2e
+
+services:
+  portainer-ce:
+    image: portainer/portainer-ce:2.44.0
+    command: ["--no-setup-token"]
+    ports:
+      - "${E2E_CE_PORT:-19000}:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/portainer", "--version"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  portainer-ee:
+    image: portainer/portainer-ee:2.44.0
+    command: ["--no-setup-token"]
+    ports:
+      - "${E2E_EE_PORT:-19001}:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "/portainer", "--version"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  # A second real environment, so endpoint and container actions are exercised
+  # through the agent proxy rather than only against the local socket.
+  portainer-agent:
+    image: portainer/agent:2.44.0
+    environment:
+      AGENT_CLUSTER_ADDR: portainer-agent
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
