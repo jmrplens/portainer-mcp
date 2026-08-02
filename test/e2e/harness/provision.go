@@ -286,6 +286,23 @@ func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string)
 	return nil
 }
 
+// ReleaseLicence removes a previously applied Business Edition licence.
+//
+// Licence release is unconditional: every server this harness attaches a
+// licence to must give it back before it is destroyed, the Kubernetes leg
+// included, since its licence key is shared with a real account and a
+// disposable estate is not where it belongs to remain. Mirrors ApplyLicence's
+// redaction: an error that echoes the key it was given back is exactly as
+// likely coming from /licenses/remove as it is from /licenses/add.
+func ReleaseLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) error {
+	body := map[string][]string{"LicenseKeys": {key}}
+	bearer := map[string]string{"Authorization": "Bearer " + jwt}
+	if err := postJSON(ctx, c, baseURL+"/api/licenses/remove", body, bearer, nil); err != nil {
+		return fmt.Errorf("release licence: %w", redactSecret(err, key))
+	}
+	return nil
+}
+
 // redactedMarker replaces every occurrence of a secret in an error's text.
 const redactedMarker = "[REDACTED]"
 

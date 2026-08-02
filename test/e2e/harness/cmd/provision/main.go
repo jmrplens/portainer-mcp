@@ -10,6 +10,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,20 +39,42 @@ const (
 	// startupTimeout bounds how long the provisioner waits for each server to
 	// answer its status endpoint before giving up.
 	startupTimeout = 90 * time.Second
+
+	// k8sBaseURLEnv and k8sSetupTokenEnv carry the Kubernetes leg's address and
+	// scraped setup token from k3d-up.sh; there is no default for either,
+	// unlike the compose legs, because the NodePort k3d assigns is not known
+	// ahead of time.
+	k8sBaseURLEnv      = "PORTAINER_E2E_K8S_URL"
+	k8sSetupTokenEnv   = "PORTAINER_E2E_K8S_SETUP_TOKEN"
+	k8sEndpointName    = "k3d"
+	k8sEndpointEdition = "Kubernetes"
 )
 
 func main() {
-	if err := run(); err != nil {
+	kubernetes := flag.Bool("kubernetes", false, "provision the Kubernetes leg into the existing estate")
+	releaseLicence := flag.Bool("release-licence", false,
+		"release the Kubernetes leg's Business Edition licence instead of provisioning")
+	flag.Parse()
+
+	if err := run(*kubernetes, *releaseLicence); err != nil {
 		fmt.Fprintf(os.Stderr, "provision: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(kubernetes, releaseLicence bool) error {
 	estatePath := os.Getenv(harness.EstateFileEnv)
 	if estatePath == "" {
 		return fmt.Errorf("%s is not set", harness.EstateFileEnv)
 	}
+
+	if releaseLicence {
+		return releaseKubernetesLicence(estatePath)
+	}
+	if kubernetes {
+		return runKubernetes(estatePath)
+	}
+
 	edgeEnvPath := os.Getenv(harness.EdgeEnvFileEnv)
 	if edgeEnvPath == "" {
 		return fmt.Errorf("%s is not set", harness.EdgeEnvFileEnv)
@@ -221,4 +245,132 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// insecureClient is a client for the Kubernetes leg alone: the Helm chart's
+// certificate is self-signed, and verifying it would just mean failing every
+// request. The bypass is scoped to a freshly built Transport on a client used
+// only here, never a mutation of http.DefaultTransport, which would silently
+// stop verifying certificates for every other request this process makes.
+func insecureClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Deliberate: the Helm chart's certificate is self-signed. gosec's G402 is
+	// excluded for this file in .golangci.yml rather than suppressed with an
+	// inline directive, alongside the one authorised such directive in
+	// internal/portainer/client.go.
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}
+	return &http.Client{Timeout: 30 * time.Second, Transport: transport}
+}
+
+// runKubernetes provisions the Kubernetes leg into an estate the compose legs
+// have already written, and merges the result back in rather than
+// overwriting it.
+//
+// The design specification claims the in-cluster server acquires its own
+// Kubernetes environment automatically. Measured against a live deploy: it
+// does not. GET /endpoints returns an empty list until CreateEndpoint is
+// called explicitly below with CreationType 5 (local Kubernetes) — without
+// it every Kubernetes action in P3 would be exercised against an estate that
+// otherwise looks entirely healthy.
+func runKubernetes(estatePath string) error {
+	baseURL := os.Getenv(k8sBaseURLEnv)
+	if baseURL == "" {
+		return fmt.Errorf("%s is not set", k8sBaseURLEnv)
+	}
+	setupToken := os.Getenv(k8sSetupTokenEnv)
+	if setupToken == "" {
+		return fmt.Errorf("%s is not set", k8sSetupTokenEnv)
+	}
+	licence := os.Getenv(licenceEnv)
+
+	estate, err := harness.LoadEstate(estatePath)
+	if err != nil {
+		return fmt.Errorf("load estate: %w", err)
+	}
+
+	client := insecureClient()
+	ctx := context.Background()
+
+	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	fmt.Fprintf(os.Stderr, "waiting for Kubernetes (%s) to become ready\n", baseURL)
+	version, err := harness.WaitReady(waitCtx, client, baseURL)
+	if err != nil {
+		return fmt.Errorf("wait for Kubernetes: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Kubernetes is ready: version %s\n", version)
+
+	// Unlike the compose legs, this server cannot be started with
+	// --no-setup-token; its token was scraped from the pod logs by
+	// k3d-up.sh and arrives here instead.
+	creds, err := harness.Provision(ctx, client, baseURL, setupToken)
+	if err != nil {
+		return fmt.Errorf("provision Kubernetes: %w", err)
+	}
+
+	if licence == "" {
+		fmt.Fprintln(os.Stderr, "no licence supplied: Kubernetes leg provisioned without Business Edition")
+	} else {
+		if err := harness.ApplyLicence(ctx, client, baseURL, creds.JWT, licence); err != nil {
+			return fmt.Errorf("apply business edition licence: %w", err)
+		}
+		nodes, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT)
+		if err != nil {
+			return fmt.Errorf("read applied licence: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Kubernetes: licence applied, %d node(s) allowed\n", nodes)
+	}
+
+	endpointID, err := harness.CreateEndpoint(ctx, client, baseURL, creds.APIKey, harness.EndpointSpec{
+		Name:         k8sEndpointName,
+		CreationType: 5,
+	})
+	if err != nil {
+		return fmt.Errorf("register kubernetes endpoint: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Kubernetes: registered endpoint %d\n", endpointID)
+
+	estate.Kubernetes = harness.Server{Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds}
+	if err := estate.SaveTo(estatePath); err != nil {
+		return fmt.Errorf("save estate: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "provisioned kubernetes leg into %s\n", estatePath)
+	return nil
+}
+
+// releaseKubernetesLicence gives back the Business Edition licence applied to
+// the Kubernetes leg, if any. k3d-down.sh calls this before deleting the
+// cluster: once the cluster is gone the server is unreachable and the licence
+// key would be stranded against a real account for good. It is deliberately
+// forgiving — no estate, no Kubernetes leg, or no licence supplied are all
+// reported and treated as nothing to do, never as an error, so a best-effort
+// teardown step can never be the reason the cluster fails to delete.
+func releaseKubernetesLicence(estatePath string) error {
+	licence := os.Getenv(licenceEnv)
+	if licence == "" {
+		fmt.Fprintln(os.Stderr, "no licence supplied: nothing to release")
+		return nil
+	}
+
+	estate, err := harness.LoadEstate(estatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not load estate: %v: nothing to release\n", err)
+		return nil
+	}
+	if !estate.HasKubernetes() {
+		fmt.Fprintln(os.Stderr, "no kubernetes leg in the estate: nothing to release")
+		return nil
+	}
+	if estate.Kubernetes.Creds.JWT == "" {
+		fmt.Fprintln(os.Stderr, "kubernetes leg has no jwt on file: nothing to release")
+		return nil
+	}
+
+	client := insecureClient()
+	if err := harness.ReleaseLicence(context.Background(), client, estate.Kubernetes.BaseURL,
+		estate.Kubernetes.Creds.JWT, licence); err != nil {
+		return fmt.Errorf("release kubernetes licence: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "kubernetes: licence released")
+	return nil
 }

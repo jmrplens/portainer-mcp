@@ -368,6 +368,70 @@ func TestApplyLicence_ServerEchoesTheKey_ItIsRedacted(t *testing.T) {
 	}
 }
 
+func TestReleaseLicence_DoesNotLeakTheKeyIntoTheError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"invalid licence"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const secret = "3-SUPERSECRETLICENCEKEY=="
+	err := ReleaseLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	if err == nil {
+		t.Fatal("ReleaseLicence() error = nil, want an error on a 400")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "SUPERSECRET") {
+		t.Fatalf("the licence key leaked into the error: %v", err)
+	}
+}
+
+func TestReleaseLicence_ServerEchoesTheKey_ItIsRedacted(t *testing.T) {
+	t.Parallel()
+	const secret = "3-SUPERSECRETLICENCEKEY=="
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"message":"invalid licence","details":%q}`, string(body))
+	}))
+	t.Cleanup(server.Close)
+
+	err := ReleaseLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	if err == nil {
+		t.Fatal("ReleaseLicence() error = nil, want an error on a 400")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "SUPERSECRET") {
+		t.Fatalf("the licence key reached the error through the server's own response: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid licence") {
+		t.Errorf("error = %q, want it to keep the server's diagnosis", err)
+	}
+}
+
+func TestReleaseLicence_SendsTheKeyAsALicenseKeysArray(t *testing.T) {
+	t.Parallel()
+	const secret = "3-SOMELICENCEKEY=="
+	var gotBody map[string][]string
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := ReleaseLicence(context.Background(), server.Client(), server.URL, "the-jwt", secret); err != nil {
+		t.Fatalf("ReleaseLicence() error = %v", err)
+	}
+	if gotAuth != "Bearer the-jwt" {
+		t.Errorf("Authorization header = %q, want Bearer the-jwt", gotAuth)
+	}
+	want := []string{secret}
+	if len(gotBody["LicenseKeys"]) != 1 || gotBody["LicenseKeys"][0] != want[0] {
+		t.Errorf("LicenseKeys = %v, want %v", gotBody["LicenseKeys"], want)
+	}
+}
+
 func TestRedactSecret_EmptySecret_LeavesTheErrorAlone(t *testing.T) {
 	t.Parallel()
 	// An unlicensed run passes an empty key. Replacing the empty string would

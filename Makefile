@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down test-e2e
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e
 
 SPEC_VERSION ?= 2.44.0
 
@@ -45,6 +45,12 @@ e2e-up:
 
 e2e-down:
 	./test/e2e/scripts/down.sh
+
+e2e-k8s-up:
+	./test/e2e/scripts/k3d-up.sh
+
+e2e-k8s-down:
+	./test/e2e/scripts/k3d-down.sh
 
 test-e2e:
 	go test -tags e2e -timeout 15m -count=1 ./test/e2e/suite/...
