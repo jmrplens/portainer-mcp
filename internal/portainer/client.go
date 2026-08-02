@@ -6,16 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
 	portainerapi "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 )
 
-// DefaultTimeout bounds a single API call. Long operations such as a stack
-// redeploy that pulls multi-gigabyte images need more, and set their own
-// deadline on the context they pass.
-const DefaultTimeout = 60 * time.Second
+// DefaultCallTimeout is the deadline callers should apply to an ordinary API
+// call. It is deliberately NOT set as http.Client.Timeout: that field is an
+// absolute ceiling which a per-call context cannot raise, and this server must
+// support operations — a stack redeploy that pulls multi-gigabyte images, a
+// backup — that legitimately run far longer. Deadlines belong on the context
+// each call carries, where the caller can choose them.
+const DefaultCallTimeout = 60 * time.Second
 
 // Client is the project's entry point to the Portainer API.
 type Client struct {
@@ -34,11 +38,17 @@ func New(cfg *config.Config) (*Client, error) {
 		// Portainer, and the operator opts in explicitly.
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // opt-in via PORTAINER_SKIP_TLS_VERIFY
 	}
-	httpClient := &http.Client{Transport: transport, Timeout: DefaultTimeout}
+	httpClient := &http.Client{Transport: transport}
+
+	// Trim defensively: New does not require the caller to have run Validate,
+	// and a trailing slash would produce host//api/... which the generated
+	// client does not collapse. Against a ServeMux that 301-redirects, and Go
+	// converts a redirected POST or PUT into a GET with no body.
+	baseURL := strings.TrimRight(cfg.URL, "/") + "/api"
 
 	token := cfg.Token
 	api, err := portainerapi.NewClientWithResponses(
-		cfg.URL+"/api",
+		baseURL,
 		portainerapi.WithHTTPClient(httpClient),
 		portainerapi.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
 			req.Header.Set("X-API-Key", token)
