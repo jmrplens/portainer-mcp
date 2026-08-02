@@ -23,7 +23,10 @@ const DefaultCallTimeout = 60 * time.Second
 
 // Client is the project's entry point to the Portainer API.
 type Client struct {
-	API *portainerapi.ClientWithResponses
+	API        *portainerapi.ClientWithResponses
+	baseURL    string
+	token      string
+	httpClient *http.Client
 }
 
 // New builds a client for the given configuration.
@@ -58,5 +61,22 @@ func New(cfg *config.Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("portainer: build client: %w", err)
 	}
-	return &Client{API: api}, nil
+	return &Client{API: api, baseURL: baseURL, token: token, httpClient: httpClient}, nil
+}
+
+// Get issues a raw authenticated GET against a path below the API root. It
+// exists for the handful of callers that run before the typed client is
+// useful — edition detection, health checks — and for endpoints outside the
+// spec.
+func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request for %s: %w", path, err)
+	}
+	req.Header.Set("X-API-Key", c.token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get %s: %w", path, err)
+	}
+	return resp, nil
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 )
 
 // ToolSurface selects which projection of the action catalog is registered.
@@ -39,6 +41,7 @@ type Config struct {
 	ReadOnly      bool
 	SafeMode      bool
 	LogLevel      slog.Level
+	Edition       edition.Edition
 }
 
 // Load reads a .env file when present, then the process environment, and
@@ -75,6 +78,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	configuredEdition, err := edition.Parse(os.Getenv("PORTAINER_EDITION"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid PORTAINER_EDITION: %w", err)
+	}
+
 	return &Config{
 		URL:           strings.TrimRight(os.Getenv("PORTAINER_URL"), "/"),
 		Token:         os.Getenv("PORTAINER_TOKEN"),
@@ -83,6 +91,7 @@ func Load() (*Config, error) {
 		ReadOnly:      readOnly,
 		SafeMode:      safeMode,
 		LogLevel:      level,
+		Edition:       configuredEdition,
 	}, nil
 }
 
