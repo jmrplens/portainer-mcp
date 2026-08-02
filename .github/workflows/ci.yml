@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly: this checks whether Portainer republished the specification, which
+    # is a question about upstream, not about any individual commit.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -77,13 +82,14 @@ jobs:
 
   spec:
     name: "Spec: committed copy is current"
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Verify the committed spec matches a fresh fetch
+      - name: Verify the committed specs match a fresh fetch
         run: make check-spec
 
   no-stdout-writes:

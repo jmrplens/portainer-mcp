@@ -62,12 +62,18 @@ gen-applicability:
 	go run ./cmd/gen_applicability -history api/specs/history -out internal/apiversion/applicability_gen.go
 	gofmt -w internal/apiversion/applicability_gen.go
 
+# check-spec verifies the committed specifications still match a fresh fetch.
+# It writes into a temporary directory rather than over api/specs, so a failure
+# never leaves the working tree modified — a check that mutates what it checks
+# is a trap for whoever runs it locally.
 check-spec:
-	@cp api/specs/ee-$(SPEC_VERSION).json /tmp/spec-before.json
-	@go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
-	@diff -q /tmp/spec-before.json api/specs/ee-$(SPEC_VERSION).json \
-		|| { echo "committed spec differs from a fresh fetch; run make update-spec"; exit 1; }
-	@echo "spec is current"
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT; \
+	for ed in ee ce; do \
+		go run ./cmd/fetch_spec -edition $$ed -version $(SPEC_VERSION) -out "$$tmp" || exit 1; \
+		diff -q "api/specs/$$ed-$(SPEC_VERSION).json" "$$tmp/$$ed-$(SPEC_VERSION).json" >/dev/null \
+			|| { echo "committed $$ed spec differs from a fresh fetch; run make update-spec"; exit 1; }; \
+	done; \
+	echo "committed specs are current"
 
 # validate-spec is a manual diagnostic tool, not a CI gate: ogen refuses to
 # generate for the committed spec, and the failure does not have a narrow fix.
