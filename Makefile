@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps
 
 SPEC_VERSION ?= 2.44.0
 
@@ -54,6 +54,15 @@ e2e-k8s-down:
 
 test-e2e:
 	go test -tags e2e -timeout 15m -count=1 ./test/e2e/suite/...
+
+# audit-e2e-gaps reports which catalog actions no e2e test references. It is
+# informational, not a CI gate, until P7: with the catalog in early phases of
+# P3's growth to 441 actions, a hard gate would fail on almost the whole
+# catalog and teach everyone to ignore it. Its exit code is 0 unless the
+# catalog itself fails to build; the unexercised count is printed, never
+# swallowed, so coverage nobody has never reads as coverage verified.
+audit-e2e-gaps:
+	go run ./cmd/audit_e2e_gaps
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
