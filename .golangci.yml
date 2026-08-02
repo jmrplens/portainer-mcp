@@ -23,6 +23,10 @@ linters:
         - errors.Join(
         - .Wrap(
   exclusions:
+    # Generated files are exempt via their "Code generated ... DO NOT EDIT." header.
+    # Stated explicitly rather than relying on the default: internal/portainer/gen
+    # is ~100k generated lines, and flipping this silently unleashes them.
+    generated: strict
     rules:
       # Table-driven tests routinely ignore returned errors on setup helpers,
       # and duplicated literals in fixtures are intentional.

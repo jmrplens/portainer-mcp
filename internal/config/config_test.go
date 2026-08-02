@@ -18,6 +18,7 @@ func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
 		"PORTAINER_READ_ONLY",
 		"PORTAINER_SAFE_MODE",
 		"LOG_LEVEL",
+		"PORTAINER_EDITION",
 	} {
 		t.Setenv(key, "")
 	}
@@ -70,6 +71,24 @@ func TestLoad_InvalidSurface_ReturnsError(t *testing.T) {
 	t.Setenv("TOOL_SURFACE", "nonsense")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for an invalid TOOL_SURFACE")
+	}
+}
+
+func TestLoad_EditionOverride_IsRead(t *testing.T) {
+	t.Setenv("PORTAINER_EDITION", "ee")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Edition != "EE" {
+		t.Errorf("Edition = %q, want %q", cfg.Edition, "EE")
+	}
+}
+
+func TestLoad_InvalidEdition_ReturnsError(t *testing.T) {
+	t.Setenv("PORTAINER_EDITION", "business")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want an error for an invalid PORTAINER_EDITION")
 	}
 }
 

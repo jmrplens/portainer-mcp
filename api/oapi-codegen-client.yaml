@@ -1,0 +1,4 @@
+package: portainerapi
+output: internal/portainer/gen/client.gen.go
+generate:
+  client: true

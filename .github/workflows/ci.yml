@@ -21,6 +21,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum \
+            || { echo "::error::go.mod/go.sum are not tidy; run go mod tidy"; exit 1; }
       - name: Run tests with coverage
         run: go test ./... -count=1 -race -coverprofile=coverage.out
       - name: Report coverage
@@ -69,6 +74,20 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - name: Scan
         run: govulncheck ./...
+
+  generated:
+    name: "Generated code is current"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Regenerate the client and confirm no drift
+        run: |
+          make gen-client
+          git diff --exit-code internal/portainer/gen/ \
+            || { echo "::error::internal/portainer/gen is out of date or was hand-edited; run make gen-client"; exit 1; }
 
   no-stdout-writes:
     name: "Guard: nothing writes to stdout"

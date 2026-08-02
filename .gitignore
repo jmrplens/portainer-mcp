@@ -11,3 +11,7 @@ dist
 # Local working artefacts — not versioned
 plan/
 docs/superpowers/
+
+# Generator input: 56 near-duplicate spec files (~40 MB), reproducible with
+# `make fetch-history`. The build depends only on the two committed specs.
+api/specs/history/
