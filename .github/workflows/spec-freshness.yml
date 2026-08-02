@@ -1,0 +1,28 @@
+name: Spec freshness
+
+# Asks whether Portainer republished the specification we vendored. That is a
+# question about upstream, not about any individual commit, so it runs on a
+# schedule rather than in the pull-request path — a documentation-site outage
+# must never fail an unrelated pull request.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.5"
+
+jobs:
+  check-spec:
+    name: "Committed specs match a fresh fetch"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Verify the committed specs match a fresh fetch
+        run: make check-spec
