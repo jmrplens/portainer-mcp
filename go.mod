@@ -2,6 +2,8 @@ module github.com/jmrplens/portainer-mcp
 
 go 1.26
 
+toolchain go1.26.5
+
 require github.com/joho/godotenv v1.5.1
 
 require (
