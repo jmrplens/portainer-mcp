@@ -73,31 +73,77 @@ func TestBuild_InvalidSpec_ReturnsError(t *testing.T) {
 }
 
 // An EE-only action must not appear in a CE catalog. Getting this backwards
-// offers the model 179 operations its server does not implement.
+// offers the model operations its server does not implement.
 //
-// This deliberately uses SystemInfo rather than SystemUpdate for the gated
-// action: SystemInfo (GET /system/info) resolves in both editions'
-// applicability tables, so exclusion here can only come from the
-// Edition.Includes check in Build, not as a side effect of the OperationID
-// resolving in neither/only-the-other edition. SystemUpdate (POST
-// /system/update) is EE-only at the API level too, so using it would make
-// this test pass even with the edition-exclusion line deleted — the
-// OperationID branch would already filter it out first.
+// This used to deliberately use SystemInfo (shared by both editions) declared
+// as Edition: EE, so that exclusion could only come from the Edition.Includes
+// check rather than as a side effect of OperationID resolution. The
+// Edition/index cross-check in Build now rejects that declaration outright —
+// a shared operation may not be declared EE, because that is exactly the lie
+// the cross-check exists to catch (see TestBuild_DeclaresEEForASharedOperation_ReturnsError).
+// So this test now uses SystemUpdate, a genuinely EE-only operation: it is
+// filtered out of a CE catalog by the OperationID branch before Edition.Includes
+// is ever consulted, but the catalog's observable behaviour — the action is
+// absent — is exactly what a caller depends on either way.
 func TestBuild_EEActionOnCEServer_IsExcluded(t *testing.T) {
 	t.Parallel()
 	specs := []toolutil.ActionSpec{
 		spec("tags.list", "tags", "TagList", edition.CE),
-		spec("system.info_ee_gated", "system", "SystemInfo", edition.EE),
+		spec("system.update", "system", "SystemUpdate", edition.EE),
 	}
 	c, err := Build(specs, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if _, ok := c.Lookup("system.info_ee_gated"); ok {
+	if _, ok := c.Lookup("system.update"); ok {
 		t.Error("an EE-only action appears in a CE catalog")
 	}
 	if _, ok := c.Lookup("tags.list"); !ok {
 		t.Error("a CE action is missing from a CE catalog")
+	}
+}
+
+// A CE declaration for an operation that only Business Edition serves is
+// documentation that lies, and the index would mask it.
+func TestBuild_DeclaresCEForAnEEOnlyOperation_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("system.update", "system", "SystemUpdate", edition.CE),
+	}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: SystemUpdate exists only in EE")
+	}
+}
+
+// The converse: gating a shared operation to EE hides it from CE servers that
+// can serve it perfectly well.
+func TestBuild_DeclaresEEForASharedOperation_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("system.info", "system", "SystemInfo", edition.EE),
+	}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: SystemInfo exists in both editions")
+	}
+}
+
+// A genuinely EE-only operation declared EE must still build.
+func TestBuild_DeclaresEEForAnEEOnlyOperation_Succeeds(t *testing.T) {
+	t.Parallel()
+	if _, err := Build([]toolutil.ActionSpec{
+		spec("system.update", "system", "SystemUpdate", edition.EE),
+	}, eeOpts()); err != nil {
+		t.Fatalf("Build() error = %v, want success for a correct EE declaration", err)
+	}
+}
+
+// And a genuinely CE-only operation declared CE.
+func TestBuild_DeclaresCEForACEOnlyOperation_Succeeds(t *testing.T) {
+	t.Parallel()
+	if _, err := Build([]toolutil.ActionSpec{
+		spec("system.upgrade", "system", "SystemUpgrade", edition.CE),
+	}, Options{Edition: edition.CE, ServerVersion: "2.44.0"}); err != nil {
+		t.Fatalf("Build() error = %v, want success for a correct CE declaration", err)
 	}
 }
 

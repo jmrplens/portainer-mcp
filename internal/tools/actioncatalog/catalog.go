@@ -82,6 +82,25 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 				spec.Name, spec.OperationID)
 		}
 
+		// The declared Edition must agree with what the applicability index
+		// says, or it is documentation that lies. For an edition-exclusive
+		// operation the index already filters correctly, so a wrong field
+		// would go unnoticed; for a shared operation a wrong field would gate
+		// an action the data says is available. Neither is acceptable in a
+		// declaration a reader trusts.
+		_, inCE := apiversion.ByOperationID(edition.CE, spec.OperationID)
+		_, inEE := apiversion.ByOperationID(edition.EE, spec.OperationID)
+		switch {
+		case spec.Edition == edition.CE && !inCE:
+			return nil, fmt.Errorf(
+				"actioncatalog: %s declares Edition CE but %q exists only in Business Edition",
+				spec.Name, spec.OperationID)
+		case spec.Edition == edition.EE && inCE && inEE:
+			return nil, fmt.Errorf(
+				"actioncatalog: %s declares Edition EE but %q exists in both editions; declare CE",
+				spec.Name, spec.OperationID)
+		}
+
 		if !opts.Edition.Includes(spec.Edition) {
 			continue
 		}
