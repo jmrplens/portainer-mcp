@@ -1,0 +1,165 @@
+package actioncatalog
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
+)
+
+func handler(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil }
+
+func spec(name, domain, operationID string, ed edition.Edition) toolutil.ActionSpec {
+	return toolutil.ActionSpec{
+		Name: name, Domain: domain, OperationID: operationID,
+		Title: "t", Description: "d", Edition: ed, Handler: handler,
+	}
+}
+
+func eeOpts() Options {
+	return Options{Edition: edition.EE, ServerVersion: "2.44.0"}
+}
+
+func TestBuild_ValidSpecs_AreIncluded(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE)}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := len(c.Actions()); got != 1 {
+		t.Errorf("Actions() = %d, want 1", got)
+	}
+	if _, ok := c.Lookup("tags.list"); !ok {
+		t.Error("Lookup(tags.list) = false, want the action present")
+	}
+}
+
+// This is the guard the P1 carry-forward demanded: a hand-written OperationID
+// that does not resolve must fail the build, because Available reports an
+// unknown operation as unavailable and the action would vanish silently.
+func TestBuild_UnresolvableOperationID_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "NoSuchOperation", edition.CE)}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error for an OperationID absent from the applicability table")
+	}
+	if !strings.Contains(err.Error(), "NoSuchOperation") {
+		t.Errorf("error = %q, want it to name the unresolvable operationId", err)
+	}
+}
+
+func TestBuild_DuplicateName_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("tags.list", "tags", "TagList", edition.CE),
+		spec("tags.list", "tags", "TagCreate", edition.CE),
+	}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error for a duplicate action name")
+	}
+}
+
+func TestBuild_InvalidSpec_ReturnsError(t *testing.T) {
+	t.Parallel()
+	bad := spec("tags.list", "tags", "TagList", edition.CE)
+	bad.Description = ""
+	if _, err := Build([]toolutil.ActionSpec{bad}, eeOpts()); err == nil {
+		t.Fatal("Build() = nil, want the spec's own validation error to surface")
+	}
+}
+
+// An EE-only action must not appear in a CE catalog. Getting this backwards
+// offers the model 179 operations its server does not implement.
+//
+// This deliberately uses SystemInfo rather than SystemUpdate for the gated
+// action: SystemInfo (GET /system/info) resolves in both editions'
+// applicability tables, so exclusion here can only come from the
+// Edition.Includes check in Build, not as a side effect of the OperationID
+// resolving in neither/only-the-other edition. SystemUpdate (POST
+// /system/update) is EE-only at the API level too, so using it would make
+// this test pass even with the edition-exclusion line deleted — the
+// OperationID branch would already filter it out first.
+func TestBuild_EEActionOnCEServer_IsExcluded(t *testing.T) {
+	t.Parallel()
+	specs := []toolutil.ActionSpec{
+		spec("tags.list", "tags", "TagList", edition.CE),
+		spec("system.info_ee_gated", "system", "SystemInfo", edition.EE),
+	}
+	c, err := Build(specs, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := c.Lookup("system.info_ee_gated"); ok {
+		t.Error("an EE-only action appears in a CE catalog")
+	}
+	if _, ok := c.Lookup("tags.list"); !ok {
+		t.Error("a CE action is missing from a CE catalog")
+	}
+}
+
+// An action whose operation does not exist on this server version must be
+// excluded, so the catalog cannot offer a route that answers 404.
+func TestBuild_ActionAbsentOnServerVersion_IsExcluded(t *testing.T) {
+	t.Parallel()
+	// SharedGitGetAll is GET /cloud/gitcredentials, withdrawn in 2.43.0.
+	specs := []toolutil.ActionSpec{spec("cloud.gitcredentials_list", "cloud", "SharedGitGetAll", edition.EE)}
+
+	on243, err := Build(specs, Options{Edition: edition.EE, ServerVersion: "2.43.0"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := on243.Lookup("cloud.gitcredentials_list"); ok {
+		t.Error("an action withdrawn in 2.43.0 appears in a 2.43.0 catalog")
+	}
+
+	on244, err := Build(specs, Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := on244.Lookup("cloud.gitcredentials_list"); !ok {
+		t.Error("the action is missing from a 2.44.0 catalog, where it exists")
+	}
+}
+
+// Read-only is enforced here as well as at registration: a catalog built
+// read-only must not even contain a mutating action.
+func TestBuild_ReadOnly_ExcludesMutatingActions(t *testing.T) {
+	t.Parallel()
+	mutating := spec("tags.create", "tags", "TagCreate", edition.CE)
+	mutating.Mutating = true
+	specs := []toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE), mutating}
+
+	c, err := Build(specs, Options{Edition: edition.EE, ServerVersion: "2.44.0", ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, ok := c.Lookup("tags.create"); ok {
+		t.Error("a mutating action appears in a read-only catalog")
+	}
+	if _, ok := c.Lookup("tags.list"); !ok {
+		t.Error("a read-only action is missing from a read-only catalog")
+	}
+}
+
+func TestByDomain_GroupsAndSorts(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{
+		spec("tags.list", "tags", "TagList", edition.CE),
+		spec("system.info", "system", "SystemInfo", edition.CE),
+		spec("tags.create", "tags", "TagCreate", edition.CE),
+	}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if got := c.Domains(); len(got) != 2 || got[0] != "system" || got[1] != "tags" {
+		t.Errorf("Domains() = %v, want [system tags] sorted", got)
+	}
+	tags := c.ByDomain("tags")
+	if len(tags) != 2 || tags[0].Name != "tags.create" || tags[1].Name != "tags.list" {
+		t.Errorf("ByDomain(tags) = %v, want create then list, sorted", tags)
+	}
+}
