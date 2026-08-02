@@ -40,6 +40,14 @@ func Execute(ctx context.Context, spec toolutil.ActionSpec, deps Deps, input jso
 		return safeModePreview(spec, input), nil
 	}
 
+	// A nil client means the server was wired wrong. Every handler would
+	// dereference it and panic, and a panic inside a tool call takes the whole
+	// MCP server down — a tool error does not. Execute is the single path all
+	// surfaces route through, so this is the one place worth checking.
+	if deps.Client == nil {
+		return errorResult(fmt.Sprintf("%s: no Portainer client is configured", spec.Name)), nil
+	}
+
 	if deps.Logger != nil {
 		deps.Logger.Debug("executing action", "action", spec.Name, "mutating", spec.Mutating)
 	}

@@ -38,7 +38,9 @@ func destructiveSpec(executed *bool) toolutil.ActionSpec {
 
 func TestExecute_ReadOnlyAction_RunsTheHandler(t *testing.T) {
 	t.Parallel()
-	res, err := Execute(context.Background(), readOnlySpec(), Deps{}, json.RawMessage(`{}`))
+	// A non-nil client: this test is about the handler running successfully,
+	// not about client-nilness, which TestExecute_NilClient_* covers on its own.
+	res, err := Execute(context.Background(), readOnlySpec(), Deps{Client: &portainer.Client{}}, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -72,9 +74,15 @@ func TestExecute_SafeMode_InterceptsMutatingActionWithoutRunningIt(t *testing.T)
 
 func TestExecute_SafeMode_LeavesReadOnlyActionsAlone(t *testing.T) {
 	t.Parallel()
-	res, err := Execute(context.Background(), readOnlySpec(), Deps{SafeMode: true}, json.RawMessage(`{}`))
+	// A non-nil client: without one, the nil-client guard would short-circuit
+	// before the handler ever ran, and this test would pass regardless of
+	// whether safe mode actually left the action alone.
+	res, err := Execute(context.Background(), readOnlySpec(), Deps{SafeMode: true, Client: &portainer.Client{}}, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute() returned IsError: %+v", res.Content)
 	}
 	if strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "safe mode") {
 		t.Error("safe mode intercepted a read-only action")
@@ -87,7 +95,9 @@ func TestExecute_HandlerError_BecomesToolError(t *testing.T) {
 	spec.Handler = func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
 		return nil, errors.New("portainer said no")
 	}
-	res, err := Execute(context.Background(), spec, Deps{}, json.RawMessage(`{}`))
+	// A non-nil client: this test is about the handler's own error propagating,
+	// not about client-nilness, which TestExecute_NilClient_* covers on its own.
+	res, err := Execute(context.Background(), spec, Deps{Client: &portainer.Client{}}, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute() returned a Go error, want a tool error result: %v", err)
 	}
@@ -155,6 +165,45 @@ func TestExecute_SafeMode_PreviewReportsFieldNamesNotValues(t *testing.T) {
 	}
 	if !strings.Contains(text, "password") {
 		t.Error("the preview does not name the fields that would have been sent")
+	}
+}
+
+// Safe mode previews need no client, so a nil one must not stop the preview.
+func TestExecute_SafeModeWithNilClient_StillPreviews(t *testing.T) {
+	t.Parallel()
+	executed := false
+	res, err := Execute(context.Background(), destructiveSpec(&executed), Deps{SafeMode: true}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if executed {
+		t.Fatal("the handler ran")
+	}
+	if res.IsError {
+		t.Error("a nil client turned a safe-mode preview into an error")
+	}
+	if !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "safe mode") {
+		t.Error("the preview lost its safe-mode framing")
+	}
+}
+
+func TestExecute_NilClient_ReturnsToolErrorRatherThanPanicking(t *testing.T) {
+	t.Parallel()
+	spec := readOnlySpec()
+	spec.Handler = func(_ context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
+		// A real handler would dereference the client here and panic.
+		return c.API, nil
+	}
+
+	res, err := Execute(context.Background(), spec, Deps{}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("res.IsError = false, want a tool error for a missing client")
+	}
+	if !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "client") {
+		t.Error("the error does not say a client is missing")
 	}
 }
 

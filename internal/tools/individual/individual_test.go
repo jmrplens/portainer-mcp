@@ -149,7 +149,10 @@ func TestCallTool_EachToolReachesItsOwnAction(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
-	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+	// A non-nil client: Execute now refuses a nil one before any handler runs
+	// (see internal/tools/register.go), and this test is about dispatch
+	// reaching the right stub handler, not about client-nilness.
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	session, ctx := connect(t, server)

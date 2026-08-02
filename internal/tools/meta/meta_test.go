@@ -90,33 +90,19 @@ func TestRegister_ExposesOneToolPerDomain(t *testing.T) {
 	}
 }
 
-// TestCallTool_KnownAction_Dispatches uses a stub spec rather than
-// system.Specs()'s real system.info action. That real handler calls the live
-// Portainer client, which is nil here (tools.Deps{} carries none), and a nil
-// *portainer.Client panics on its first field access rather than failing
-// gracefully — individual_test.go's own dispatch guard,
-// TestCallTool_EachToolReachesItsOwnAction, hits the same trap and uses the
-// same stub-handler workaround for the same reason.
+// TestCallTool_KnownAction_Dispatches uses system.Specs()'s real system.info
+// action with tools.Deps{} — no client configured. That used to panic: the
+// real handler dereferences a nil *portainer.Client. It no longer does,
+// because Execute now refuses a nil client itself before calling any handler
+// (see internal/tools/register.go), returning a clean tool error instead. That
+// error names the resolved action ("system.info: no Portainer client is
+// configured"), which is what proves dispatch reached this action's own
+// handler rather than rejecting the name as unknown or resolving some other
+// action — a stronger, real-dispatch-path check than the stub this test used
+// before that fix landed.
 func TestCallTool_KnownAction_Dispatches(t *testing.T) {
 	t.Parallel()
-	specs := []toolutil.ActionSpec{
-		{
-			Name: "system.info", Domain: "system", OperationID: "SystemInfo",
-			Title: "a", Description: "a", Edition: edition.CE,
-			Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
-				return map[string]any{"which": "info"}, nil
-			},
-		},
-	}
-	catalog, err := actioncatalog.Build(specs, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
-	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	session, ctx := connect(t, server)
+	session, ctx := connect(t, serverFor(t, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"}, tools.Deps{}))
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "portainer_system",
@@ -125,13 +111,11 @@ func TestCallTool_KnownAction_Dispatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("CallTool returned an error for a known action: %+v", res.Content)
-	}
-	// What matters here is that dispatch reached the action's own handler
-	// rather than rejecting the action name or reaching some other handler.
 	text := res.Content[0].(*mcp.TextContent).Text
-	if !strings.Contains(text, "info") {
+	if strings.Contains(text, "unknown action") {
+		t.Errorf("dispatch rejected a known action: %s", text)
+	}
+	if !strings.Contains(text, "system.info") {
 		t.Errorf("dispatch did not reach system.info: got %q", text)
 	}
 }
