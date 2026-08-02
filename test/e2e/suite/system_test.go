@@ -96,13 +96,9 @@ func TestSystemStatusVersionNodes_AcrossSurfacesAndEditions(t *testing.T) {
 // the catalog membership, routing and input handling for real, on a session
 // deliberately configured not to reach the handler.
 //
-// system.update (Business Edition's counterpart) has no equivalent test: it
-// is Business-Edition-only, and this harness's Sessions only builds a
-// safe-mode session against the Community Edition leg (see newSessions in
-// sessions_test.go) — there is no safe-mode Business Edition session to
-// intercept it. Calling it for real would restart the Business Edition
-// server for the rest of this run. It is left unexercised; see the task
-// report.
+// system.update (Business Edition's counterpart) has its own equivalent
+// test below, TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart,
+// through a Business Edition safe-mode session (Sessions.SafeModeEE).
 func TestSystemUpgrade_SafeModePreview_AcrossSurfaces(t *testing.T) {
 	for _, surface := range surfaceNames {
 		t.Run(surface, func(t *testing.T) {
@@ -114,6 +110,58 @@ func TestSystemUpgrade_SafeModePreview_AcrossSurfaces(t *testing.T) {
 			}
 			if out["action"] != "system.upgrade" {
 				t.Errorf("safe-mode preview action = %v, want %q", out["action"], "system.upgrade")
+			}
+		})
+	}
+}
+
+// TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart is system.update's
+// equivalent of the test above, through a Business Edition safe-mode
+// session (Sessions.SafeModeEE) rather than the Community Edition one:
+// system.update is Business-Edition-only, so a Community Edition session,
+// safe mode or not, never has it in its catalog to call.
+//
+// Three things are asserted, not two, because the first two alone would
+// pass against a handler that silently no-ops — the same defect
+// TestTags_CreateThenListThenDelete's read-back exists to catch:
+//
+//  1. the call returns a preview, not an error;
+//  2. the preview's own text identifies it as a safe-mode interception;
+//  3. the server did not actually restart. This is the assertion that does
+//     the real discriminating work: re-reading system.status before and
+//     after and comparing InstanceID (Portainer's own per-instance identity,
+//     which a genuine restart changes) is what tells "safe mode intercepted
+//     it" apart from "the call quietly did nothing" — (1) and (2) alone
+//     cannot make that distinction, since both a correct interception and a
+//     silent no-op return the identical preview body.
+func TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart(t *testing.T) {
+	for _, surface := range surfaceNames {
+		t.Run(surface, func(t *testing.T) {
+			t.Parallel()
+			session := sessions.SafeModeEE(t, surface)
+
+			before := callAction[map[string]any](t, session, surface, "system.status", nil)
+			beforeID, _ := before["InstanceID"].(string)
+			if beforeID == "" {
+				t.Fatalf("system.status before system.update returned no InstanceID: %v", before)
+			}
+
+			out := callAction[map[string]any](t, session, surface, "system.update", nil)
+			if safeMode, _ := out["safe_mode"].(bool); !safeMode {
+				t.Fatalf("system.update under safe mode = %v, want a safe_mode preview, not a real call", out)
+			}
+			if out["action"] != "system.update" {
+				t.Errorf("safe-mode preview action = %v, want %q", out["action"], "system.update")
+			}
+			note, _ := out["note"].(string)
+			if !strings.Contains(note, "Safe mode is enabled") {
+				t.Errorf("safe-mode preview note = %q, want it to identify a safe-mode interception", note)
+			}
+
+			after := callAction[map[string]any](t, session, surface, "system.status", nil)
+			afterID, _ := after["InstanceID"].(string)
+			if afterID != beforeID {
+				t.Errorf("InstanceID changed from %q to %q across system.update: the server appears to have actually restarted despite safe mode", beforeID, afterID)
 			}
 		})
 	}

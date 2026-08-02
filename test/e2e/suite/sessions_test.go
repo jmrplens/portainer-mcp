@@ -36,9 +36,10 @@ var surfaceNames = []string{"individual", "meta", "dynamic"}
 // harness that constructed servers a different way could hide a defect that
 // only the real wiring has.
 type Sessions struct {
-	byKey    map[string]*mcp.ClientSession
-	readOnly map[string]*mcp.ClientSession
-	safeMode map[string]*mcp.ClientSession
+	byKey      map[string]*mcp.ClientSession
+	readOnly   map[string]*mcp.ClientSession
+	safeMode   map[string]*mcp.ClientSession
+	safeModeEE map[string]*mcp.ClientSession
 }
 
 // newSessions builds every session the matrix needs from a loaded estate.
@@ -50,11 +51,17 @@ type Sessions struct {
 // licence-less contributor skip Business Edition suites, but the mode a
 // session runs in does not depend on which edition backs it, and building
 // against CE keeps that guaranteed present.
+//
+// A Business Edition safe-mode session is the one exception, built only when
+// a licence was provisioned: it exists specifically to exercise a
+// Business-Edition-only destructive action (system.update, and P3 will add
+// more) without ever letting its handler run — see SafeModeEE.
 func newSessions(e harness.Estate) (*Sessions, error) {
 	s := &Sessions{
-		byKey:    make(map[string]*mcp.ClientSession),
-		readOnly: make(map[string]*mcp.ClientSession),
-		safeMode: make(map[string]*mcp.ClientSession),
+		byKey:      make(map[string]*mcp.ClientSession),
+		readOnly:   make(map[string]*mcp.ClientSession),
+		safeMode:   make(map[string]*mcp.ClientSession),
+		safeModeEE: make(map[string]*mcp.ClientSession),
 	}
 
 	logger := logging.New(slog.LevelWarn)
@@ -86,6 +93,16 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 			return nil, fmt.Errorf("build %s safe-mode session: %w", surface, err)
 		}
 		s.safeMode[surface] = sm
+	}
+
+	if e.HasBusinessEdition() {
+		for _, surface := range surfaceNames {
+			smEE, err := buildSession(e.EE, config.ToolSurface(surface), false, true, false, logger)
+			if err != nil {
+				return nil, fmt.Errorf("build %s Business Edition safe-mode session: %w", surface, err)
+			}
+			s.safeModeEE[surface] = smEE
+		}
 	}
 
 	return s, nil
@@ -149,7 +166,7 @@ func buildSession(srv harness.Server, surface config.ToolSurface, readOnly, safe
 // Close shuts down every client session this Sessions built. TestMain calls
 // it once, after m.Run returns.
 func (s *Sessions) Close() {
-	for _, m := range []map[string]*mcp.ClientSession{s.byKey, s.readOnly, s.safeMode} {
+	for _, m := range []map[string]*mcp.ClientSession{s.byKey, s.readOnly, s.safeMode, s.safeModeEE} {
 		for _, session := range m {
 			_ = session.Close()
 		}
@@ -188,6 +205,24 @@ func (s *Sessions) SafeMode(t *testing.T, surface string) *mcp.ClientSession {
 	session, ok := s.safeMode[surface]
 	if !ok {
 		t.Fatalf("no safe-mode session was built for surface %q", surface)
+	}
+	return session
+}
+
+// SafeModeEE returns the safe-mode session for surface built against the
+// Business Edition leg, skipping when no licence was provisioned for this
+// estate — the same skip behaviour as For, since a contributor without the
+// licence must still be able to run every Community Edition suite.
+//
+// It exists so a Business-Edition-only destructive action (system.update
+// today; P3 will add more) can be exercised through safe mode's interception
+// rather than left unexercised for lack of a session that would otherwise
+// let its handler run for real against the live Business Edition server.
+func (s *Sessions) SafeModeEE(t *testing.T, surface string) *mcp.ClientSession {
+	t.Helper()
+	session, ok := s.safeModeEE[surface]
+	if !ok {
+		t.Skipf("no %s Business Edition safe-mode session: no licence was provisioned for this estate", surface)
 	}
 	return session
 }
