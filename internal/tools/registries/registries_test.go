@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -720,6 +721,76 @@ func TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted(t *t
 // types whose optional fields are all pointers.
 func ptr[T any](v T) *T { return &v }
 
+// suspiciousFieldMarkers are substrings that make an exported field name look
+// like it might carry a credential. Deliberately narrow: "auth" would also
+// match AuthorizedTeams/AuthorizedUsers/Authentication and produce noise, so
+// it and similarly broad candidates (bearer, signature, pat) are left out
+// pending an explicit ruling rather than added unilaterally.
+var suspiciousFieldMarkers = []string{"password", "token", "secret", "key", "credential", "cert"}
+
+// walkForCredentialShapedFields walks v and calls report with the path of
+// every populated field whose name matches a marker in
+// suspiciousFieldMarkers, skipping any path present in skip.
+//
+// It descends through pointers, interfaces, maps, slices and arrays as well
+// as structs — not structs alone. A first version of this walk stopped at
+// pointer/struct, which silently missed a credential-named field reached
+// through any of the other four kinds. PortainereeRegistry.RegistryAccesses
+// is exactly that shape (map[string]PortainerRegistryAccessPolicies), so the
+// gap was not hypothetical: it was already present in the type this walk
+// exists to guard.
+func walkForCredentialShapedFields(v reflect.Value, path string, skip map[string]string, report func(path string)) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return
+		}
+		walkForCredentialShapedFields(v.Elem(), path, skip, report)
+		return
+	case reflect.Interface:
+		if v.IsNil() {
+			return
+		}
+		walkForCredentialShapedFields(v.Elem(), path, skip, report)
+		return
+	case reflect.Map:
+		// RegistryAccesses is map-shaped, and a future credential field is as
+		// likely to appear inside a map value as anywhere else. A walk that
+		// stops at the map boundary would report coverage it does not have.
+		for _, key := range v.MapKeys() {
+			walkForCredentialShapedFields(v.MapIndex(key), fmt.Sprintf("%s[%v]", path, key.Interface()), skip, report)
+		}
+		return
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			walkForCredentialShapedFields(v.Index(i), fmt.Sprintf("%s[%d]", path, i), skip, report)
+		}
+		return
+	case reflect.Struct:
+	default:
+		return
+	}
+
+	for i := range v.NumField() {
+		field := v.Type().Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		child := v.Field(i)
+		name := strings.ToLower(field.Name)
+		fieldPath := path + "." + field.Name
+		if _, allowed := skip[fieldPath]; !allowed {
+			for _, marker := range suspiciousFieldMarkers {
+				if strings.Contains(name, marker) && !child.IsZero() {
+					report(fieldPath)
+					break
+				}
+			}
+		}
+		walkForCredentialShapedFields(child, fieldPath, skip, report)
+	}
+}
+
 // TestRedact_LeavesNoCredentialShapedFieldPopulated walks the redacted struct
 // and fails on any field whose name looks like a credential. It is deliberately
 // name-based and reflective rather than a fixed list: the generated type comes
@@ -752,6 +823,16 @@ func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
 		// actually suppresses a flagged-but-legitimate field rather than the
 		// test simply never encountering one.
 		AccessTokenExpiry: ptr(1893456000),
+		// RegistryAccesses is map-shaped (map[string]PortainerRegistryAccessPolicies).
+		// Populated here so the map branch of the walk is actually exercised
+		// against the real generated type, not merely present in the walk's
+		// code. Namespaces carries no credential-shaped name, so this
+		// populates the map path without expecting it to be flagged — the
+		// synthetic test below proves the walk detects a credential reached
+		// this way, since no real field here can.
+		RegistryAccesses: &apigen.PortainerRegistryAccesses{
+			"1": apigen.PortainerRegistryAccessPolicies{Namespaces: &[]string{"production"}},
+		},
 		// Populate every credential-shaped field the type currently has.
 		// The reflective walk below is what catches ones added later.
 	}
@@ -775,37 +856,64 @@ func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
 
 	// And catch a field we have not thought of: any populated field whose name
 	// suggests a secret must be gone after redaction.
-	suspicious := []string{"password", "token", "secret", "key", "credential", "cert"}
-	var walk func(v reflect.Value, path string)
-	walk = func(v reflect.Value, path string) {
-		for v.Kind() == reflect.Pointer {
-			if v.IsNil() {
-				return
-			}
-			v = v.Elem()
-		}
-		if v.Kind() != reflect.Struct {
+	walkForCredentialShapedFields(reflect.ValueOf(redact(registry)), "Registry", redactAllowList, func(path string) {
+		if reason, allowed := redactAllowList[path]; allowed {
+			t.Logf("%s is populated after redaction but allow-listed: %s", path, reason)
 			return
 		}
-		for i := range v.NumField() {
-			field := v.Type().Field(i)
-			if !field.IsExported() {
-				continue
+		t.Errorf("%s is populated after redaction; if it is not a credential, add it to the allow list with a reason", path)
+	})
+}
+
+// TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces
+// proves the walk actually descends into maps, slices and interfaces, not
+// merely that it does not crash on them.
+//
+// PortainereeRegistry has no real credential-shaped field reachable through
+// any of the three today — checked by hand against every field on
+// PortainereeRegistry, PortainerRegistryManagementConfiguration, and every
+// type either of those points to (PortainerRegistryAccessPolicies,
+// PortainerTeamAccessPolicies, PortainerUserAccessPolicies, PortainerAccessPolicy):
+// none of their fields match a marker. So this uses synthetic local types,
+// purpose-built to carry one credential-shaped field behind each shape, run
+// through the exact same walkForCredentialShapedFields used above.
+func TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces(t *testing.T) {
+	t.Parallel()
+
+	type viaMap struct{ Password *string }
+	type viaSlice struct{ Password *string }
+	type viaInterface struct{ Password *string }
+
+	secret := "SENTINEL-SECRET"
+	fixture := struct {
+		ViaMap       map[string]viaMap
+		ViaSlice     []viaSlice
+		ViaInterface any
+	}{
+		ViaMap:       map[string]viaMap{"k": {Password: &secret}},
+		ViaSlice:     []viaSlice{{Password: &secret}},
+		ViaInterface: viaInterface{Password: &secret},
+	}
+
+	var flagged []string
+	walkForCredentialShapedFields(reflect.ValueOf(fixture), "Fixture", nil, func(path string) {
+		flagged = append(flagged, path)
+	})
+
+	for _, want := range []string{
+		"Fixture.ViaMap[k].Password",
+		"Fixture.ViaSlice[0].Password",
+		"Fixture.ViaInterface.Password",
+	} {
+		found := false
+		for _, got := range flagged {
+			if got == want {
+				found = true
+				break
 			}
-			name := strings.ToLower(field.Name)
-			child := v.Field(i)
-			fieldPath := path + "." + field.Name
-			for _, marker := range suspicious {
-				if strings.Contains(name, marker) && !child.IsZero() {
-					if reason, allowed := redactAllowList[fieldPath]; allowed {
-						t.Logf("%s is populated after redaction but allow-listed: %s", fieldPath, reason)
-						continue
-					}
-					t.Errorf("%s is populated after redaction; if it is not a credential, add it to the allow list with a reason", fieldPath)
-				}
-			}
-			walk(child, fieldPath)
+		}
+		if !found {
+			t.Errorf("walk did not flag %s; flagged = %v", want, flagged)
 		}
 	}
-	walk(reflect.ValueOf(redact(registry)), "Registry")
 }
