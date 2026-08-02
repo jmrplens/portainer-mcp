@@ -207,6 +207,44 @@ func TestExecute_NilClient_ReturnsToolErrorRatherThanPanicking(t *testing.T) {
 	}
 }
 
+// TestExecute_NilInput_NormalizesToEmptyObject and
+// TestExecute_NullInput_NormalizesToEmptyObject pin the fix for the
+// surface-dependent null/{} divergence: whatever a surface marshals for a
+// caller-omitted input — a nil json.RawMessage, or the JSON literal null that
+// json.Marshal(nil map[string]any) produces — the handler must see {}, not
+// null, regardless of which surface called Execute.
+func TestExecute_NilInput_NormalizesToEmptyObject(t *testing.T) {
+	t.Parallel()
+	var gotInput json.RawMessage
+	spec := readOnlySpec()
+	spec.Handler = func(_ context.Context, _ *portainer.Client, in json.RawMessage) (any, error) {
+		gotInput = in
+		return map[string]any{"ok": true}, nil
+	}
+	if _, err := Execute(context.Background(), spec, Deps{Client: &portainer.Client{}}, nil); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if string(gotInput) != "{}" {
+		t.Errorf("handler received input = %q, want {}", gotInput)
+	}
+}
+
+func TestExecute_NullInput_NormalizesToEmptyObject(t *testing.T) {
+	t.Parallel()
+	var gotInput json.RawMessage
+	spec := readOnlySpec()
+	spec.Handler = func(_ context.Context, _ *portainer.Client, in json.RawMessage) (any, error) {
+		gotInput = in
+		return map[string]any{"ok": true}, nil
+	}
+	if _, err := Execute(context.Background(), spec, Deps{Client: &portainer.Client{}}, json.RawMessage("null")); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if string(gotInput) != "{}" {
+		t.Errorf("handler received input = %q, want {}", gotInput)
+	}
+}
+
 func TestExecute_ForwardsContextClientAndInputToTheHandler(t *testing.T) {
 	t.Parallel()
 	type ctxKey struct{}

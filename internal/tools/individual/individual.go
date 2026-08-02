@@ -21,16 +21,13 @@ type Surface struct{}
 
 // ToolName renders an action's canonical name as an MCP tool name.
 // "tags.list" becomes "portainer_tags_list".
+//
+// This delegates to actioncatalog.RenderToolName rather than keeping its own
+// copy: Build's collision check runs against that exact rendering, and a
+// second implementation here could silently drift from it, letting two
+// actions collide on this surface without Build ever noticing.
 func ToolName(actionName string) string {
-	out := make([]rune, 0, len(actionName)+10)
-	out = append(out, []rune("portainer_")...)
-	for _, r := range actionName {
-		if r == '.' {
-			r = '_'
-		}
-		out = append(out, r)
-	}
-	return string(out)
+	return actioncatalog.RenderToolName(actionName)
 }
 
 // Register adds every catalog action as its own tool.

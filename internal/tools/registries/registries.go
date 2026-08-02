@@ -127,7 +127,7 @@ type registryCreateInput struct {
 	Authentication bool   `json:"authentication,omitempty"`
 	Username       string `json:"username,omitempty"`
 	Password       string `json:"password,omitempty"`
-	TLS            bool   `json:"tls,omitempty"`
+	TLS            *bool  `json:"tls,omitempty"`
 	BaseURL        string `json:"baseUrl,omitempty"`
 }
 
@@ -155,10 +155,7 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 	if params.Password != "" {
 		body.Password = &params.Password
 	}
-	if params.TLS {
-		tls := params.TLS
-		body.TLS = &tls
-	}
+	body.TLS = params.TLS
 	if params.BaseURL != "" {
 		body.BaseURL = &params.BaseURL
 	}
@@ -179,7 +176,7 @@ type registryPingInput struct {
 	Type     int    `json:"type"`
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
-	TLS      bool   `json:"tls,omitempty"`
+	TLS      *bool  `json:"tls,omitempty"`
 }
 
 func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -201,10 +198,7 @@ func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessag
 	if params.Password != "" {
 		body.Password = &params.Password
 	}
-	if params.TLS {
-		tls := params.TLS
-		body.TLS = &tls
-	}
+	body.TLS = params.TLS
 
 	resp, err := c.API.RegistryPingWithResponse(ctx, body)
 	if err != nil {
@@ -345,8 +339,8 @@ type registryConfigureInput struct {
 	Username       string `json:"username,omitempty"`
 	Password       string `json:"password,omitempty"`
 	Region         string `json:"region,omitempty"`
-	TLS            bool   `json:"tls,omitempty"`
-	TLSSkipVerify  bool   `json:"tlsSkipVerify,omitempty"`
+	TLS            *bool  `json:"tls,omitempty"`
+	TLSSkipVerify  *bool  `json:"tlsSkipVerify,omitempty"`
 }
 
 func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -368,14 +362,8 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 	if params.Region != "" {
 		body.Region = &params.Region
 	}
-	if params.TLS {
-		tls := params.TLS
-		body.TLS = &tls
-	}
-	if params.TLSSkipVerify {
-		skip := params.TLSSkipVerify
-		body.TLSSkipVerify = &skip
-	}
+	body.TLS = params.TLS
+	body.TLSSkipVerify = params.TLSSkipVerify
 
 	resp, err := c.API.RegistryConfigureWithResponse(ctx, params.ID, body)
 	if err != nil {
@@ -459,11 +447,11 @@ func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessa
 	if params.ID <= 0 {
 		return nil, fmt.Errorf("registries ecr_delete_tags: id must be a positive integer, got %d", params.ID)
 	}
-
-	body := apigen.EcrDeleteTagsJSONRequestBody{}
-	if len(params.Tags) > 0 {
-		body.Tags = &params.Tags
+	if len(params.Tags) == 0 {
+		return nil, fmt.Errorf("registries ecr_delete_tags: tags must list at least one tag")
 	}
+
+	body := apigen.EcrDeleteTagsJSONRequestBody{Tags: &params.Tags}
 
 	resp, err := c.API.EcrDeleteTagsWithResponse(ctx, params.ID, params.RepositoryName, body)
 	if err != nil {
@@ -493,11 +481,11 @@ func repositoryTagsDelete(ctx context.Context, c *portainer.Client, input json.R
 	if params.RepositoryName == "" {
 		return nil, fmt.Errorf("registries repository_tags_delete: repositoryName is required")
 	}
-
-	body := apigen.RepositoryTagsDeleteJSONRequestBody{}
-	if len(params.Tags) > 0 {
-		body.Tags = &params.Tags
+	if len(params.Tags) == 0 {
+		return nil, fmt.Errorf("registries repository_tags_delete: tags must list at least one tag")
 	}
+
+	body := apigen.RepositoryTagsDeleteJSONRequestBody{Tags: &params.Tags}
 
 	resp, err := c.API.RepositoryTagsDeleteWithResponse(ctx, params.ID, params.RepositoryName, body)
 	if err != nil {

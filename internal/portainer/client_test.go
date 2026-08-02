@@ -353,3 +353,56 @@ func TestDo_InvalidPercentEncodingInQuery_ReturnsError(t *testing.T) {
 		t.Error("Do() error = nil, want an error for a malformed escape in the query")
 	}
 }
+
+// TestDo_TraversalLookingQueryValue_IsAllowed is the regression guard: before
+// the fix, Do percent-decoded and split the whole argument — path and query
+// together — on "/", so a query value that legitimately contains "/.." (for
+// example a redirect target) produced a standalone ".." segment and was
+// rejected as traversal even though query content never affects server-side
+// routing. The path and query must be validated separately.
+func TestDo_TraversalLookingQueryValue_IsAllowed(t *testing.T) {
+	t.Parallel()
+	var gotRequestURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestURI = r.URL.RequestURI()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/foo?redirect=/..", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v, want a query value containing /.. to be accepted", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotRequestURI != "/api/foo?redirect=/.." {
+		t.Errorf("server saw %q, want /api/foo?redirect=/..", gotRequestURI)
+	}
+}
+
+// TestDo_PathTraversalAlongsideQuery_IsStillRefused pins the other half of the
+// same fix: splitting path from query must not accidentally stop validating
+// the path segments once a query string is present.
+func TestDo_PathTraversalAlongsideQuery_IsStillRefused(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; a traversal path must still be refused even with a query string", r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/foo/../bar", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want a traversal path to still be refused")
+	}
+}

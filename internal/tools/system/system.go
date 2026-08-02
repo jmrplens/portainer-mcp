@@ -61,9 +61,10 @@ func Specs() []toolutil.ActionSpec {
 		{
 			Name: "system.upgrade", Domain: "system", OperationID: "SystemUpgrade",
 			Title:       "Upgrade Community Edition to Business Edition",
-			Description: "Upgrades this Community Edition server to Business Edition using a licence key. Community Edition only. The server restarts, so expect the connection to drop.",
+			Description: "Upgrades this Community Edition server to Business Edition. Community Edition only. The server restarts, so expect the connection to drop.",
 			Edition:     edition.CE,
 			Mutating:    true,
+			Destructive: true,
 			Handler:     systemUpgrade,
 		},
 	}

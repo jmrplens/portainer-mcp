@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,15 @@ type Surface interface {
 // A surface that called handlers itself would bypass both, which is exactly
 // how a server ends up advertising protections it does not apply.
 func Execute(ctx context.Context, spec toolutil.ActionSpec, deps Deps, input json.RawMessage) (*mcp.CallToolResult, error) {
+	// Normalized here, once, rather than in each surface: a surface that
+	// marshals a caller-omitted input map (nil) produces the JSON literal
+	// null, not {}. A handler's own json.Unmarshal treats null as leaving the
+	// target unchanged, so a nil-tolerant handler would not necessarily
+	// notice — but the field list safe-mode reports below would still differ
+	// by surface, which is the exact class of divergence this catalog exists
+	// to prevent. Normalizing centrally means no future surface can omit it.
+	input = normalizeInput(input)
+
 	if deps.SafeMode && spec.Mutating {
 		return safeModePreview(spec, input), nil
 	}
@@ -65,6 +75,20 @@ func Execute(ctx context.Context, spec toolutil.ActionSpec, deps Deps, input jso
 		return errorResult(fmt.Sprintf("%s: encode result: %v", spec.Name, err)), nil
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}, nil
+}
+
+// normalizeInput replaces an omitted action input with an empty JSON object.
+//
+// A surface that marshals a caller-omitted map[string]any input produces the
+// JSON literal null (json.Marshal(nil map) == "null"), not {}. Handling that
+// here, once, guarantees every surface delivers the same {} to a handler for
+// the same omitted input, rather than depending on each surface to normalize
+// it individually before calling Execute.
+func normalizeInput(input json.RawMessage) json.RawMessage {
+	if len(bytes.TrimSpace(input)) == 0 || bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
+		return json.RawMessage("{}")
+	}
+	return input
 }
 
 // safeModePreview describes what the action would have done, without doing it.
@@ -100,7 +124,7 @@ func safeModePreview(spec toolutil.ActionSpec, input json.RawMessage) *mcp.CallT
 // It never returns values. It also never fails: an input that is not a JSON
 // object — malformed, empty, or a bare scalar — yields nil rather than an
 // error, because losing the preview's framing is worse than losing the field
-// list. See FINDING 3.
+// list.
 func inputFieldNames(input json.RawMessage) []string {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(input, &fields); err != nil {

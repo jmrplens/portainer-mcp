@@ -67,6 +67,9 @@ func New(cfg *config.Config) (*Client, error) {
 }
 
 // Do issues a raw authenticated request against a path below the API root.
+// path may also carry a query string (for example "/tags?x=1"): callers that
+// need one have no other way to pass it today, since Do takes no separate
+// query parameter.
 //
 // It exists for the handful of operations that have no generated method:
 // the client is generated from the EE specification, and two operations —
@@ -76,17 +79,30 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*
 	if !strings.HasPrefix(path, "/") {
 		return nil, fmt.Errorf("%s %s: path must start with /", method, path)
 	}
+	// Validate the path segments and the query separately: a "/.." inside a
+	// query value (for example "/foo?redirect=/..") is not a routable path
+	// segment and must not be rejected as traversal, since query content
+	// never affects server-side routing. The query still needs its own
+	// percent-encoding check, since net/url stores RawQuery without
+	// validating it.
+	pathPart, queryPart, hasQuery := strings.Cut(path, "?")
+
 	// Check the decoded path: %2e%2e survives a literal ".." scan, and the
 	// server decodes before routing. Comparing whole segments rather than
 	// scanning for a substring also keeps a legitimate resource name such as
 	// "a..b" from being rejected as traversal.
-	decoded, err := url.PathUnescape(path)
+	decodedPath, err := url.PathUnescape(pathPart)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: path is not valid percent-encoding: %w", method, path, err)
 	}
-	for _, segment := range strings.Split(decoded, "/") {
+	for _, segment := range strings.Split(decodedPath, "/") {
 		if segment == ".." {
 			return nil, fmt.Errorf("%s %s: path must not traverse upward", method, path)
+		}
+	}
+	if hasQuery {
+		if _, err := url.PathUnescape(queryPart); err != nil {
+			return nil, fmt.Errorf("%s %s: query is not valid percent-encoding: %w", method, path, err)
 		}
 	}
 

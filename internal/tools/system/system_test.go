@@ -62,6 +62,27 @@ func TestSpecs_MutatingActionsDifferByEdition(t *testing.T) {
 	}
 }
 
+// system.upgrade converts a Community Edition server to Business Edition and
+// restarts it — a change this API offers no way to undo, the same property
+// that makes tags.delete Destructive. system.update, by contrast, is a
+// same-edition self-update rather than a one-way conversion, so it must stay
+// merely Mutating.
+func TestSpecs_Upgrade_IsDestructive(t *testing.T) {
+	t.Parallel()
+	for _, s := range Specs() {
+		switch s.Name {
+		case "system.upgrade":
+			if !s.Mutating || !s.Destructive {
+				t.Errorf("system.upgrade Mutating=%v Destructive=%v, want both true", s.Mutating, s.Destructive)
+			}
+		case "system.update":
+			if s.Destructive {
+				t.Error("system.update Destructive = true, want false: it is a same-edition self-update, not a one-way conversion")
+			}
+		}
+	}
+}
+
 func TestSystemInfo_Success_ReturnsDecodedBody(t *testing.T) {
 	t.Parallel()
 	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +114,9 @@ func TestSystemInfo_Unauthorized_ReturnsClassifiedError(t *testing.T) {
 	_, err := find(t, "system.info")(context.Background(), c, json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("handler error = nil, want the 401 classified")
+	}
+	if !errors.Is(err, portainer.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false; err = %v", err)
 	}
 }
 

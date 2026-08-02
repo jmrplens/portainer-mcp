@@ -121,6 +121,47 @@ func TestCallTool_KnownAction_Dispatches(t *testing.T) {
 	}
 }
 
+// TestCallTool_OmittedInput_HandlerReceivesEmptyObject guards against the
+// surface-dependent null/{} divergence: a caller that omits "input" entirely
+// must still reach the handler with {}, the same as every other surface,
+// because tools.Execute normalizes it centrally rather than this surface
+// substituting its own map[string]any{} before marshalling.
+func TestCallTool_OmittedInput_HandlerReceivesEmptyObject(t *testing.T) {
+	t.Parallel()
+	var gotInput json.RawMessage
+	specs := []toolutil.ActionSpec{{
+		Name: "system.echo", Domain: "system", OperationID: "SystemInfo",
+		Title: "t", Description: "d", Edition: edition.CE,
+		Handler: func(_ context.Context, _ *portainer.Client, in json.RawMessage) (any, error) {
+			gotInput = in
+			return map[string]any{"ok": true}, nil
+		},
+	}}
+	catalog, err := actioncatalog.Build(specs, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "portainer_system",
+		Arguments: map[string]any{"action": "system.echo"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned an error: %+v", res.Content)
+	}
+	if string(gotInput) != "{}" {
+		t.Errorf("handler received input = %q, want {}", gotInput)
+	}
+}
+
 func TestCallTool_UnknownAction_ListsTheValidOnes(t *testing.T) {
 	t.Parallel()
 	session, ctx := connect(t, serverFor(t, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"}, tools.Deps{}))

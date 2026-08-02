@@ -147,13 +147,15 @@ func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
 				t.Fatalf("ListTools: %v", err)
 			}
 			names := make(map[string]bool, len(res.Tools))
+			got := make([]string, 0, len(res.Tools))
 			for _, tool := range res.Tools {
 				names[tool.Name] = true
+				got = append(got, tool.Name)
 			}
 
 			for _, w := range tt.want {
 				if !names[w] {
-					t.Errorf("surface %q: tools = %v, missing %q", tt.surface, res.Tools, w)
+					t.Errorf("surface %q: tools = %v, missing %q", tt.surface, got, w)
 				}
 			}
 
@@ -166,7 +168,7 @@ func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
 						len(names), len(catalog.Actions())+1)
 				}
 			} else if len(names) != len(tt.want) {
-				t.Errorf("surface %q: got %d tools %v, want exactly %v", tt.surface, len(names), res.Tools, tt.want)
+				t.Errorf("surface %q: got %d tools %v, want exactly %v", tt.surface, len(names), got, tt.want)
 			}
 		})
 	}

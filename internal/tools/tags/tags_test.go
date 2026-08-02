@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
@@ -143,14 +144,14 @@ func TestTagCreate_Success_SendsNameAndReturnsDecodedBody(t *testing.T) {
 
 func TestTagCreate_MissingName_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
-	called := false
-	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+	var called atomic.Bool
+	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 	_, err := find(t, "tags.create")(context.Background(), c, json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("handler error = nil, want an error for a missing name")
 	}
-	if called {
+	if called.Load() {
 		t.Error("the API was called despite missing required input")
 	}
 }

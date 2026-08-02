@@ -64,11 +64,11 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 						in.Action, domain, strings.Join(names, ", "))}},
 				}, nil, nil
 			}
-			payload := in.Input
-			if payload == nil {
-				payload = map[string]any{}
-			}
-			input, err := json.Marshal(payload)
+			// A nil in.Input (the caller omitted it) is not special-cased here:
+			// tools.Execute normalizes a marshaled-to-null input into {} for
+			// every surface, so this surface does not need its own copy of
+			// that normalization.
+			input, err := json.Marshal(in.Input)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: encode input: %w", in.Action, err)
 			}

@@ -53,6 +53,30 @@ func TestBuild_UnresolvableOperationID_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestBuild_RenderedNameCollision_ReturnsError guards the individual
+// surface's tool-name mapping (see RenderToolName): "." is mapped to "_", but
+// a valid action name may already contain "_", so two distinct, individually
+// valid names can render to the same MCP tool name. mcp.AddTool upserts by
+// name, so a colliding pair would otherwise let one action's tool silently
+// replace the other's, with no error anywhere — this is the same
+// silent-collision hazard the duplicate-name check already guards against for
+// exact name matches.
+func TestBuild_RenderedNameCollision_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("tags.list_all", "tags", "TagList", edition.CE),
+		spec("tags_list.all", "tags_list", "TagCreate", edition.CE),
+	}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: both names render as portainer_tags_list_all")
+	}
+	for _, want := range []string{"tags.list_all", "tags_list.all"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name the colliding action %q", err, want)
+		}
+	}
+}
+
 func TestBuild_DuplicateName_ReturnsError(t *testing.T) {
 	t.Parallel()
 	_, err := Build([]toolutil.ActionSpec{
@@ -138,6 +162,37 @@ func TestBuild_DeclaresEEForACEOnlyOperation_ReturnsError(t *testing.T) {
 	}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
 	if err == nil {
 		t.Fatal("Build() = nil, want an error: SystemUpgrade exists only in Community Edition")
+	}
+}
+
+// The cross-check must be fatal regardless of which edition is being built,
+// not only the one where the OperationID also happens to resolve. Before the
+// fix, an EE-only operation declared Edition CE failed the build only when
+// building EE (because the CE lookup missed and hit the neither-edition typo
+// path); building CE for the very same mis-declared spec resolved via the
+// EE-only branch and `continue`d past the cross-check entirely, so a lying
+// spec passed CI in one edition and hard-failed a user's startup in the
+// other. AddonDetail is genuinely EE-only.
+func TestBuild_DeclaresCEForAnEEOnlyOperation_FailsOnCEBuildToo(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("addons.detail", "addons", "AddonDetail", edition.CE),
+	}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: AddonDetail exists only in Business Edition, even when building CE")
+	}
+}
+
+// The converse direction: a CE-only operation declared Edition EE must be
+// fatal when building CE too, not only when building EE. WebhookInvoke is
+// genuinely CE-only.
+func TestBuild_DeclaresEEForACEOnlyOperation_FailsOnEEBuildToo(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("stacks.webhook_invoke", "stacks", "WebhookInvoke", edition.EE),
+	}, eeOpts())
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: WebhookInvoke exists only in Community Edition, even when building EE")
 	}
 }
 

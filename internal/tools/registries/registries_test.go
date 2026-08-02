@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
@@ -193,17 +194,47 @@ func TestRegistryCreate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			called := false
-			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
 			_, err := find(t, "registries.create")(context.Background(), c, input)
 			if err == nil {
 				t.Fatal("handler error = nil, want an error for missing required input")
 			}
-			if called {
+			if called.Load() {
 				t.Error("the API was called despite missing required input")
 			}
 		})
+	}
+}
+
+// TestRegistryCreate_ExplicitTLSFalse_ReachesRequestBody guards against the
+// bool-vs-pointer defect: when TLS was a plain bool, the handler only
+// forwarded it when true, so an explicit {"tls":false} was indistinguishable
+// from omitting the field entirely. With *bool, an explicit false must be
+// forwarded rather than silently dropped.
+func TestRegistryCreate_ExplicitTLSFalse_ReachesRequestBody(t *testing.T) {
+	t.Parallel()
+	var gotBody map[string]any
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"my-registry"}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{
+		"name": "my-registry", "url": "registry.example.com", "type": 3, "tls": false,
+	})
+	_, err := find(t, "registries.create")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	tls, present := gotBody["TLS"]
+	if !present {
+		t.Fatal("request body has no TLS field; an explicit false was dropped as if the field had been omitted")
+	}
+	if tls != false {
+		t.Errorf("request body TLS = %v, want false", tls)
 	}
 }
 
@@ -229,15 +260,40 @@ func TestRegistryPing_Success_ReturnsDecodedBody(t *testing.T) {
 
 func TestRegistryPing_MissingURL_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
-	called := false
-	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+	var called atomic.Bool
+	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 	_, err := find(t, "registries.ping")(context.Background(), c, json.RawMessage(`{"type":3}`))
 	if err == nil {
 		t.Fatal("handler error = nil, want an error for a missing url")
 	}
-	if called {
+	if called.Load() {
 		t.Error("the API was called despite missing required input")
+	}
+}
+
+// TestRegistryPing_ExplicitTLSFalse_ReachesRequestBody is the ping-action
+// counterpart of the registries.create guard above.
+func TestRegistryPing_ExplicitTLSFalse_ReachesRequestBody(t *testing.T) {
+	t.Parallel()
+	var gotBody map[string]any
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{"url": "registry.example.com", "type": 3, "tls": false})
+	_, err := find(t, "registries.ping")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	tls, present := gotBody["TLS"]
+	if !present {
+		t.Fatal("request body has no TLS field; an explicit false was dropped as if the field had been omitted")
+	}
+	if tls != false {
+		t.Errorf("request body TLS = %v, want false", tls)
 	}
 }
 
@@ -265,15 +321,15 @@ func TestRegistryInspect_Success_CallsCorrectPath(t *testing.T) {
 func TestRegistryInspect_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	for _, id := range []int{0, -1} {
-		called := false
-		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+		var called atomic.Bool
+		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
 		_, err := find(t, "registries.inspect")(context.Background(), c, input)
 		if err == nil {
 			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
 		}
-		if called {
+		if called.Load() {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)
 		}
 	}
@@ -314,14 +370,14 @@ func TestRegistryUpdate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			called := false
-			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
 			_, err := find(t, "registries.update")(context.Background(), c, input)
 			if err == nil {
 				t.Fatal("handler error = nil, want an error for missing required input")
 			}
-			if called {
+			if called.Load() {
 				t.Error("the API was called despite missing required input")
 			}
 		})
@@ -348,16 +404,42 @@ func TestRegistryConfigure_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestRegistryConfigure_ExplicitTLSFalse_ReachesRequestBody is the configure-
+// action counterpart of the create and ping guards above, and additionally
+// covers TLSSkipVerify, which had the identical bool-vs-pointer defect.
+func TestRegistryConfigure_ExplicitTLSFalse_ReachesRequestBody(t *testing.T) {
+	t.Parallel()
+	var gotBody map[string]any
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	input, _ := json.Marshal(map[string]any{"id": 4, "tls": false, "tlsSkipVerify": false})
+	_, err := find(t, "registries.configure")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	tls, present := gotBody["TLS"]
+	if !present || tls != false {
+		t.Errorf("request body TLS = %v (present=%v), want false present", tls, present)
+	}
+	skip, present := gotBody["TLSSkipVerify"]
+	if !present || skip != false {
+		t.Errorf("request body TLSSkipVerify = %v (present=%v), want false present", skip, present)
+	}
+}
+
 func TestRegistryConfigure_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
-	called := false
-	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+	var called atomic.Bool
+	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 	_, err := find(t, "registries.configure")(context.Background(), c, json.RawMessage(`{"id":0}`))
 	if err == nil {
 		t.Fatal("handler error = nil, want an error for a non-positive id")
 	}
-	if called {
+	if called.Load() {
 		t.Error("the API was called despite an invalid id")
 	}
 }
@@ -385,15 +467,15 @@ func TestRegistryDelete_Success_CallsCorrectPath(t *testing.T) {
 func TestRegistryDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	for _, id := range []int{0, -1} {
-		called := false
-		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+		var called atomic.Bool
+		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
 		_, err := find(t, "registries.delete")(context.Background(), c, input)
 		if err == nil {
 			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
 		}
-		if called {
+		if called.Load() {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)
 		}
 	}
@@ -449,14 +531,14 @@ func TestEcrDeleteRepository_MissingFields_ReturnErrorWithoutCallingAPI(t *testi
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			called := false
-			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
 			_, err := find(t, "registries.ecr_delete_repository")(context.Background(), c, input)
 			if err == nil {
 				t.Fatal("handler error = nil, want an error for missing required input")
 			}
-			if called {
+			if called.Load() {
 				t.Error("the API was called despite missing required input")
 			}
 		})
@@ -510,16 +592,48 @@ func TestEcrDeleteTags_Success_CallsCorrectPath(t *testing.T) {
 
 func TestEcrDeleteTags_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
-	called := false
-	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+	var called atomic.Bool
+	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 	input, _ := json.Marshal(map[string]any{"id": 0, "repositoryName": 12})
 	_, err := find(t, "registries.ecr_delete_tags")(context.Background(), c, input)
 	if err == nil {
 		t.Fatal("handler error = nil, want an error for a non-positive id")
 	}
-	if called {
+	if called.Load() {
 		t.Error("the API was called despite an invalid id")
+	}
+}
+
+// TestEcrDeleteTags_EmptyTags_ReturnsErrorWithoutCallingAPI is the regression
+// guard: the action's description promises to delete "the given image tags",
+// so an empty or omitted tags list has no defined meaning and must be
+// refused before the registry ever sees the request, rather than sending a
+// body with no Tags field and letting the registry decide what a tagless
+// delete means.
+func TestEcrDeleteTags_EmptyTags_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input map[string]any
+	}{
+		{"omitted tags", map[string]any{"id": 4, "repositoryName": 12}},
+		{"empty tags", map[string]any{"id": 4, "repositoryName": 12, "tags": []string{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
+			input, _ := json.Marshal(tt.input)
+			_, err := find(t, "registries.ecr_delete_tags")(context.Background(), c, input)
+			if err == nil {
+				t.Fatal("handler error = nil, want an error for an empty tags list")
+			}
+			if called.Load() {
+				t.Error("the API was called despite an empty tags list")
+			}
+		})
 	}
 }
 
@@ -558,18 +672,20 @@ func TestRepositoryTagsDelete_MissingFields_ReturnErrorWithoutCallingAPI(t *test
 	}{
 		{"invalid id", map[string]any{"id": 0, "repositoryName": "my-repo"}},
 		{"missing repositoryName", map[string]any{"id": 4}},
+		{"omitted tags", map[string]any{"id": 4, "repositoryName": "my-repo"}},
+		{"empty tags", map[string]any{"id": 4, "repositoryName": "my-repo", "tags": []string{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			called := false
-			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
 			_, err := find(t, "registries.repository_tags_delete")(context.Background(), c, input)
 			if err == nil {
 				t.Fatal("handler error = nil, want an error for missing required input")
 			}
-			if called {
+			if called.Load() {
 				t.Error("the API was called despite missing required input")
 			}
 		})
@@ -856,7 +972,7 @@ func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
 
 	// And catch a field we have not thought of: any populated field whose name
 	// suggests a secret must be gone after redaction.
-	walkForCredentialShapedFields(reflect.ValueOf(redact(registry)), "Registry", redactAllowList, func(path string) {
+	walkForCredentialShapedFields(reflect.ValueOf(redact(registry)), "Registry", nil, func(path string) {
 		if reason, allowed := redactAllowList[path]; allowed {
 			t.Logf("%s is populated after redaction but allow-listed: %s", path, reason)
 			return
