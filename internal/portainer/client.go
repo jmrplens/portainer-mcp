@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -64,19 +65,28 @@ func New(cfg *config.Config) (*Client, error) {
 	return &Client{API: api, baseURL: baseURL, token: token, httpClient: httpClient}, nil
 }
 
-// Get issues a raw authenticated GET against a path below the API root. It
-// exists for the handful of callers that run before the typed client is
-// useful — edition detection, health checks — and for endpoints outside the
-// spec.
-func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+// Do issues a raw authenticated request against a path below the API root.
+//
+// It exists for the handful of operations that have no generated method:
+// the client is generated from the EE specification, and two operations —
+// POST /system/upgrade and GET /kubernetes/config — exist only in Community
+// Edition. Everything else should go through the generated client.
+func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return nil, fmt.Errorf("build request for %s: %w", path, err)
+		return nil, fmt.Errorf("build %s request for %s: %w", method, path, err)
 	}
 	req.Header.Set("X-API-Key", c.token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", path, err)
+		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	return resp, nil
+}
+
+// Get issues a raw authenticated GET. It exists for the handful of callers
+// that run before the typed client is useful — edition detection, health
+// checks — and for endpoints outside the spec.
+func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
+	return c.Do(ctx, http.MethodGet, path, nil)
 }

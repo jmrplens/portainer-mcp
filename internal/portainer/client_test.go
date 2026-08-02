@@ -175,3 +175,30 @@ func TestNew_TrailingSlashURL_DoesNotProduceADoubleSlash(t *testing.T) {
 		t.Errorf("request path = %q, want no double slash", gotPath)
 	}
 }
+
+func TestDo_SendsMethodAndAPIKey(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotKey = r.Method, r.Header.Get("X-API-Key")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "ptr_secret", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodPost, "/system/upgrade", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotKey != "ptr_secret" {
+		t.Errorf("X-API-Key = %q, want the configured token", gotKey)
+	}
+}
