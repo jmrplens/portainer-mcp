@@ -29,6 +29,23 @@ type Estate struct {
 	EE         Server `json:"ee"`
 	Kubernetes Server `json:"kubernetes"`
 	AgentID    int    `json:"agent_endpoint_id"`
+
+	// EdgeEndpointID, EdgeAgentID and EdgeKey identify the edge environment
+	// registered against EE, present only when a licence was available: edge
+	// domains are Business Edition only. up.sh reads them back to start the
+	// edge agent container once they exist, since they cannot be known
+	// before the server issues them.
+	//
+	// EdgeEndpointID and EdgeAgentID are not interchangeable even though both
+	// are "the id of the same environment": EdgeEndpointID is Portainer's
+	// ordinary numeric database id (used in URLs like /api/endpoints/{id});
+	// EdgeAgentID is the UUID the agent container needs as its EDGE_ID
+	// environment variable. Passing the wrong one produces a real, distinct
+	// failure — "invalid Edge identifier" — not a silent one; see
+	// harness.EdgeCredentials.
+	EdgeEndpointID int    `json:"edge_endpoint_id"`
+	EdgeAgentID    string `json:"edge_agent_id"`
+	EdgeKey        string `json:"edge_key"`
 }
 
 // HasBusinessEdition reports whether the Business Edition leg was provisioned.

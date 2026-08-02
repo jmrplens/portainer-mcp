@@ -43,6 +43,29 @@ type EndpointSpec struct {
 	TLSSkipClientVerify bool
 }
 
+// agentPort is the port the Portainer agent serves on. It is not configurable
+// in the compose stack, so it is a constant rather than a parameter.
+const agentPort = 9001
+
+// AgentEndpoint describes an agent environment reachable at host on the
+// compose network.
+//
+// Both skip flags are set together and neither is optional. The agent serves
+// TLS with a self-signed certificate whose subject is "localhost", so a server
+// connecting by container name cannot verify it, and Portainer refuses to
+// register an agent environment whose certificate it can neither verify nor be
+// told to ignore.
+func AgentEndpoint(name, host string) EndpointSpec {
+	return EndpointSpec{
+		Name:                name,
+		CreationType:        2,
+		URL:                 fmt.Sprintf("tcp://%s:%d", host, agentPort),
+		TLS:                 true,
+		TLSSkipVerify:       true,
+		TLSSkipClientVerify: true,
+	}
+}
+
 // Provision takes a freshly started Portainer from empty to usable.
 //
 // setupToken is empty when the server was started with --no-setup-token, and
@@ -154,6 +177,99 @@ func CreateEndpoint(ctx context.Context, c *http.Client, baseURL, apiKey string,
 	return created.ID, nil
 }
 
+// EdgeCredentials identifies an edge environment to whatever agent enrols
+// against it.
+//
+// EndpointID and EdgeID are not the same thing and are easy to conflate: the
+// server's response carries both, they look interchangeable (a bare
+// identifier each), and only one of them is what an edge agent's EDGE_ID
+// environment variable means. EndpointID is Portainer's ordinary numeric
+// database id for the environment — the one every other endpoint has, used
+// in URLs like /api/endpoints/{id}. EdgeID is a UUID minted specifically for
+// this environment's edge identity. Passing EndpointID as EDGE_ID to an
+// agent fails distinctively, not silently: the agent polls, and the server
+// answers "Permission denied to access environment. The device has not been
+// trusted yet: Unauthorized Edge endpoint operation: invalid Edge
+// identifier" — a real, first-run measurement, not a hypothetical. Key is a
+// shared secret: whoever holds it can enrol as that environment, so it is
+// handled with the same care as an API key.
+type EdgeCredentials struct {
+	EndpointID int
+	EdgeID     string
+	Key        string
+}
+
+// CreateEdgeEndpoint registers an edge environment and returns what an edge
+// agent needs to enrol against it.
+//
+// It shares CreateEndpoint's request shape (the same multipart POST to
+// /api/endpoints, EndpointCreationType 4) but is a separate function rather
+// than a fourth CreateEndpoint case: only an edge environment's response
+// carries an edge id and key, and threading those back through
+// EndpointSpec — which every other creation type ignores — would make the
+// common path answer for fields it never uses. Unlike an agent or local
+// environment, no URL is sent: the server derives one from its own Edge
+// Compute settings.
+func CreateEdgeEndpoint(ctx context.Context, c *http.Client, baseURL, apiKey, name string) (EdgeCredentials, error) {
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	if err := form.WriteField("Name", name); err != nil {
+		return EdgeCredentials{}, fmt.Errorf("write field Name: %w", err)
+	}
+	if err := form.WriteField("EndpointCreationType", "4"); err != nil {
+		return EdgeCredentials{}, fmt.Errorf("write field EndpointCreationType: %w", err)
+	}
+	if err := form.Close(); err != nil {
+		return EdgeCredentials{}, fmt.Errorf("close multipart form: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/endpoints", &buf)
+	if err != nil {
+		return EdgeCredentials{}, fmt.Errorf("build edge endpoint request: %w", err)
+	}
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	req.Header.Set("X-API-Key", apiKey)
+
+	var created struct {
+		ID      int    `json:"Id"`
+		EdgeID  string `json:"EdgeID"`
+		EdgeKey string `json:"EdgeKey"`
+	}
+	if err := do(c, req, &created); err != nil {
+		return EdgeCredentials{}, fmt.Errorf("create edge endpoint %q: %w", name, err)
+	}
+	if created.EdgeKey == "" {
+		return EdgeCredentials{}, fmt.Errorf("create edge endpoint %q: response carried no EdgeKey", name)
+	}
+	if created.EdgeID == "" {
+		return EdgeCredentials{}, fmt.Errorf("create edge endpoint %q: response carried no EdgeID", name)
+	}
+	return EdgeCredentials{EndpointID: created.ID, EdgeID: created.EdgeID, Key: created.EdgeKey}, nil
+}
+
+// EnableEdgeCompute turns on Edge Compute and tells the server how an edge
+// agent should reach it. portainerURL is the address an agent polls for
+// commands; tunnelAddr is where it opens its reverse tunnel. Both are
+// addresses on the estate's own compose network — an edge agent enrolled by
+// this harness never reaches the server through the port published to the
+// host.
+//
+// Without this, endpoint creation for an edge environment fails outright:
+// Portainer answers "API server URL not set in Edge Compute settings" rather
+// than registering anything. Verified against a live estate.
+func EnableEdgeCompute(ctx context.Context, c *http.Client, baseURL, apiKey, portainerURL, tunnelAddr string) error {
+	body := map[string]any{
+		"EnableEdgeComputeFeatures": true,
+		"EdgePortainerUrl":          portainerURL,
+		"Edge":                      map[string]string{"TunnelServerAddress": tunnelAddr},
+	}
+	headers := map[string]string{"X-API-Key": apiKey}
+	if err := putJSON(ctx, c, baseURL+"/api/settings", body, headers, nil); err != nil {
+		return fmt.Errorf("enable edge compute: %w", err)
+	}
+	return nil
+}
+
 // ApplyLicence installs a Business Edition licence.
 //
 // Neither our own error text nor anything quoted back from the server may
@@ -205,11 +321,21 @@ func LicenceNodes(ctx context.Context, c *http.Client, baseURL, jwt string) (int
 }
 
 func postJSON(ctx context.Context, c *http.Client, url string, body any, headers map[string]string, out any) error {
+	return sendJSON(ctx, c, http.MethodPost, url, body, headers, out)
+}
+
+// putJSON is postJSON's PUT twin, added for EnableEdgeCompute: Portainer's
+// settings resource is updated with PUT, not POST.
+func putJSON(ctx context.Context, c *http.Client, url string, body any, headers map[string]string, out any) error {
+	return sendJSON(ctx, c, http.MethodPut, url, body, headers, out)
+}
+
+func sendJSON(ctx context.Context, c *http.Client, method, url string, body any, headers map[string]string, out any) error {
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("encode body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(encoded))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}

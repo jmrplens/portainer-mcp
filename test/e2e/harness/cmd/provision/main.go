@@ -63,7 +63,17 @@ func run() error {
 		return fmt.Errorf("provision Community Edition: %w", err)
 	}
 
-	estate := harness.Estate{CE: ce}
+	// The agent is registered only against the Community Edition server: one
+	// second environment is enough to exercise the agent proxy code path, and
+	// Task 8's fixtures target this single endpoint.
+	agentID, err := harness.CreateEndpoint(context.Background(), client, ceURL, ce.Creds.APIKey,
+		harness.AgentEndpoint("agent", agentHost))
+	if err != nil {
+		return fmt.Errorf("register agent endpoint: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "CE: registered agent endpoint %d\n", agentID)
+
+	estate := harness.Estate{CE: ce, AgentID: agentID}
 
 	if licence == "" {
 		fmt.Fprintln(os.Stderr, "no licence supplied: skipping Business Edition provisioning")
@@ -73,6 +83,22 @@ func run() error {
 			return fmt.Errorf("provision Business Edition: %w", licErr)
 		}
 		estate.EE = ee
+
+		// The edge domains (edge_stacks, edge_jobs, edge_configs, edge_update_
+		// schedules) are Business Edition only, so the edge environment is
+		// registered against EE alone, exactly like the licence itself.
+		//
+		// Measured at Task 4: three consecutive enrolment attempts against a
+		// live estate checked in at ~19-21s each, comfortably inside the ~60s
+		// threshold the plan set for wiring this in rather than leaving the
+		// edge domains to httptest-only coverage. See plan/carry-forward.md.
+		edgeCreds, edgeErr := provisionEdge(context.Background(), client, eeURL, ee.Creds.APIKey)
+		if edgeErr != nil {
+			return fmt.Errorf("provision edge environment: %w", edgeErr)
+		}
+		estate.EdgeEndpointID = edgeCreds.EndpointID
+		estate.EdgeAgentID = edgeCreds.EdgeID
+		estate.EdgeKey = edgeCreds.Key
 	}
 
 	if err := estate.SaveTo(estatePath); err != nil {
@@ -89,6 +115,10 @@ func run() error {
 // this returns 200 with Status 1, and listing containers through it returns
 // an empty array rather than the host's.
 const dindDaemonURL = "tcp://docker:2375"
+
+// agentHost is the compose service name of the Portainer agent. It is
+// reachable only on the compose network, exactly like the dind daemon above.
+const agentHost = "portainer-agent"
 
 // provisionServer waits for baseURL to answer, creates its administrator, and
 // registers the estate's own dind daemon as its environment.
@@ -142,6 +172,31 @@ func provisionBusinessEdition(ctx context.Context, client *http.Client, baseURL,
 	fmt.Fprintf(os.Stderr, "EE: licence applied, %d node(s) allowed\n", nodes)
 
 	return server, nil
+}
+
+// edgePortainerURL and edgeTunnelAddr are the EE server's compose-network
+// addresses, exactly as an edge agent container on the same network reaches
+// it — never the port published to the host. Without both configured on the
+// server first, edge endpoint creation fails outright with "API server URL
+// not set in Edge Compute settings". Verified against a live estate.
+const (
+	edgePortainerURL = "http://portainer-ee:9000"
+	edgeTunnelAddr   = "portainer-ee:8000"
+)
+
+// provisionEdge turns on Edge Compute for the already-provisioned EE server
+// and registers one edge environment against it.
+func provisionEdge(ctx context.Context, client *http.Client, eeURL, apiKey string) (harness.EdgeCredentials, error) {
+	if err := harness.EnableEdgeCompute(ctx, client, eeURL, apiKey, edgePortainerURL, edgeTunnelAddr); err != nil {
+		return harness.EdgeCredentials{}, fmt.Errorf("enable edge compute: %w", err)
+	}
+
+	creds, err := harness.CreateEdgeEndpoint(ctx, client, eeURL, apiKey, "edge")
+	if err != nil {
+		return harness.EdgeCredentials{}, fmt.Errorf("create edge endpoint: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "EE: registered edge endpoint %d (edge id %s)\n", creds.EndpointID, creds.EdgeID)
+	return creds, nil
 }
 
 func envOrDefault(key, fallback string) string {

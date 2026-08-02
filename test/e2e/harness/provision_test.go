@@ -129,6 +129,33 @@ func TestProvision_SetupTokenRequiredButAbsent_ReturnsInformativeError(t *testin
 	}
 }
 
+func TestAgentEndpoint_SetsBothSkipFlags(t *testing.T) {
+	t.Parallel()
+	// The Portainer agent always serves TLS with a self-signed certificate
+	// valid only for "localhost", so a server reaching it by container name
+	// cannot verify it. TLSSkipVerify alone is not enough: the real server
+	// answers 400 "Invalid certificate file. Ensure that the file is uploaded
+	// correctly", which names neither field and sends you looking for a file
+	// that does not exist.
+	spec := AgentEndpoint("agent", "portainer-agent")
+
+	if spec.CreationType != 2 {
+		t.Errorf("CreationType = %d, want 2 (agent environment)", spec.CreationType)
+	}
+	if spec.URL != "tcp://portainer-agent:9001" {
+		t.Errorf("URL = %q, want the agent's tcp address on the compose network", spec.URL)
+	}
+	if !spec.TLS {
+		t.Error("TLS = false: the agent serves TLS unconditionally")
+	}
+	if !spec.TLSSkipVerify {
+		t.Error("TLSSkipVerify = false: the certificate is valid only for localhost")
+	}
+	if !spec.TLSSkipClientVerify {
+		t.Error("TLSSkipClientVerify = false: without it Portainer answers 400 Invalid certificate file")
+	}
+}
+
 func TestCreateEndpoint_SendsMultipartWithEveryTLSField(t *testing.T) {
 	t.Parallel()
 	// Registering an agent needs TLSSkipClientVerify as well as TLSSkipVerify.
@@ -180,6 +207,117 @@ func TestCreateEndpoint_LocalDocker_OmitsEmptyOptionalFields(t *testing.T) {
 	}
 	if _, present := fake.sawEndpointForm["TLS"]; present {
 		t.Error("TLS was sent when false; the field must be omitted so the server applies its own default")
+	}
+}
+
+func TestCreateEdgeEndpoint_ReturnsEndpointIDEdgeIDAndKey(t *testing.T) {
+	t.Parallel()
+	var sawForm map[string]string
+	var sawCreationType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		sawForm = map[string]string{}
+		for k, v := range r.MultipartForm.Value {
+			sawForm[k] = v[0]
+		}
+		sawCreationType = sawForm["EndpointCreationType"]
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"edge","EdgeID":"feb87bad-9d1c-41ed-86f0-f51d03abde3a","EdgeKey":"aGVsbG8="}`))
+	}))
+	t.Cleanup(server.Close)
+
+	creds, err := CreateEdgeEndpoint(context.Background(), server.Client(), server.URL, "ptr_rawkey", "edge")
+	if err != nil {
+		t.Fatalf("CreateEdgeEndpoint() error = %v", err)
+	}
+	// EndpointID and EdgeID are deliberately checked against different
+	// values: the field that matters for an agent's EDGE_ID environment
+	// variable is the UUID, not the ordinary numeric database id, and a test
+	// that used the same value for both would not catch the two being
+	// swapped.
+	if creds.EndpointID != 9 {
+		t.Errorf("EndpointID = %d, want 9", creds.EndpointID)
+	}
+	if creds.EdgeID != "feb87bad-9d1c-41ed-86f0-f51d03abde3a" {
+		t.Errorf("EdgeID = %q, want the UUID carried in the response's EdgeID field", creds.EdgeID)
+	}
+	if creds.Key != "aGVsbG8=" {
+		t.Errorf("Key = %q, want the EdgeKey carried in the response", creds.Key)
+	}
+	if sawCreationType != "4" {
+		t.Errorf("EndpointCreationType = %q, want 4 (edge agent)", sawCreationType)
+	}
+	if _, present := sawForm["URL"]; present {
+		t.Error("URL was sent for an edge environment; the server derives it from its own settings")
+	}
+}
+
+func TestCreateEdgeEndpoint_NoEdgeKeyInResponse_ReturnsInformativeError(t *testing.T) {
+	t.Parallel()
+	// A server that accepts the creation but, for whatever reason, answers
+	// without a key. Silently returning an EdgeCredentials no agent can ever
+	// use would be a worse failure than an explicit error here.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"edge","EdgeID":"feb87bad-9d1c-41ed-86f0-f51d03abde3a"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := CreateEdgeEndpoint(context.Background(), server.Client(), server.URL, "k", "edge")
+	if err == nil {
+		t.Fatal("CreateEdgeEndpoint() error = nil, want an error when the response carries no EdgeKey")
+	}
+}
+
+func TestCreateEdgeEndpoint_NoEdgeIDInResponse_ReturnsInformativeError(t *testing.T) {
+	t.Parallel()
+	// The distinct sibling of the case above: a key with no UUID is just as
+	// useless to an agent, since EDGE_ID is what it needs to identify itself.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"edge","EdgeKey":"aGVsbG8="}`))
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := CreateEdgeEndpoint(context.Background(), server.Client(), server.URL, "k", "edge")
+	if err == nil {
+		t.Fatal("CreateEdgeEndpoint() error = nil, want an error when the response carries no EdgeID")
+	}
+}
+
+func TestEnableEdgeCompute_SendsTheAgentReachableAddresses(t *testing.T) {
+	t.Parallel()
+	// Without this call, edge endpoint creation fails with "API server URL
+	// not set in Edge Compute settings" — verified against a live estate.
+	var sawAPIKey string
+	var sawBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		sawAPIKey = r.Header.Get("X-API-Key")
+		_ = json.NewDecoder(r.Body).Decode(&sawBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	err := EnableEdgeCompute(context.Background(), server.Client(), server.URL, "ptr_rawkey",
+		"http://portainer-ee:9000", "portainer-ee:8000")
+	if err != nil {
+		t.Fatalf("EnableEdgeCompute() error = %v", err)
+	}
+	if sawAPIKey != "ptr_rawkey" {
+		t.Errorf("X-API-Key = %q, want the raw key", sawAPIKey)
+	}
+	if sawBody["EnableEdgeComputeFeatures"] != true {
+		t.Errorf("EnableEdgeComputeFeatures = %v, want true", sawBody["EnableEdgeComputeFeatures"])
+	}
+	if sawBody["EdgePortainerUrl"] != "http://portainer-ee:9000" {
+		t.Errorf("EdgePortainerUrl = %v, want the agent-reachable URL", sawBody["EdgePortainerUrl"])
+	}
+	edge, _ := sawBody["Edge"].(map[string]any)
+	if edge == nil || edge["TunnelServerAddress"] != "portainer-ee:8000" {
+		t.Errorf("Edge.TunnelServerAddress = %v, want the agent-reachable tunnel address", edge)
 	}
 }
 
