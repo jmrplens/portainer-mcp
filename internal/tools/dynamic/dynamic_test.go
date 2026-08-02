@@ -267,3 +267,71 @@ func TestFindAction_FewMatches_CarriesNoTruncationNote(t *testing.T) {
 		t.Errorf("matched = %d but %d returned; they must agree when nothing is capped", got.Matched, len(got.Matches))
 	}
 }
+
+// TestSearch_LongQuery_DoesNotLetDescriptionNoiseOutrankANameMatch is the
+// regression guard for a defect the cap made worse: unbounded per-term
+// description scoring let twenty-five noise actions outscore the one action
+// actually named, and the cap then discarded it while claiming the survivors
+// were the best matches.
+func TestSearch_LongQuery_DoesNotLetDescriptionNoiseOutrankANameMatch(t *testing.T) {
+	t.Parallel()
+	const query = "please help me quickly and safely retrieve the current list right now today urgently immediately without delay"
+
+	specs := []toolutil.ActionSpec{{
+		Name: "tags.list", Domain: "tags", OperationID: "TagList",
+		Title: "List tags", Description: "Lists tags.", Edition: edition.CE,
+		Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+	}}
+	for i := range 25 {
+		specs = append(specs, toolutil.ActionSpec{
+			Name: fmt.Sprintf("tags.noise%02d", i), Domain: "tags", OperationID: "TagList",
+			Title: "Noise", Description: query, Edition: edition.CE,
+			Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+		})
+	}
+
+	matches := search(specs, query)
+	if len(matches) == 0 {
+		t.Fatal("search returned nothing")
+	}
+	if matches[0].Action != "tags.list" {
+		t.Errorf("best match = %q, want tags.list: a name match must outrank description noise", matches[0].Action)
+	}
+
+	// Checking which action sorts first is not enough on its own: with 25 noise
+	// actions named "tags.noise00".."tags.noise24", a tie at the same score
+	// still sorts "tags.list" first purely because "list" < "noise"
+	// alphabetically — a coincidence of these fixture names, not evidence the
+	// scoring invariant holds. Compare the scores directly instead, since this
+	// test runs in-package and can see the unexported field.
+	var listScore, noiseScore int
+	haveNoise := false
+	for _, m := range matches {
+		switch {
+		case m.Action == "tags.list":
+			listScore = m.score
+		case !haveNoise && strings.HasPrefix(m.Action, "tags.noise"):
+			noiseScore = m.score
+			haveNoise = true
+		}
+	}
+	if !haveNoise {
+		t.Fatal("no noise action was present among the matches")
+	}
+	if listScore <= noiseScore {
+		t.Errorf("tags.list score = %d, a noise action score = %d; a name match must strictly outscore description noise, not merely tie",
+			listScore, noiseScore)
+	}
+
+	// And it must survive the cap the surface applies.
+	within := false
+	for i, m := range matches {
+		if m.Action == "tags.list" {
+			within = i < maxMatches
+			break
+		}
+	}
+	if !within {
+		t.Error("tags.list fell outside the result cap, so the model would never see the correct action")
+	}
+}

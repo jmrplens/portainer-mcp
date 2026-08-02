@@ -124,6 +124,17 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 	return nil
 }
 
+// Scoring weights. A name match must always outrank description matches: the
+// haystack contribution is capped below a single name hit, because a long
+// natural-language query would otherwise let an action whose description
+// happens to share many common words outscore the action actually named.
+const (
+	scoreExactName     = 100
+	scoreNameSubstring = 10
+	scoreHaystackTerm  = 1
+	maxHaystackScore   = 5
+)
+
 // search ranks actions against a query. Matching is deliberately simple: an
 // exact name match beats a name substring, which beats a title or description
 // hit. P3 can add synonyms and fuzzy matching once the catalog is large enough
@@ -139,17 +150,21 @@ func search(specs []toolutil.ActionSpec, query string) []match {
 		name := strings.ToLower(spec.Name)
 		haystack := strings.ToLower(spec.Name + " " + spec.Domain + " " + spec.Title + " " + spec.Description)
 
-		score := 0
+		score, haystackScore := 0, 0
 		for _, term := range terms {
 			switch {
 			case name == term:
-				score += 100
+				score += scoreExactName
 			case strings.Contains(name, term):
-				score += 10
+				score += scoreNameSubstring
 			case strings.Contains(haystack, term):
-				score++
+				haystackScore += scoreHaystackTerm
 			}
 		}
+		if haystackScore > maxHaystackScore {
+			haystackScore = maxHaystackScore
+		}
+		score += haystackScore
 		if score == 0 {
 			continue
 		}
