@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -70,7 +71,11 @@ func safeModePreview(spec toolutil.ActionSpec, input json.RawMessage) *mcp.CallT
 		"kind":      kind,
 		"would_call": map[string]any{
 			"operation_id": spec.OperationID,
-			"input":        input,
+			// Field names only, never values: this preview travels back through
+			// the tool response, where transcripts and observability treat it
+			// less carefully than the request, and several domains carry
+			// credentials in their input.
+			"input_fields": inputFieldNames(input),
 		},
 		"note": "Safe mode is enabled, so this " + kind + " action was not executed. " +
 			"Restart the server without --safe-mode to apply it.",
@@ -80,6 +85,25 @@ func safeModePreview(spec toolutil.ActionSpec, input json.RawMessage) *mcp.CallT
 		return errorResult(fmt.Sprintf("%s: encode safe-mode preview: %v", spec.Name, err))
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}
+}
+
+// inputFieldNames lists the top-level keys of a JSON object input, sorted.
+//
+// It never returns values. It also never fails: an input that is not a JSON
+// object — malformed, empty, or a bare scalar — yields nil rather than an
+// error, because losing the preview's framing is worse than losing the field
+// list. See FINDING 3.
+func inputFieldNames(input json.RawMessage) []string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func errorResult(message string) *mcp.CallToolResult {

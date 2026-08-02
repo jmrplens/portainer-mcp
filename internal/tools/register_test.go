@@ -59,6 +59,9 @@ func TestExecute_SafeMode_InterceptsMutatingActionWithoutRunningIt(t *testing.T)
 	if executed {
 		t.Fatal("safe mode ran the handler; it must only preview")
 	}
+	if res.IsError {
+		t.Error("the safe-mode preview is reported as a tool error; it is a successful, informative result")
+	}
 	text := res.Content[0].(*mcp.TextContent).Text
 	for _, want := range []string{"safe mode", "tags.delete", "destructive"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
@@ -114,5 +117,74 @@ func TestAnnotationsFor_ReadOnlyAction_IsMarkedReadOnly(t *testing.T) {
 	a := AnnotationsFor(readOnlySpec())
 	if !a.ReadOnlyHint {
 		t.Error("ReadOnlyHint = false for a read-only action")
+	}
+}
+
+// A malformed input must not cost the preview its framing: a model that reads
+// only an encode error cannot tell safe mode blocked the call, and may retry.
+func TestExecute_SafeMode_MalformedInput_StillReportsSafeMode(t *testing.T) {
+	t.Parallel()
+	executed := false
+	res, err := Execute(context.Background(), destructiveSpec(&executed), Deps{SafeMode: true}, json.RawMessage(`{not json`))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if executed {
+		t.Fatal("the handler ran despite safe mode")
+	}
+	if res.IsError {
+		t.Error("a malformed input turned the preview into a tool error")
+	}
+	text := strings.ToLower(res.Content[0].(*mcp.TextContent).Text)
+	if !strings.Contains(text, "safe mode") {
+		t.Errorf("preview = %q, want it to still say safe mode blocked the call", text)
+	}
+}
+
+func TestExecute_SafeMode_PreviewReportsFieldNamesNotValues(t *testing.T) {
+	t.Parallel()
+	executed := false
+	res, err := Execute(context.Background(), destructiveSpec(&executed), Deps{SafeMode: true},
+		json.RawMessage(`{"password":"hunter2","id":3}`))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if strings.Contains(text, "hunter2") {
+		t.Error("the preview echoed an input value back through the tool response")
+	}
+	if !strings.Contains(text, "password") {
+		t.Error("the preview does not name the fields that would have been sent")
+	}
+}
+
+func TestExecute_ForwardsContextClientAndInputToTheHandler(t *testing.T) {
+	t.Parallel()
+	type ctxKey struct{}
+	wantCtx := context.WithValue(context.Background(), ctxKey{}, "sentinel")
+	wantClient := &portainer.Client{}
+	wantInput := json.RawMessage(`{"id":7}`)
+
+	var gotCtx context.Context
+	var gotClient *portainer.Client
+	var gotInput json.RawMessage
+
+	spec := readOnlySpec()
+	spec.Handler = func(ctx context.Context, c *portainer.Client, in json.RawMessage) (any, error) {
+		gotCtx, gotClient, gotInput = ctx, c, in
+		return map[string]any{"ok": true}, nil
+	}
+
+	if _, err := Execute(wantCtx, spec, Deps{Client: wantClient}, wantInput); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotCtx == nil || gotCtx.Value(ctxKey{}) != "sentinel" {
+		t.Error("the caller's context was not forwarded to the handler")
+	}
+	if gotClient != wantClient {
+		t.Error("the configured client was not forwarded to the handler")
+	}
+	if string(gotInput) != string(wantInput) {
+		t.Errorf("input forwarded as %q, want %q", gotInput, wantInput)
 	}
 }
