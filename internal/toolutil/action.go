@@ -66,8 +66,9 @@ func (s ActionSpec) Validate() error {
 	if s.Domain == "" {
 		return fail("Domain is required")
 	}
-	if !strings.HasPrefix(s.Name, s.Domain+".") {
-		return fail("Name must be domain-qualified as %q", s.Domain+".<action>")
+	local, qualified := strings.CutPrefix(s.Name, s.Domain+".")
+	if !qualified || local == "" {
+		return fail("Name must be domain-qualified as %q with a non-empty action part", s.Domain+".<action>")
 	}
 	if s.OperationID == "" {
 		return fail("OperationID is required: it is the only link to the generated client")

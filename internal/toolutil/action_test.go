@@ -35,25 +35,32 @@ func TestValidate_CompleteSpec_ReturnsNil(t *testing.T) {
 
 func TestValidate_MissingFields_AreEachReported(t *testing.T) {
 	t.Parallel()
-	cases := map[string]func(*ActionSpec){
-		"Name":        func(s *ActionSpec) { s.Name = "" },
-		"Domain":      func(s *ActionSpec) { s.Domain = "" },
-		"OperationID": func(s *ActionSpec) { s.OperationID = "" },
-		"Title":       func(s *ActionSpec) { s.Title = "" },
-		"Description": func(s *ActionSpec) { s.Description = "" },
-		"Edition":     func(s *ActionSpec) { s.Edition = "" },
-		"Handler":     func(s *ActionSpec) { s.Handler = nil },
+	cases := map[string]struct {
+		corruptSpec func(*ActionSpec)
+		wantIn      string
+	}{
+		"Name":        {func(s *ActionSpec) { s.Name = "" }, "Name is required"},
+		"Domain":      {func(s *ActionSpec) { s.Domain = "" }, "Domain is required"},
+		"OperationID": {func(s *ActionSpec) { s.OperationID = "" }, "OperationID is required"},
+		"Title":       {func(s *ActionSpec) { s.Title = "" }, "Title is required"},
+		"Description": {func(s *ActionSpec) { s.Description = "" }, "Description is required"},
+		"Edition":     {func(s *ActionSpec) { s.Edition = "" }, "is not CE or EE"},
+		"Handler":     {func(s *ActionSpec) { s.Handler = nil }, "Handler is required"},
 	}
-	for field, corruptSpec := range cases {
+	for field, tc := range cases {
 		spec := validSpec()
-		corruptSpec(&spec)
+		tc.corruptSpec(&spec)
+
 		err := spec.Validate()
 		if err == nil {
 			t.Errorf("Validate() with empty %s = nil, want an error", field)
 			continue
 		}
-		if !strings.Contains(err.Error(), spec.Name+": ") && spec.Name != "" {
-			t.Errorf("Validate() error for %s = %q, want it to name the action", field, err)
+		// Asserting the specific message is what makes each case discriminate:
+		// several guards would otherwise be satisfied by an unrelated one
+		// firing as a side effect.
+		if !strings.Contains(err.Error(), tc.wantIn) {
+			t.Errorf("Validate() with empty %s = %q, want it to contain %q", field, err, tc.wantIn)
 		}
 	}
 }
@@ -88,5 +95,14 @@ func TestValidate_NameNotDomainQualified_ReturnsError(t *testing.T) {
 	spec.Name = "list"
 	if err := spec.Validate(); err == nil {
 		t.Fatal("Validate() = nil, want an error for a name that is not domain-qualified")
+	}
+}
+
+func TestValidate_NameWithEmptyActionPart_ReturnsError(t *testing.T) {
+	t.Parallel()
+	spec := validSpec()
+	spec.Name = "tags."
+	if err := spec.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want an error for a name with no action part after the dot")
 	}
 }
