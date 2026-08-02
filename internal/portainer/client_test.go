@@ -202,3 +202,56 @@ func TestDo_SendsMethodAndAPIKey(t *testing.T) {
 		t.Errorf("X-API-Key = %q, want the configured token", gotKey)
 	}
 }
+
+// Both path-validation tests below point at a real, reachable httptest server
+// rather than the "https://portainer.example.com" placeholder used elsewhere
+// in this file. That placeholder's "portainer." subdomain does not resolve
+// (confirmed: example.com itself resolves; portainer.example.com does not,
+// with or without outbound network access) — DNS failure alone would make
+// client.Do return a non-nil error regardless of whether the validation being
+// tested exists, which would make these tests pass for the wrong reason and
+// never actually catch a removed check. Pointing at a live server, with a
+// handler that fails the test if it is ever reached, means the assertion only
+// holds when validation rejects the path before any request is sent.
+
+func TestDo_PathWithoutLeadingSlash_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached the server for an invalid path: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "system/status", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a path without a leading slash")
+	}
+}
+
+func TestDo_PathWithTraversal_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached the server for a traversal path: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/../../etc/passwd", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a traversal path")
+	}
+}

@@ -127,6 +127,19 @@ func TestBuild_DeclaresEEForASharedOperation_ReturnsError(t *testing.T) {
 	}
 }
 
+// The direction the original cross-check missed: declaring EE for an operation
+// only Community Edition serves. It built cleanly and was filtered only as a
+// side effect of Edition.Includes.
+func TestBuild_DeclaresEEForACEOnlyOperation_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{
+		spec("system.upgrade", "system", "SystemUpgrade", edition.EE),
+	}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: SystemUpgrade exists only in Community Edition")
+	}
+}
+
 // A genuinely EE-only operation declared EE must still build.
 func TestBuild_DeclaresEEForAnEEOnlyOperation_Succeeds(t *testing.T) {
 	t.Parallel()

@@ -95,9 +95,9 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 			return nil, fmt.Errorf(
 				"actioncatalog: %s declares Edition CE but %q exists only in Business Edition",
 				spec.Name, spec.OperationID)
-		case spec.Edition == edition.EE && inCE && inEE:
+		case spec.Edition == edition.EE && (!inEE || inCE):
 			return nil, fmt.Errorf(
-				"actioncatalog: %s declares Edition EE but %q exists in both editions; declare CE",
+				"actioncatalog: %s declares Edition EE but %q is not exclusive to Business Edition",
 				spec.Name, spec.OperationID)
 		}
 

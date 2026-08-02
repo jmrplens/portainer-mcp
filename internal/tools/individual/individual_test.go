@@ -2,15 +2,18 @@ package individual
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
 func connect(t *testing.T, server *mcp.Server) (*mcp.ClientSession, context.Context) {
@@ -116,6 +119,55 @@ func TestRegister_Annotations_MarkReadOnlyActions(t *testing.T) {
 		wantReadOnly := tool.Name != "portainer_system_update"
 		if tool.Annotations.ReadOnlyHint != wantReadOnly {
 			t.Errorf("%s ReadOnlyHint = %v, want %v", tool.Name, tool.Annotations.ReadOnlyHint, wantReadOnly)
+		}
+	}
+}
+
+// TestCallTool_EachToolReachesItsOwnAction is the guard against a mis-wired
+// closure: every existing test only inspects the tool list, so a Register that
+// bound one handler to every tool would pass all of them.
+func TestCallTool_EachToolReachesItsOwnAction(t *testing.T) {
+	t.Parallel()
+	specs := []toolutil.ActionSpec{
+		{
+			Name: "system.info", Domain: "system", OperationID: "SystemInfo",
+			Title: "a", Description: "a", Edition: edition.CE,
+			Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
+				return map[string]any{"which": "info"}, nil
+			},
+		},
+		{
+			Name: "system.status", Domain: "system", OperationID: "SystemStatus",
+			Title: "b", Description: "b", Edition: edition.CE,
+			Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
+				return map[string]any{"which": "status"}, nil
+			},
+		},
+	}
+	catalog, err := actioncatalog.Build(specs, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	for tool, want := range map[string]string{
+		"portainer_system_info":   "info",
+		"portainer_system_status": "status",
+	} {
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{}})
+		if err != nil {
+			t.Fatalf("CallTool(%s): %v", tool, err)
+		}
+		if res.IsError {
+			t.Fatalf("CallTool(%s) returned an error: %+v", tool, res.Content)
+		}
+		text := res.Content[0].(*mcp.TextContent).Text
+		if !strings.Contains(text, want) {
+			t.Errorf("CallTool(%s) reached the wrong action: got %q, want it to mention %q", tool, text, want)
 		}
 	}
 }

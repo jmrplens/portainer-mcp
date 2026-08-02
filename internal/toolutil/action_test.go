@@ -106,3 +106,14 @@ func TestValidate_NameWithEmptyActionPart_ReturnsError(t *testing.T) {
 		t.Fatal("Validate() = nil, want an error for a name with no action part after the dot")
 	}
 }
+
+func TestValidate_NameWithIllegalCharacter_ReturnsError(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"tags.list one", "tags.list/all", "tags.list:x"} {
+		spec := validSpec()
+		spec.Name = name
+		if err := spec.Validate(); err == nil {
+			t.Errorf("Validate() with name %q = nil, want an error", name)
+		}
+	}
+}

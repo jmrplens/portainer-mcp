@@ -70,6 +70,14 @@ func (s ActionSpec) Validate() error {
 	if !qualified || local == "" {
 		return fail("Name must be domain-qualified as %q with a non-empty action part", s.Domain+".<action>")
 	}
+	// MCP tool names allow only [A-Za-z0-9_.-], and the SDK merely logs a bad
+	// name through a logger that discards by default, then registers it anyway.
+	// Catching it here means no surface can produce an unusable tool.
+	for _, r := range s.Name {
+		if !isLegalToolNameRune(r) {
+			return fail("Name contains %q, which MCP tool names disallow; use only letters, digits, underscore, dot or hyphen", r)
+		}
+	}
 	if s.OperationID == "" {
 		return fail("OperationID is required: it is the only link to the generated client")
 	}
@@ -91,6 +99,20 @@ func (s ActionSpec) Validate() error {
 		return fail("Handler is required")
 	}
 	return nil
+}
+
+// isLegalToolNameRune reports whether r is one of the characters MCP tool
+// names allow: letters, digits, underscore, dot or hyphen.
+func isLegalToolNameRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z':
+	case r >= 'A' && r <= 'Z':
+	case r >= '0' && r <= '9':
+	case r == '_' || r == '.' || r == '-':
+	default:
+		return false
+	}
+	return true
 }
 
 // compile-time proof that the Handler signature matches what domains write.

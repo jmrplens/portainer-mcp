@@ -72,6 +72,13 @@ func New(cfg *config.Config) (*Client, error) {
 // POST /system/upgrade and GET /kubernetes/config — exist only in Community
 // Edition. Everything else should go through the generated client.
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	if !strings.HasPrefix(path, "/") {
+		return nil, fmt.Errorf("%s %s: path must start with /", method, path)
+	}
+	if strings.Contains(path, "..") {
+		return nil, fmt.Errorf("%s %s: path must not contain %q", method, path, "..")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("build %s request for %s: %w", method, path, err)
