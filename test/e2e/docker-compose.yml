@@ -1,50 +1,74 @@
-# Two Portainer servers and an agent, on one network, all disposable.
+# Two Portainer servers, an agent, and their own Docker daemon. All disposable.
 #
-# Both servers run with --no-setup-token: Portainer 2.44.0 otherwise refuses
-# to create the first administrator without a token printed to its logs, which
-# turns a two-line provisioning step into log scraping. The Kubernetes leg in
-# k3d-up.sh cannot pass the flag and does scrape the logs; here we do not have
-# to.
+# The estate runs against Docker-in-Docker rather than the host's socket. That
+# is the difference between an isolated world and the developer's real one: with
+# the host socket mounted, Portainer's "local" environment lists every container
+# on the machine, and P3 will write container, stack and volume actions that
+# delete things. Measured: through dind Portainer sees 0 containers; through the
+# host socket it saw 12, including the developer's own Portainer edge agent.
+# The isolation is the kernel's, not a naming convention the tests have to
+# honour correctly every time.
 #
-# No volumes are declared. The estate is rebuilt from empty on every run, which
-# a one-second cold start makes cheaper than reasoning about stale state.
+# The cost is 23 seconds for the daemon to become ready instead of 1, and one
+# privileged container. Both are acceptable; a delete that reaches a real
+# container is not.
+#
+# Both servers run with --no-setup-token: Portainer 2.44.0 otherwise refuses to
+# create the first administrator without a token printed to its logs. The
+# Kubernetes leg in k3d-up.sh cannot pass the flag and does scrape the logs.
+#
+# No named volumes. The estate is rebuilt from empty every run.
+
 name: portainer-mcp-e2e
 
 services:
+  # The estate's own Docker daemon. Nothing outside this compose project exists
+  # inside it.
+  docker:
+    image: docker:28-dind
+    privileged: true
+    environment:
+      # Plain TCP on an internal network with no published port. Enabling TLS
+      # here would mean provisioning certificates for a daemon unreachable from
+      # outside the compose network.
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--host=tcp://0.0.0.0:2375"]
+    healthcheck:
+      test: ["CMD", "docker", "-H", "tcp://127.0.0.1:2375", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
   portainer-ce:
     image: portainer/portainer-ce:2.44.0
     command: ["--no-setup-token"]
     ports:
       - "${E2E_CE_PORT:-19000}:9000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test: ["CMD", "/portainer", "--version"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-      start_period: 2s
+    depends_on:
+      docker:
+        condition: service_healthy
 
   portainer-ee:
     image: portainer/portainer-ee:2.44.0
     command: ["--no-setup-token"]
     ports:
       - "${E2E_EE_PORT:-19001}:9000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test: ["CMD", "/portainer", "--version"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-      start_period: 2s
+    depends_on:
+      docker:
+        condition: service_healthy
 
   # A second real environment, so endpoint and container actions are exercised
-  # through the agent proxy rather than only against the local socket.
+  # through the agent proxy and not only through a direct daemon connection.
+  # DOCKER_HOST points it at the estate's daemon; verified that the agent
+  # honours it. It logs one warning at startup — "unable to retrieve agent
+  # container IP address" — because it looks for itself inside a daemon it does
+  # not run on, and falls back to 0.0.0.0. That is cosmetic and expected.
   portainer-agent:
     image: portainer/agent:2.44.0
     environment:
       AGENT_CLUSTER_ADDR: portainer-agent
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      DOCKER_HOST: tcp://docker:2375
+    depends_on:
+      docker:
+        condition: service_healthy

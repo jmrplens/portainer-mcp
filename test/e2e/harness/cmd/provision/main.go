@@ -82,8 +82,16 @@ func run() error {
 	return nil
 }
 
-// provisionServer waits for baseURL to answer, creates its administrator,
-// and registers the local Docker socket the server itself was started with.
+// dindDaemonURL is the estate's own Docker-in-Docker daemon, reachable only on
+// the compose network. Neither Portainer container mounts a socket, so there
+// is no local environment to create with a bare CreationType 1 and no URL:
+// the daemon must be registered explicitly. Verified against a live estate:
+// this returns 200 with Status 1, and listing containers through it returns
+// an empty array rather than the host's.
+const dindDaemonURL = "tcp://docker:2375"
+
+// provisionServer waits for baseURL to answer, creates its administrator, and
+// registers the estate's own dind daemon as its environment.
 func provisionServer(ctx context.Context, client *http.Client, edition, baseURL string) (harness.Server, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
@@ -101,13 +109,14 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	}
 
 	endpointID, err := harness.CreateEndpoint(ctx, client, baseURL, creds.APIKey, harness.EndpointSpec{
-		Name:         "local",
-		CreationType: 1, // local Docker: the server was started with the host socket mounted.
+		Name:         "docker",
+		CreationType: 1,
+		URL:          dindDaemonURL,
 	})
 	if err != nil {
-		return harness.Server{}, fmt.Errorf("register local endpoint on %s: %w", edition, err)
+		return harness.Server{}, fmt.Errorf("register docker endpoint on %s: %w", edition, err)
 	}
-	fmt.Fprintf(os.Stderr, "%s: registered local endpoint %d\n", edition, endpointID)
+	fmt.Fprintf(os.Stderr, "%s: registered docker endpoint %d\n", edition, endpointID)
 
 	return harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds}, nil
 }

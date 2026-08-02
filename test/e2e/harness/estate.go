@@ -61,6 +61,9 @@ func (e Estate) SaveTo(path string) error {
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
+	// os.CreateTemp already documents 0600 as the mode it creates with; this
+	// Chmod restates that guarantee rather than establishing it, so a reader
+	// should not take it as the reason TestEstate_SaveTo_IsOwnerOnly passes.
 	if err := tmp.Chmod(0o600); err != nil {
 		return fmt.Errorf("restrict estate permissions: %w", err)
 	}
