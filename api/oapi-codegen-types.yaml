@@ -1,0 +1,4 @@
+package: portainerapi
+output: internal/portainer/gen/types.gen.go
+generate:
+  models: true

@@ -1,0 +1,9 @@
+package: portainerapi
+output: internal/portainer/gen/client.gen.go
+generate:
+  client: true
+output-options:
+  # Types live in types.gen.go, generated from the same spec into the same
+  # package. Without skip-prune this run would strip the schemas it believes
+  # unused and then reference types it did not emit.
+  skip-prune: true

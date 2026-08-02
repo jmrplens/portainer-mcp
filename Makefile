@@ -9,7 +9,9 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec
+
+SPEC_VERSION ?= 2.44.0
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(BINARY) ./cmd/$(BINARY)
@@ -37,3 +39,14 @@ check: fmt lint vulncheck test
 
 clean:
 	rm -rf dist coverage.out
+
+update-spec:
+	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
+	go run ./cmd/fetch_spec -edition ce -version $(SPEC_VERSION)
+
+gen-client:
+	go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+		--config api/oapi-codegen-types.yaml api/specs/ee-$(SPEC_VERSION).json
+	go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+		--config api/oapi-codegen-client.yaml api/specs/ee-$(SPEC_VERSION).json
+	gofmt -w internal/portainer/gen

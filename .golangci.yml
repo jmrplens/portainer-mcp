@@ -30,6 +30,17 @@ linters:
         linters:
           - gosec
           - wrapcheck
+      # Generated from Portainer's OpenAPI spec; not hand-written, not ours to style.
+      - path: internal/portainer/gen/
+        linters:
+          - revive
+          - gosec
+          - wrapcheck
+          - unparam
+          - errorlint
+          - misspell
+          - unconvert
+          - usestdlibvars
 
 formatters:
   enable:
