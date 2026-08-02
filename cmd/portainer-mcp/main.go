@@ -108,9 +108,17 @@ func run(args []string) error {
 		return fmt.Errorf("build portainer client: %w", err)
 	}
 
-	catalog, resolvedEdition, serverVersion, err := buildCatalog(ctx, cfg, client, logger)
+	// Bound the startup round trip. The client sets no http.Client.Timeout on
+	// purpose — that would cap long operations such as a stack redeploy that
+	// pulls multi-gigabyte images — so the deadline belongs on the context, and
+	// DefaultCallTimeout exists for exactly this. Without it an MCP host that
+	// starts this server before the network is up gets a silent, hung process.
+	detectCtx, cancelDetect := context.WithTimeout(ctx, portainer.DefaultCallTimeout)
+	defer cancelDetect()
+
+	catalog, resolvedEdition, serverVersion, err := buildCatalog(detectCtx, cfg, client, logger)
 	if err != nil {
-		return fmt.Errorf("build action catalog: %w", err)
+		return err
 	}
 	logger.Info("action catalog built",
 		"edition", resolvedEdition,

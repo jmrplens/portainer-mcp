@@ -5,7 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -76,6 +79,47 @@ func TestBuildCatalog_UnreachableServer_ReturnsError(t *testing.T) {
 	}
 	if _, _, _, err := buildCatalog(context.Background(), cfg, client, slog.Default()); err == nil {
 		t.Fatal("buildCatalog() = nil, want an error when the server cannot be reached")
+	}
+}
+
+// A server that accepts the connection and then never answers must not hang
+// startup: the client sets no transport timeout by design, so the deadline has
+// to come from the context the caller supplies.
+func TestBuildCatalog_UnresponsiveServer_FailsWithinTheDeadline(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic}
+	client, err := portainer.New(cfg)
+	if err != nil {
+		t.Fatalf("portainer.New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, _, _, err := buildCatalog(ctx, cfg, client, slog.Default()); err == nil {
+		t.Fatal("buildCatalog() = nil, want an error when the server never answers")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("buildCatalog took %v; the context deadline did not bound it", elapsed)
+	}
+}
+
+// TestRun_AppliesTheStartupDeadline guards against the deadline being declared
+// and never wired, which is the state this fix corrects.
+func TestRun_AppliesTheStartupDeadline(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(source), "portainer.DefaultCallTimeout") {
+		t.Error("run does not apply portainer.DefaultCallTimeout to the startup detection; an unresponsive server would hang startup indefinitely")
 	}
 }
 
