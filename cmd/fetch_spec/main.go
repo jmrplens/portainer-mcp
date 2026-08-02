@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -95,14 +96,13 @@ func httpFetcher() fetcher {
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("get %s: status %d", rel, resp.StatusCode)
 		}
-		body := make([]byte, 0, 1<<20)
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := resp.Body.Read(buf)
-			body = append(body, buf[:n]...)
-			if err != nil {
-				break
-			}
+		const maxSpecBytes = 64 << 20 // 64 MiB; the largest published spec is ~1.2 MB
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxSpecBytes))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
+		}
+		if len(body) == int(maxSpecBytes) {
+			return nil, fmt.Errorf("read %s: response exceeds %d bytes", rel, maxSpecBytes)
 		}
 		return body, nil
 	}
@@ -113,8 +113,30 @@ func writeJSON(path string, value any) error {
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	encoded = append(encoded, '\n')
+
+	// Write to a sibling temporary file and rename: os.Rename is atomic within
+	// a filesystem, so a crash or a later failure can never leave a truncated
+	// or orphaned file at the final path.
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+
+	if _, err := tmp.Write(encoded); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmpName, path, err)
 	}
 	return nil
 }
