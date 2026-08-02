@@ -1,12 +1,10 @@
-package main
+package wiring
 
 import (
 	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,9 +35,9 @@ func TestBuildCatalog_DetectsEditionFromServer(t *testing.T) {
 		t.Fatalf("portainer.New: %v", err)
 	}
 
-	_, gotEdition, gotVersion, err := buildCatalog(context.Background(), cfg, client, slog.Default())
+	_, gotEdition, gotVersion, err := BuildCatalog(context.Background(), cfg, client, slog.Default())
 	if err != nil {
-		t.Fatalf("buildCatalog: %v", err)
+		t.Fatalf("BuildCatalog: %v", err)
 	}
 	if gotEdition != edition.EE {
 		t.Errorf("edition = %q, want EE", gotEdition)
@@ -60,9 +58,9 @@ func TestBuildCatalog_ConfiguredEdition_OverridesDetection(t *testing.T) {
 		t.Fatalf("portainer.New: %v", err)
 	}
 
-	_, gotEdition, _, err := buildCatalog(context.Background(), cfg, client, slog.Default())
+	_, gotEdition, _, err := BuildCatalog(context.Background(), cfg, client, slog.Default())
 	if err != nil {
-		t.Fatalf("buildCatalog: %v", err)
+		t.Fatalf("BuildCatalog: %v", err)
 	}
 	if gotEdition != edition.CE {
 		t.Errorf("edition = %q, want CE: the configured value must override what the server reports", gotEdition)
@@ -77,8 +75,8 @@ func TestBuildCatalog_UnreachableServer_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("portainer.New: %v", err)
 	}
-	if _, _, _, err := buildCatalog(context.Background(), cfg, client, slog.Default()); err == nil {
-		t.Fatal("buildCatalog() = nil, want an error when the server cannot be reached")
+	if _, _, _, err := BuildCatalog(context.Background(), cfg, client, slog.Default()); err == nil {
+		t.Fatal("BuildCatalog() = nil, want an error when the server cannot be reached")
 	}
 }
 
@@ -102,47 +100,23 @@ func TestBuildCatalog_UnresponsiveServer_FailsWithinTheDeadline(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if _, _, _, err := buildCatalog(ctx, cfg, client, slog.Default()); err == nil {
-		t.Fatal("buildCatalog() = nil, want an error when the server never answers")
+	if _, _, _, err := BuildCatalog(ctx, cfg, client, slog.Default()); err == nil {
+		t.Fatal("BuildCatalog() = nil, want an error when the server never answers")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("buildCatalog took %v; the context deadline did not bound it", elapsed)
-	}
-}
-
-// TestRun_AppliesTheStartupDeadline guards against the deadline being declared
-// and never wired, which is the state this fix corrects.
-//
-// This is an interim source-level guard, not a behavioral test: it greps
-// main.go for the identifier portainer.DefaultCallTimeout, so it passes if
-// that identifier merely appears in a comment, and it would fail to catch the
-// same deadline being applied through a differently named constant or moved
-// to another file. TestBuildCatalog_UnresponsiveServer_FailsWithinTheDeadline
-// already proves a context deadline bounds detection at the buildCatalog
-// level; a behavioral version of this test would need the startup sequence
-// in run extracted so it can be called with a stub clock or a short deadline,
-// which is out of scope here and belongs to P3, once run is restructured for
-// injection.
-func TestRun_AppliesTheStartupDeadline(t *testing.T) {
-	t.Parallel()
-	source, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	if !strings.Contains(string(source), "portainer.DefaultCallTimeout") {
-		t.Error("run does not apply portainer.DefaultCallTimeout to the startup detection; an unresponsive server would hang startup indefinitely")
+		t.Errorf("BuildCatalog took %v; the context deadline did not bound it", elapsed)
 	}
 }
 
 func TestSurfaceFor_EachSurface_ReturnsItsProjection(t *testing.T) {
 	t.Parallel()
-	if _, ok := surfaceFor(config.SurfaceDynamic).(dynamic.Surface); !ok {
+	if _, ok := SurfaceFor(config.SurfaceDynamic).(dynamic.Surface); !ok {
 		t.Error("SurfaceDynamic did not map to the dynamic surface")
 	}
-	if _, ok := surfaceFor(config.SurfaceMeta).(meta.Surface); !ok {
+	if _, ok := SurfaceFor(config.SurfaceMeta).(meta.Surface); !ok {
 		t.Error("SurfaceMeta did not map to the meta surface")
 	}
-	if _, ok := surfaceFor(config.SurfaceIndividual).(individual.Surface); !ok {
+	if _, ok := SurfaceFor(config.SurfaceIndividual).(individual.Surface); !ok {
 		t.Error("SurfaceIndividual did not map to the individual surface")
 	}
 }

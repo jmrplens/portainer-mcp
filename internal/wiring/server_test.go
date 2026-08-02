@@ -1,4 +1,4 @@
-package main
+package wiring
 
 import (
 	"context"
@@ -34,23 +34,23 @@ func connect(t *testing.T, server *mcp.Server) (*mcp.ClientSession, context.Cont
 }
 
 // testCatalog builds a small, real catalog from the project's declared
-// specs so status tests exercise the same shape newServer sees in
+// specs so status tests exercise the same shape NewServer sees in
 // production, rather than an empty stand-in.
 func testCatalog(t *testing.T, opts actioncatalog.Options) *actioncatalog.Catalog {
 	t.Helper()
-	catalog, err := actioncatalog.Build(allSpecs(), opts)
+	catalog, err := actioncatalog.Build(AllSpecs(), opts)
 	if err != nil {
 		t.Fatalf("actioncatalog.Build: %v", err)
 	}
 	return catalog
 }
 
-// mustNewServer wraps newServer for tests that do not expect it to fail.
+// mustNewServer wraps NewServer for tests that do not expect it to fail.
 func mustNewServer(t *testing.T, cfg *config.Config, catalog *actioncatalog.Catalog, resolvedEdition edition.Edition) *mcp.Server {
 	t.Helper()
-	srv, err := newServer(cfg, catalog, tools.Deps{}, resolvedEdition, "2.44.0")
+	srv, err := NewServer(cfg, catalog, tools.Deps{}, resolvedEdition, "2.44.0")
 	if err != nil {
-		t.Fatalf("newServer: %v", err)
+		t.Fatalf("NewServer: %v", err)
 	}
 	return srv
 }
@@ -96,10 +96,10 @@ func TestNewServer_ListTools_ExposesStatusAndSurfaceTools(t *testing.T) {
 }
 
 // TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface pins the
-// single-selection-point rule: newServer must project the catalog through
+// single-selection-point rule: NewServer must project the catalog through
 // whichever surface cfg.ToolSurface names, and it must do so by asking
-// surfaceFor rather than by wiring one surface package in directly. A
-// newServer that hardcoded a surface package here would still pass every
+// SurfaceFor rather than by wiring one surface package in directly. A
+// NewServer that hardcoded a surface package here would still pass every
 // other status test (they only exercise one surface each), so this test
 // exists specifically to fail when the mapping is bypassed.
 func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
@@ -119,7 +119,7 @@ func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
 		{
 			name:    "meta",
 			surface: config.SurfaceMeta,
-			// One tool per domain: the catalog built from allSpecs() carries
+			// One tool per domain: the catalog built from AllSpecs() carries
 			// exactly the system, tags and registries pilot domains.
 			want: []string{"portainer_mcp_status", "portainer_system", "portainer_tags", "portainer_registries"},
 		},

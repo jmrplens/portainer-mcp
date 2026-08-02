@@ -1,4 +1,4 @@
-package main
+package wiring
 
 import (
 	"context"
@@ -9,9 +9,40 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
 	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/version"
 )
+
+const projectRepository = "https://github.com/jmrplens/portainer-mcp"
+
+// NewServer builds the MCP server for the given configuration, registering
+// the status tool and the configured tool surface projected from catalog.
+//
+// The surface is always obtained through SurfaceFor rather than by
+// referencing a surface package directly here: that keeps the mapping from
+// config.ToolSurface to its projection in exactly one place. cmd/portainer-mcp
+// and the e2e harness both call this rather than assembling an *mcp.Server
+// themselves, so both see identical tool registration.
+func NewServer(cfg *config.Config, catalog *actioncatalog.Catalog, deps tools.Deps, resolvedEdition edition.Edition, serverVersion string) (*mcp.Server, error) {
+	server := mcp.NewServer(&mcp.Implementation{
+		Name:       "portainer-mcp",
+		Title:      "Portainer MCP Server",
+		Version:    version.Version,
+		WebsiteURL: projectRepository,
+	}, &mcp.ServerOptions{
+		Instructions: "portainer-mcp exposes the Portainer REST API as MCP tools for managing " +
+			"container environments, stacks, registries, users, teams and edge deployments.\n\n" +
+			"Call portainer_mcp_status to discover the active tool surface and whether read-only " +
+			"or safe mode is enabled before attempting any mutating operation.",
+	})
+	addStatusTool(server, cfg, catalog, resolvedEdition, serverVersion)
+
+	if err := SurfaceFor(cfg.ToolSurface).Register(server, catalog, deps); err != nil {
+		return nil, fmt.Errorf("register tool surface %q: %w", cfg.ToolSurface, err)
+	}
+	return server, nil
+}
 
 // statusInput is empty: the status tool takes no arguments.
 type statusInput struct{}
@@ -33,7 +64,7 @@ type statusOutput struct {
 
 // addStatusTool registers portainer_mcp_status on the server.
 //
-// resolvedEdition and serverVersion are the values buildCatalog resolved at
+// resolvedEdition and serverVersion are the values BuildCatalog resolved at
 // startup — the configured override when PORTAINER_EDITION is set, the
 // detected value otherwise — so the report reflects what the catalog was
 // actually built for, not what was merely requested.

@@ -1,4 +1,14 @@
-package main
+// Package wiring builds the action catalog and the MCP server it is
+// projected onto — the single construction path cmd/portainer-mcp uses to
+// build the real binary.
+//
+// It exists as its own package, rather than living in cmd/portainer-mcp,
+// because the e2e harness (test/e2e/suite) needs to build servers the exact
+// same way the binary does, and Go refuses to import a package main from
+// anywhere else. Without this package the harness would have to duplicate
+// the wiring, and a divergence between the two would be invisible to every
+// suite built on top of it.
+package wiring
 
 import (
 	"context"
@@ -19,9 +29,9 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// allSpecs collects every declared action. Later phases append their domains
+// AllSpecs collects every declared action. Later phases append their domains
 // here; this is the only place that changes when a domain is added.
-func allSpecs() []toolutil.ActionSpec {
+func AllSpecs() []toolutil.ActionSpec {
 	var specs []toolutil.ActionSpec
 	specs = append(specs, system.Specs()...)
 	specs = append(specs, tags.Specs()...)
@@ -29,14 +39,14 @@ func allSpecs() []toolutil.ActionSpec {
 	return specs
 }
 
-// buildCatalog resolves the target server's edition and version, then builds
+// BuildCatalog resolves the target server's edition and version, then builds
 // the catalog for it.
 //
 // The configured edition wins over detection when set: an operator who knows
 // their instance can skip a round-trip, and in HTTP mode detection per token is
 // wasteful. Detection still runs, because the server version is needed either
 // way and only the server can supply it.
-func buildCatalog(ctx context.Context, cfg *config.Config, client *portainer.Client, logger *slog.Logger) (*actioncatalog.Catalog, edition.Edition, string, error) {
+func BuildCatalog(ctx context.Context, cfg *config.Config, client *portainer.Client, logger *slog.Logger) (*actioncatalog.Catalog, edition.Edition, string, error) {
 	detected, version, err := client.DetectEdition(ctx)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("resolve server edition: %w", err)
@@ -51,7 +61,7 @@ func buildCatalog(ctx context.Context, cfg *config.Config, client *portainer.Cli
 		resolved = cfg.Edition
 	}
 
-	catalog, err := actioncatalog.Build(allSpecs(), actioncatalog.Options{
+	catalog, err := actioncatalog.Build(AllSpecs(), actioncatalog.Options{
 		Edition:       resolved,
 		ServerVersion: version,
 		ReadOnly:      cfg.ReadOnly,
@@ -62,8 +72,8 @@ func buildCatalog(ctx context.Context, cfg *config.Config, client *portainer.Cli
 	return catalog, resolved, version, nil
 }
 
-// surfaceFor maps the configured surface to its projection.
-func surfaceFor(s config.ToolSurface) tools.Surface {
+// SurfaceFor maps the configured surface to its projection.
+func SurfaceFor(s config.ToolSurface) tools.Surface {
 	switch s {
 	case config.SurfaceMeta:
 		return meta.Surface{}
