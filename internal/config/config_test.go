@@ -5,22 +5,29 @@ import (
 	"testing"
 )
 
+// envSuffixes lists every variable Load reads, without the prefix. It is
+// declared once because two things need it: clearing the prefixed names to
+// make a test hermetic, and setting the unprefixed names to prove they are
+// ignored. A phase that adds a variable adds it here.
+var envSuffixes = []string{
+	"URL",
+	"TOKEN",
+	"SKIP_TLS_VERIFY",
+	"TOOL_SURFACE",
+	"READ_ONLY",
+	"SAFE_MODE",
+	"LOG_LEVEL",
+	"EDITION",
+}
+
 // clearPortainerEnv makes a test hermetic by clearing every variable Load
-// reads, so the ambient shell — or a later phase's new variable — cannot
-// change the outcome. t.Setenv restores prior values automatically, and empty
+// reads, so the ambient shell, a .env file, or a later phase's new variable
+// cannot change the outcome — including by making Load fail for a reason the
+// test does not name. t.Setenv restores prior values automatically, and empty
 // is treated as unset by both envOr and envBool.
 func clearPortainerEnv(t *testing.T) {
 	t.Helper()
-	for _, suffix := range []string{
-		"URL",
-		"TOKEN",
-		"SKIP_TLS_VERIFY",
-		"TOOL_SURFACE",
-		"READ_ONLY",
-		"SAFE_MODE",
-		"LOG_LEVEL",
-		"EDITION",
-	} {
+	for _, suffix := range envSuffixes {
 		t.Setenv(envPrefix+suffix, "")
 	}
 }
@@ -44,6 +51,7 @@ func TestLoad_NoEnvironment_AppliesDefaults(t *testing.T) {
 }
 
 func TestLoad_EnvironmentSet_ReadsValues(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_URL", "https://portainer.example.com/")
 	t.Setenv("PORTAINER_TOKEN", "ptr_abc")
 	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "true")
@@ -73,6 +81,7 @@ func TestLoad_EnvironmentSet_ReadsValues(t *testing.T) {
 }
 
 func TestLoad_InvalidSurface_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_TOOL_SURFACE", "nonsense")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for an invalid TOOL_SURFACE")
@@ -80,6 +89,7 @@ func TestLoad_InvalidSurface_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_EditionOverride_IsRead(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_EDITION", "ee")
 	cfg, err := Load()
 	if err != nil {
@@ -91,6 +101,7 @@ func TestLoad_EditionOverride_IsRead(t *testing.T) {
 }
 
 func TestLoad_InvalidEdition_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_EDITION", "business")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for an invalid PORTAINER_EDITION")
@@ -130,6 +141,7 @@ func TestValidate_Complete_ReturnsNil(t *testing.T) {
 }
 
 func TestLoad_MalformedReadOnly_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_READ_ONLY", "yes")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_READ_ONLY")
@@ -137,6 +149,7 @@ func TestLoad_MalformedReadOnly_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_MalformedSafeMode_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_SAFE_MODE", "on")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SAFE_MODE")
@@ -144,6 +157,7 @@ func TestLoad_MalformedSafeMode_ReturnsError(t *testing.T) {
 }
 
 func TestLoad_MalformedSkipTLSVerify_ReturnsError(t *testing.T) {
+	clearPortainerEnv(t)
 	t.Setenv("PORTAINER_SKIP_TLS_VERIFY", "sure")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want an error for a non-boolean PORTAINER_SKIP_TLS_VERIFY")
@@ -176,11 +190,8 @@ func TestValidate_TrailingSlashURL_IsNormalised(t *testing.T) {
 // Reading through env() makes that structurally impossible; this pins it.
 func TestLoad_UnprefixedNamesAreIgnored(t *testing.T) {
 	clearPortainerEnv(t)
-	for _, key := range []string{
-		"URL", "TOKEN", "SKIP_TLS_VERIFY", "TOOL_SURFACE",
-		"READ_ONLY", "SAFE_MODE", "LOG_LEVEL", "EDITION",
-	} {
-		t.Setenv(key, "")
+	for _, suffix := range envSuffixes {
+		t.Setenv(suffix, "")
 	}
 
 	// Values that would be visibly wrong if any of them were honoured: a
