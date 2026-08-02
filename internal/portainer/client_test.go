@@ -328,3 +328,28 @@ func TestDo_InvalidPercentEncoding_ReturnsError(t *testing.T) {
 		t.Error("Do() error = nil, want an error for invalid percent-encoding")
 	}
 }
+
+// A malformed escape in the query is the case that discriminates: net/url
+// stores RawQuery without validating it, so http.NewRequestWithContext accepts
+// what url.PathUnescape rejects. Without the explicit unescape check this
+// reaches the network.
+func TestDo_InvalidPercentEncodingInQuery_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; validation should have refused it", r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/tags?x=%zz", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a malformed escape in the query")
+	}
+}

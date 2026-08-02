@@ -71,7 +71,7 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "portainer_find_action",
 		Title:       "Find a Portainer action",
-		Description: "Searches the available Portainer actions and returns those matching your query, with the parameters each one takes. Call this first, then pass the chosen action's name to portainer_execute_action. Results say whether an action mutates or destroys state.",
+		Description: "Searches the available Portainer actions and returns those matching your query. Call this first, then pass the chosen action's canonical name to portainer_execute_action. Results say whether an action mutates or destroys state. Parameter shapes are not yet published — pass the parameters the action's description implies and read the error if they are wrong.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in FindInput) (*mcp.CallToolResult, any, error) {
 		matches := search(catalog.Actions(), in.Query)

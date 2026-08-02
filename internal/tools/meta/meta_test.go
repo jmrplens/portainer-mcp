@@ -13,6 +13,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -196,7 +197,7 @@ func TestCallTool_ActionFromAnotherDomain_IsRefused(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
-	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	session, ctx := connect(t, server)
@@ -210,6 +211,10 @@ func TestCallTool_ActionFromAnotherDomain_IsRefused(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("the system meta-tool executed an action belonging to tags")
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "unknown action") {
+		t.Errorf("refusal = %q, want it to reject the action by name rather than fail for another reason", text)
 	}
 }
 
@@ -238,5 +243,43 @@ func toolsSpecForOtherDomain() toolutil.ActionSpec {
 		Name: "tags.list", Domain: "tags", OperationID: "TagList",
 		Title: "List tags", Description: "d", Edition: edition.CE,
 		Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+	}
+}
+
+// TestRegister_Description_MarksDangerousActions guards the only per-action
+// danger signal this surface has: its tool-level annotation is a whole-domain
+// aggregate, so a model learns that one specific action destroys state solely
+// from these markers in the description.
+func TestRegister_Description_MarksDangerousActions(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	for _, want := range []string{"`tags.delete`", "[destructive]"} {
+		if !strings.Contains(description, want) {
+			t.Errorf("description does not contain %q; a model has no other way to learn this action destroys state", want)
+		}
+	}
+	if !strings.Contains(description, "`tags.create`") || !strings.Contains(description, "[mutating]") {
+		t.Error("description does not mark the mutating action")
+	}
+	// The read-only action must carry no marker.
+	for _, line := range strings.Split(description, "\n") {
+		if strings.Contains(line, "`tags.list`") && (strings.Contains(line, "[mutating]") || strings.Contains(line, "[destructive]")) {
+			t.Errorf("read-only action marked dangerous: %q", line)
+		}
 	}
 }

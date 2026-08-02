@@ -218,3 +218,34 @@ func TestRegister_Annotations_MarkDestructiveActions(t *testing.T) {
 		t.Fatal("portainer_tags_delete is not registered")
 	}
 }
+
+// TestCallTool_SafeMode_InterceptsThroughTheIndividualSurface is the guard
+// against a surface that calls handlers directly. Every surface must route
+// through tools.Execute, which is where safe mode and the nil-client check
+// live; this surface was the only one where removing that routing failed no
+// test.
+func TestCallTool_SafeMode_InterceptsThroughTheIndividualSurface(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(system.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Client: &portainer.Client{}, SafeMode: true}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_system_update", Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("the safe-mode preview came back as a tool error: %+v", res.Content)
+	}
+	if !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "safe mode") {
+		t.Error("safe mode did not intercept a mutating action called through the individual surface")
+	}
+}
