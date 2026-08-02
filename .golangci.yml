@@ -34,24 +34,6 @@ linters:
         linters:
           - gosec
           - wrapcheck
-      # The Kubernetes leg's Helm chart deploys with a self-signed
-      # certificate; insecureClient's InsecureSkipVerify is the one other
-      # deliberate TLS bypass in the module besides the authorised nolint in
-      # internal/portainer/client.go, scoped to a client built just for this
-      # file and never http.DefaultTransport. Restricted to G402 so no other
-      # gosec finding in this file is silently exempted.
-      - path: test/e2e/harness/cmd/provision/main\.go
-        linters:
-          - gosec
-        text: "G402"
-      # k8sSetupTokenEnv names the environment variable k3d-up.sh sets, not a
-      # credential value; gosec's G101 pattern matches "token" in both the
-      # identifier and the string regardless. Restricted to G101 on this one
-      # constant's line.
-      - path: test/e2e/harness/cmd/provision/main\.go
-        linters:
-          - gosec
-        text: "G101"
 
 formatters:
   enable:

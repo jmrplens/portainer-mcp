@@ -9,6 +9,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo_root=$(cd ../.. && pwd)
+source ./scripts/lib.sh
 
 estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
 edge_env="${PORTAINER_E2E_EDGE_ENV:-$PWD/.edge.env}"
@@ -16,10 +17,7 @@ edge_env="${PORTAINER_E2E_EDGE_ENV:-$PWD/.edge.env}"
 # The Business Edition licence lives in a gitignored .env at the repository
 # root. Its absence is not an error: the Community Edition legs still run, and
 # the estate records that Business Edition is unavailable so suites skip.
-licence=""
-if [[ -f "$repo_root/.env" ]]; then
-    licence=$(grep -E '^PORTAINER_LICENSE=' "$repo_root/.env" | cut -d= -f2- | tr -d '"'"'"'' || true)
-fi
+licence=$(read_licence "$repo_root")
 if [[ -z "$licence" ]]; then
     echo "no PORTAINER_LICENSE in .env: provisioning Community Edition only" >&2
 fi

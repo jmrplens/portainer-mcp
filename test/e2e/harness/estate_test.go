@@ -143,6 +143,79 @@ func TestRemoveEdgeEnv_MissingFile_IsNotAnError(t *testing.T) {
 	}
 }
 
+func TestSyncEdgeEnv_EdgeProvisioned_WritesFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	e := Estate{
+		CE:             Server{Edition: "CE", BaseURL: "http://ce"},
+		EdgeEndpointID: 7,
+		EdgeAgentID:    "edge-uuid",
+		EdgeKey:        "the-key",
+	}
+	if err := SyncEdgeEnv(e, path); err != nil {
+		t.Fatalf("SyncEdgeEnv() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v, want SyncEdgeEnv to have written the file", err)
+	}
+	want := "EDGE_ID=edge-uuid\nEDGE_KEY=the-key\nEDGE_ENDPOINT_ID=7\n"
+	if string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+}
+
+func TestSyncEdgeEnv_NoEdge_RemovesStaleFile(t *testing.T) {
+	t.Parallel()
+	// A file left over from an earlier run that DID provision an edge
+	// environment. This run's estate carries none — CE only, no licence —
+	// and the file must not survive: up.sh's second compose pass would
+	// otherwise start an agent enrolled with a dead key against a server
+	// that, for all this run knows, no longer exists.
+	path := filepath.Join(t.TempDir(), ".edge.env")
+	if err := WriteEdgeEnv(path, "stale-uuid", "stale-key", 3); err != nil {
+		t.Fatalf("WriteEdgeEnv() error = %v", err)
+	}
+	e := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}}
+	if err := SyncEdgeEnv(e, path); err != nil {
+		t.Fatalf("SyncEdgeEnv() error = %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("stale edge environment file still exists after SyncEdgeEnv(): err = %v", err)
+	}
+}
+
+func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
+	t.Parallel()
+	existing := Estate{
+		CE:             Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}},
+		EE:             Server{Edition: "EE", BaseURL: "http://ee", Creds: Credentials{APIKey: "ee-key"}},
+		AgentID:        2,
+		EdgeEndpointID: 3,
+		EdgeAgentID:    "edge-uuid",
+		EdgeKey:        "edge-key",
+	}
+	k8s := Server{Edition: "Kubernetes", BaseURL: "https://k8s", Creds: Credentials{APIKey: "k8s-key"}}
+
+	got := existing.MergeKubernetes(k8s)
+
+	if got.CE != existing.CE {
+		t.Errorf("CE = %+v, want it unchanged at %+v", got.CE, existing.CE)
+	}
+	if got.EE != existing.EE {
+		t.Errorf("EE = %+v, want it unchanged at %+v", got.EE, existing.EE)
+	}
+	if got.AgentID != existing.AgentID {
+		t.Errorf("AgentID = %d, want %d", got.AgentID, existing.AgentID)
+	}
+	if got.EdgeEndpointID != existing.EdgeEndpointID || got.EdgeAgentID != existing.EdgeAgentID || got.EdgeKey != existing.EdgeKey {
+		t.Errorf("edge fields changed: got %+v, want the edge fields from %+v", got, existing)
+	}
+	if got.Kubernetes != k8s {
+		t.Errorf("Kubernetes = %+v, want %+v", got.Kubernetes, k8s)
+	}
+}
+
 func TestLoadEstate_RejectsPathTraversal(t *testing.T) {
 	t.Parallel()
 	_, err := LoadEstate("../../../../etc/passwd")

@@ -8,6 +8,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo_root=$(cd ../.. && pwd)
+source ./scripts/lib.sh
 cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 network="${E2E_NETWORK:-portainer-mcp-e2e_default}"
 namespace=portainer
@@ -19,10 +20,7 @@ done
 # Same gitignored .env the compose legs (up.sh) read. Its absence is not an
 # error: the Kubernetes leg still comes up, just as Community Edition, and the
 # estate records that so suites skip the Business Edition assertions.
-licence=""
-if [[ -f "$repo_root/.env" ]]; then
-    licence=$(grep -E '^PORTAINER_LICENSE=' "$repo_root/.env" | cut -d= -f2- | tr -d '"'"'"'' || true)
-fi
+licence=$(read_licence "$repo_root")
 if [[ -z "$licence" ]]; then
     echo "no PORTAINER_LICENSE in .env: Kubernetes leg will be Community Edition only" >&2
 fi
@@ -73,9 +71,20 @@ if [[ -z "$server_ip" ]]; then
     exit 1
 fi
 
+# The provisioner verifies this server's certificate rather than skipping
+# verification, so it needs the certificate itself first. See fetch_k8s_ca in
+# lib.sh for why an ephemeral debug container is what reads it out.
+ca_file="$(mktemp)"
+trap 'rm -f "$ca_file"' EXIT
+if ! fetch_k8s_ca "k3d-$cluster" "$namespace" > "$ca_file" || ! grep -q "BEGIN CERTIFICATE" "$ca_file"; then
+    echo "could not read the portainer server's certificate out of the running pod: cannot verify TLS for the Kubernetes leg" >&2
+    exit 1
+fi
+
 PORTAINER_E2E_ESTATE="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}" \
 PORTAINER_E2E_K8S_URL="https://${server_ip}:${nodeport}" \
 PORTAINER_E2E_K8S_SETUP_TOKEN="$token" \
+PORTAINER_E2E_K8S_CA_FILE="$ca_file" \
 PORTAINER_E2E_LICENCE="$licence" \
     go run ./harness/cmd/provision -kubernetes
 

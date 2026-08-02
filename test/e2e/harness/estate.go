@@ -68,6 +68,22 @@ func (e Estate) HasKubernetes() bool {
 	return e.Kubernetes.BaseURL != "" && e.Kubernetes.Creds.APIKey != ""
 }
 
+// MergeKubernetes returns e with its Kubernetes leg set to k8s, leaving every
+// field the compose legs already wrote untouched.
+//
+// The Kubernetes leg is provisioned by a separate process invocation
+// (k3d-up.sh, after up.sh has already written CE and, when licensed, EE) into
+// an estate file that already exists. Replacing e outright with a fresh
+// Estate carrying only the Kubernetes leg — the mistake this guards against —
+// would discard the compose legs the moment the Kubernetes leg is added,
+// leaving the file looking freshly provisioned while every earlier server it
+// named is gone.
+func (e Estate) MergeKubernetes(k8s Server) Estate {
+	merged := e
+	merged.Kubernetes = k8s
+	return merged
+}
+
 // SaveTo writes the estate atomically, so a reader can never observe a
 // half-written file, and with owner-only permissions, because it holds keys.
 func (e Estate) SaveTo(path string) error {
@@ -102,6 +118,22 @@ func RemoveEdgeEnv(path string) error {
 		return fmt.Errorf("remove edge environment file %s: %w", cleaned, err)
 	}
 	return nil
+}
+
+// SyncEdgeEnv writes or removes the derived edge environment file at path
+// depending on whether e carries an edge environment: written when both
+// EdgeAgentID and EdgeKey are present, removed otherwise.
+//
+// This is the stale-file guard by itself, factored out so it can be tested
+// without a running estate: a run that provisions no edge environment this
+// time must not leave standing a file written by an earlier run, since
+// up.sh's second compose pass starts an agent from whatever this file
+// contains, whether or not it still describes anything real.
+func SyncEdgeEnv(e Estate, path string) error {
+	if e.EdgeAgentID != "" && e.EdgeKey != "" {
+		return WriteEdgeEnv(path, e.EdgeAgentID, e.EdgeKey, e.EdgeEndpointID)
+	}
+	return RemoveEdgeEnv(path)
 }
 
 // writeOwnerOnlyAtomic writes data to path atomically — a reader can never
@@ -162,6 +194,27 @@ func LoadEstate(path string) (Estate, error) {
 		return Estate{}, fmt.Errorf("estate %s has no Community Edition server: was provisioning interrupted?", cleaned)
 	}
 	return e, nil
+}
+
+// ReadTrustedFile reads path the same way LoadEstate does: cleaned and
+// validated before it ever reaches os.ReadFile, so gosec's G304 has nothing
+// to flag, rather than being told to look away from a caller-controlled path.
+//
+// "Trusted" names what this is not for: path is expected to come from this
+// harness's own scripts (a temp file k3d-up.sh wrote, for instance), not from
+// anything an adversary controls. It is a general-purpose read, unlike
+// LoadEstate, which additionally knows the shape of an Estate and refuses one
+// missing a Community Edition server.
+func ReadTrustedFile(path string) ([]byte, error) {
+	cleaned := filepath.Clean(path)
+	if err := rejectEscapingPath(path, cleaned); err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", cleaned, err)
+	}
+	return raw, nil
 }
 
 // rejectEscapingPath rejects the one shape that would let a caller escape an
