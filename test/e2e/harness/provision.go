@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -63,6 +64,13 @@ func Provision(ctx context.Context, c *http.Client, baseURL, setupToken string) 
 	var auth struct {
 		JWT string `json:"jwt"`
 	}
+	// The vendored spec documents lowercase "username"/"password" and lists
+	// apiKey as the required credential; live Portainer 2.44.0 disagrees with
+	// its own spec and accepts the capitalised field names reused from init
+	// above, because Go's JSON decoding on the server side is case-insensitive
+	// on struct field matches. Verified against a live instance: this call
+	// returns a 296-character JWT. Reusing initBody here is deliberate, not
+	// an oversight of the spec's casing.
 	if err := postJSON(ctx, c, baseURL+"/api/auth", initBody, nil, &auth); err != nil {
 		return Credentials{}, fmt.Errorf("authenticate: %w", err)
 	}
@@ -78,6 +86,10 @@ func Provision(ctx context.Context, c *http.Client, baseURL, setupToken string) 
 	}
 	tokenBody := map[string]string{"description": "e2e", "password": creds.Password}
 	bearer := map[string]string{"Authorization": "Bearer " + creds.JWT}
+	// User ID 1 is not assumed, it is guaranteed: this is the first user
+	// created in an empty database by admin/init immediately above, and
+	// Portainer assigns ids sequentially from 1. Verified against a live
+	// instance: this call succeeds immediately after init.
 	if err := postJSON(ctx, c, baseURL+"/api/users/1/tokens", tokenBody, bearer, &token); err != nil {
 		return Credentials{}, fmt.Errorf("create api key: %w", err)
 	}
@@ -144,15 +156,32 @@ func CreateEndpoint(ctx context.Context, c *http.Client, baseURL, apiKey string,
 
 // ApplyLicence installs a Business Edition licence.
 //
-// The key never appears in the returned error. It comes from a gitignored .env
-// and a CI log is the one place it must not reach.
+// Neither our own error text nor anything quoted back from the server may
+// carry the key. It comes from a gitignored .env, it is registered to a
+// personal email, and a CI log is the one place it must never reach — so the
+// server's response is scrubbed before it is wrapped, on the assumption that a
+// validation message may echo what it was sent.
 func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) error {
 	body := map[string]string{"key": key}
 	bearer := map[string]string{"Authorization": "Bearer " + jwt}
 	if err := postJSON(ctx, c, baseURL+"/api/licenses/add", body, bearer, nil); err != nil {
-		return fmt.Errorf("apply licence: %w", err)
+		return fmt.Errorf("apply licence: %w", redactSecret(err, key))
 	}
 	return nil
+}
+
+// redactedMarker replaces every occurrence of a secret in an error's text.
+const redactedMarker = "[REDACTED]"
+
+// redactSecret returns err with every occurrence of secret in its rendered
+// text replaced by a fixed marker. It is a no-op when secret is empty, so an
+// unlicensed run does not start replacing every empty string in every error
+// it touches.
+func redactSecret(err error, secret string) error {
+	if err == nil || secret == "" {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), secret, redactedMarker))
 }
 
 // LicenceNodes reports the node allowance of the installed licence.

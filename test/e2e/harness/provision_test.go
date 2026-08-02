@@ -3,6 +3,9 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -197,6 +200,43 @@ func TestApplyLicence_DoesNotLeakTheKeyIntoTheError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "SUPERSECRET") {
 		t.Fatalf("the licence key leaked into the error: %v", err)
+	}
+}
+
+func TestApplyLicence_ServerEchoesTheKey_ItIsRedacted(t *testing.T) {
+	t.Parallel()
+	const secret = "3-SUPERSECRETLICENCEKEY=="
+	// A server that quotes back what it was sent. We have not observed
+	// Portainer doing this, and that is the point: the guard must not depend
+	// on having observed it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"message":"invalid licence","details":%q}`, string(body))
+	}))
+	t.Cleanup(server.Close)
+
+	err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	if err == nil {
+		t.Fatal("ApplyLicence() error = nil, want an error on a 400")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "SUPERSECRET") {
+		t.Fatalf("the licence key reached the error through the server's own response: %v", err)
+	}
+	// The error must still be useful — redaction that erases the diagnosis
+	// trades one problem for another.
+	if !strings.Contains(err.Error(), "invalid licence") {
+		t.Errorf("error = %q, want it to keep the server's diagnosis", err)
+	}
+}
+
+func TestRedactSecret_EmptySecret_LeavesTheErrorAlone(t *testing.T) {
+	t.Parallel()
+	// An unlicensed run passes an empty key. Replacing the empty string would
+	// corrupt every message it touches.
+	original := errors.New("something failed")
+	if got := redactSecret(original, "").Error(); got != "something failed" {
+		t.Errorf("redactSecret with an empty secret = %q, want the error unchanged", got)
 	}
 }
 
