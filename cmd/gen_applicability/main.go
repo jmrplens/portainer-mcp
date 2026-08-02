@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type operation struct {
@@ -46,6 +47,9 @@ func run(args []string) error {
 
 	// edition -> version -> set of operations
 	presence := map[string]map[string]map[operation]bool{}
+	// edition -> version -> operation -> operationId, for the versions in
+	// which that operation carried a non-empty operationId.
+	idsByVersion := map[string]map[string]map[operation]string{}
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".json") || strings.Contains(name, "provenance") {
@@ -55,14 +59,16 @@ func run(args []string) error {
 		if !found {
 			continue
 		}
-		ops, err := operationsIn(*historyDir, name)
+		ops, ids, err := operationsIn(*historyDir, name)
 		if err != nil {
 			return err
 		}
 		if presence[edition] == nil {
 			presence[edition] = map[string]map[operation]bool{}
+			idsByVersion[edition] = map[string]map[operation]string{}
 		}
 		presence[edition][version] = ops
+		idsByVersion[edition][version] = ids
 	}
 	if len(presence) == 0 {
 		return fmt.Errorf("no specs found in %s", *historyDir)
@@ -75,6 +81,10 @@ func run(args []string) error {
 	buf.WriteString("var spans = map[edition.Edition]map[Operation][]Span{\n")
 
 	var gaps []string
+	// edition -> operationId -> operation, collected alongside spans so the
+	// operationIDs map below can be emitted from data gathered in this same
+	// pass over presence.
+	opIDsByEdition := map[string]map[string]operation{}
 	for _, ed := range sortedKeys(presence) {
 		versions := sortedKeys(presence[ed])
 		sort.Slice(versions, func(i, j int) bool { return less(versions[i], versions[j]) })
@@ -85,6 +95,24 @@ func run(args []string) error {
 				all[op] = true
 			}
 		}
+
+		// Resolve each operation's operationId from the newest spec version in
+		// which it carried a non-empty one: versions are visited oldest to
+		// newest, and a later non-empty id always overwrites an earlier one, so
+		// a renamed operationId resolves to its current name rather than a
+		// stale one. The key is exported-Go-name form (first rune upper-cased)
+		// rather than the raw spec string, because that is what oapi-codegen
+		// names the generated method — the whole point of this index is to let
+		// a caller resolve straight from that method name.
+		byID := map[string]operation{}
+		for _, v := range versions {
+			for op, id := range idsByVersion[ed][v] {
+				if id != "" {
+					byID[exportedName(id)] = op
+				}
+			}
+		}
+		opIDsByEdition[ed] = byID
 
 		constant := "edition.CE"
 		if strings.EqualFold(ed, "ee") {
@@ -140,6 +168,32 @@ func run(args []string) error {
 	}
 	buf.WriteString("}\n")
 
+	buf.WriteString("\n// operationIDs maps an operation's OpenAPI operationId to the operation it\n")
+	buf.WriteString("// identifies. oapi-codegen derives every generated Go method name from the\n")
+	buf.WriteString("// operationId, so this is the only machine-checkable link between a generated\n")
+	buf.WriteString("// method and its version applicability.\n")
+	buf.WriteString("var operationIDs = map[edition.Edition]map[string]Operation{\n")
+	for _, ed := range sortedKeys(presence) {
+		constant := "edition.CE"
+		if strings.EqualFold(ed, "ee") {
+			constant = "edition.EE"
+		}
+		fmt.Fprintf(&buf, "\t%s: {\n", constant)
+
+		ids := make([]string, 0, len(opIDsByEdition[ed]))
+		for id := range opIDsByEdition[ed] {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+
+		for _, id := range ids {
+			op := opIDsByEdition[ed][id]
+			fmt.Fprintf(&buf, "\t\t%q: {Method: %q, Path: %q},\n", id, op.Method, op.Path)
+		}
+		buf.WriteString("\t},\n")
+	}
+	buf.WriteString("}\n")
+
 	for _, gap := range gaps {
 		fmt.Fprintf(os.Stderr, "  gap: %s\n", gap)
 	}
@@ -152,34 +206,46 @@ func run(args []string) error {
 }
 
 // operationsIn reads one spec file and returns the set of operations it
-// documents. dir is the directory the caller listed name from: every entry is
-// re-confined to dir before being opened, so a symlink or rename racing the
+// documents, plus the operationId each operation carries in this spec (a
+// method+path with no operationId, or an empty one, is simply absent from the
+// second map). dir is the directory the caller listed name from: every entry
+// is re-confined to dir before being opened, so a symlink or rename racing the
 // os.ReadDir call cannot walk the read outside of it.
-func operationsIn(dir, name string) (map[operation]bool, error) {
+func operationsIn(dir, name string) (map[operation]bool, map[operation]string, error) {
 	path := filepath.Clean(filepath.Join(dir, name))
 	if rel, err := filepath.Rel(dir, path); err != nil || strings.HasPrefix(rel, "..") {
-		return nil, fmt.Errorf("refuse to read %s: escapes %s", path, dir)
+		return nil, nil, fmt.Errorf("refuse to read %s: escapes %s", path, dir)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var doc struct {
 		Paths map[string]map[string]json.RawMessage `json:"paths"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", path, err)
+		return nil, nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 	methods := map[string]bool{"get": true, "post": true, "put": true, "delete": true, "patch": true, "head": true, "options": true}
 	ops := map[operation]bool{}
+	ids := map[operation]string{}
 	for p, item := range doc.Paths {
-		for method := range item {
-			if methods[strings.ToLower(method)] {
-				ops[operation{Method: strings.ToUpper(method), Path: p}] = true
+		for method, rawOp := range item {
+			if !methods[strings.ToLower(method)] {
+				continue
+			}
+			op := operation{Method: strings.ToUpper(method), Path: p}
+			ops[op] = true
+
+			var meta struct {
+				OperationID string `json:"operationId"`
+			}
+			if err := json.Unmarshal(rawOp, &meta); err == nil && meta.OperationID != "" {
+				ids[op] = meta.OperationID
 			}
 		}
 	}
-	return ops, nil
+	return ops, ids, nil
 }
 
 // spanLiteral renders one contiguous run as a Span literal. A run that
@@ -208,6 +274,21 @@ func less(a, b string) bool {
 		}
 	}
 	return false
+}
+
+// exportedName converts a raw OpenAPI operationId (e.g. "systemStatus") to the
+// exported Go identifier oapi-codegen derives from it ("SystemStatus"), by
+// upper-casing the first rune. Every operationId in the vendored specs is a
+// plain ASCII camelCase or PascalCase word with no separators, which is the
+// only input oapi-codegen's own naming pass accepts, so that single-rune
+// change is the whole transformation.
+func exportedName(id string) string {
+	if id == "" {
+		return id
+	}
+	r := []rune(id)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 func sortedKeys[V any](m map[string]V) []string {

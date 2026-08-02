@@ -24,7 +24,7 @@ func TestOperationsIn_ValidSpec_ExtractsMethodsAndPaths(t *testing.T) {
 		}
 	}`)
 
-	ops, err := operationsIn(dir, "spec.json")
+	ops, _, err := operationsIn(dir, "spec.json")
 	if err != nil {
 		t.Fatalf("operationsIn() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestOperationsIn_ValidSpec_ExtractsMethodsAndPaths(t *testing.T) {
 
 func TestOperationsIn_MissingFile_ReturnsError(t *testing.T) {
 	t.Parallel()
-	if _, err := operationsIn(t.TempDir(), "no-such-file.json"); err == nil {
+	if _, _, err := operationsIn(t.TempDir(), "no-such-file.json"); err == nil {
 		t.Error("operationsIn() error = nil, want an error for a missing file")
 	}
 }
@@ -54,8 +54,34 @@ func TestOperationsIn_InvalidJSON_ReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeSpec(t, dir, "broken.json", `not json`)
-	if _, err := operationsIn(dir, "broken.json"); err == nil {
+	if _, _, err := operationsIn(dir, "broken.json"); err == nil {
 		t.Error("operationsIn() error = nil, want an error for unparseable JSON")
+	}
+}
+
+// TestOperationsIn_ValidSpec_ExtractsOperationIDs pins the addition this
+// function exists for: without a captured operationId, cmd/gen_applicability
+// cannot link a generated Go client method back to its version applicability.
+func TestOperationsIn_ValidSpec_ExtractsOperationIDs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeSpec(t, dir, "spec.json", `{
+		"paths": {
+			"/system/status": {"get": {"operationId": "SystemStatus"}},
+			"/stacks": {"post": {}}
+		}
+	}`)
+
+	_, ids, err := operationsIn(dir, "spec.json")
+	if err != nil {
+		t.Fatalf("operationsIn() error = %v", err)
+	}
+	got, ok := ids[operation{Method: "GET", Path: "/system/status"}]
+	if !ok || got != "SystemStatus" {
+		t.Errorf("ids[GET /system/status] = %q, %v, want %q, true", got, ok, "SystemStatus")
+	}
+	if _, ok := ids[operation{Method: "POST", Path: "/stacks"}]; ok {
+		t.Error("an operation with no operationId must be absent from the ids map")
 	}
 }
 
@@ -72,7 +98,7 @@ func TestOperationsIn_NameEscapesDir_ReturnsError(t *testing.T) {
 	}
 	writeSpec(t, parent, "outside.json", `{"paths": {"/secret": {"get": {}}}}`)
 
-	if _, err := operationsIn(dir, filepath.Join("..", "outside.json")); err == nil {
+	if _, _, err := operationsIn(dir, filepath.Join("..", "outside.json")); err == nil {
 		t.Error("operationsIn() error = nil, want an error for a name that escapes dir")
 	}
 }
@@ -88,7 +114,7 @@ func TestOperationsIn_NonMethodKeys_AreIgnored(t *testing.T) {
 		}
 	}`)
 
-	ops, err := operationsIn(dir, "spec.json")
+	ops, _, err := operationsIn(dir, "spec.json")
 	if err != nil {
 		t.Fatalf("operationsIn() error = %v", err)
 	}

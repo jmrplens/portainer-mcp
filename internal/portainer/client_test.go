@@ -138,6 +138,22 @@ func TestNew_ContextDeadline_IsHonoured(t *testing.T) {
 	}
 }
 
+// TestNew_HTTPClient_HasNoTimeoutCeiling pins design acceptance criterion 6
+// directly rather than by inference. http.Client.Timeout is an absolute ceiling
+// that a per-call context cannot raise, so any non-zero value here silently
+// caps a stack redeploy that pulls multi-gigabyte images — the exact defect
+// that made the previous Portainer MCP server unusable for that job.
+func TestNew_HTTPClient_HasNoTimeoutCeiling(t *testing.T) {
+	t.Parallel()
+	client, err := New(&config.Config{URL: "https://portainer.example.com", Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if client.httpClient.Timeout != 0 {
+		t.Errorf("httpClient.Timeout = %v, want 0: a client-level ceiling cannot be raised by a caller's context", client.httpClient.Timeout)
+	}
+}
+
 func TestNew_TrailingSlashURL_DoesNotProduceADoubleSlash(t *testing.T) {
 	t.Parallel()
 	var gotPath string

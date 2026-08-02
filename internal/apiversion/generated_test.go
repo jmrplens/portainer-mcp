@@ -1,6 +1,7 @@
 package apiversion
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -38,11 +39,56 @@ func TestGeneratedTable_GitcredentialsGap_IsEncoded(t *testing.T) {
 }
 
 // TestGeneratedTable_IsPopulated guards against a generator that silently
-// emits an empty table.
+// emits an empty table. The floors are deliberately just below the current
+// counts (CE 273, EE 471 as of this writing) so a genuine loss — a generator
+// regression dropping a quarter of the table — trips this test, while a
+// handful of upstream removals between spec releases does not.
 func TestGeneratedTable_IsPopulated(t *testing.T) {
+	floors := map[edition.Edition]int{edition.CE: 260, edition.EE: 450}
 	for _, e := range []edition.Edition{edition.CE, edition.EE} {
-		if got := len(spans[e]); got < 200 {
-			t.Errorf("%s table has %d operations, want at least 200", e, got)
+		if got := len(spans[e]); got < floors[e] {
+			t.Errorf("%s table has %d operations, want at least %d", e, got, floors[e])
+		}
+	}
+}
+
+// TestByOperationID_KnownID_ResolvesToItsOperation uses a mapping that is not
+// guessable from the path, which is the entire reason this index exists.
+func TestByOperationID_KnownID_ResolvesToItsOperation(t *testing.T) {
+	op, ok := ByOperationID(edition.EE, "SystemStatus")
+	if !ok {
+		t.Fatal("SystemStatus missing from the EE operationId index")
+	}
+	if op.Method != http.MethodGet || op.Path != "/system/status" {
+		t.Errorf("resolved to %+v, want GET /system/status", op)
+	}
+}
+
+func TestByOperationID_UnknownID_IsNotFound(t *testing.T) {
+	if _, ok := ByOperationID(edition.EE, "NoSuchOperation"); ok {
+		t.Error("an invented operationId resolved to an operation")
+	}
+}
+
+// TestOperationIDIndex_CoversNearlyEveryOperation guards against a generator
+// that silently emits an empty or partial index.
+//
+// The newest EE spec (2.44.0) alone has exactly one operation with no
+// operationId (GET /endpoint_groups/{id}). But operationIDs is built across
+// every historical spec — a withdrawn operation resolves through the newest
+// version in which it appeared, which may predate operationId annotations
+// existing at all — and a handful of route families (the /webhooks CRUD
+// endpoints, the /websocket/* upgrade endpoints) have never carried an
+// operationId in any published CE or EE spec. As measured against the
+// vendored history: CE is missing 16 of 273, EE 4 of 471. The tolerance below
+// is set comfortably above both so a genuine regression (an empty or
+// near-empty index) still trips it.
+func TestOperationIDIndex_CoversNearlyEveryOperation(t *testing.T) {
+	const tolerance = 25
+	for _, e := range []edition.Edition{edition.CE, edition.EE} {
+		ops, ids := len(spans[e]), len(operationIDs[e])
+		if ids < ops-tolerance {
+			t.Errorf("%s: %d operationIds for %d operations, want nearly all", e, ids, ops)
 		}
 	}
 }

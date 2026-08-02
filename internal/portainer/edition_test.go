@@ -2,6 +2,7 @@ package portainer
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -82,5 +83,35 @@ func TestDetectEdition_ServerError_ReturnsError(t *testing.T) {
 	client, _ := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
 	if _, _, err := client.DetectEdition(context.Background()); err == nil {
 		t.Error("DetectEdition() error = nil, want an error for a 401")
+	}
+}
+
+// TestDetectEdition_UnauthorizedWithJSONBody_IsClassified pins the error path,
+// not merely that an error occurs. Portainer answers a rejected token with a
+// JSON body; without ClassifyResponse that body decodes cleanly into an empty
+// systemVersion and the function reports a healthy CE server with no error.
+func TestDetectEdition_UnauthorizedWithJSONBody_IsClassified(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Unauthorized","details":"invalid API key"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "bad", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	gotEdition, _, err := client.DetectEdition(context.Background())
+	if err == nil {
+		t.Fatalf("DetectEdition() error = nil with edition %q, want an error for a rejected token", gotEdition)
+	}
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false, want true; err = %v", err)
+	}
+	if gotEdition != "" {
+		t.Errorf("edition = %q, want empty on an error path", gotEdition)
 	}
 }

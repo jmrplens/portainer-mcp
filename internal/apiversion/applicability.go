@@ -65,6 +65,22 @@ func Available(e edition.Edition, op Operation, serverVersion string) bool {
 	return false
 }
 
+// ByOperationID resolves an OpenAPI operationId to its operation.
+//
+// oapi-codegen names every generated Go method after the operationId, and the
+// mapping to a method and path is not inferable by eye — GET /cloud/gitcredentials
+// is SharedGitGetAll. Callers that hold a generated method should resolve through
+// here rather than hand-writing a path template, because Available reports an
+// unknown operation as unavailable, so a typo removes a tool silently.
+func ByOperationID(e edition.Edition, operationID string) (Operation, bool) {
+	byID, ok := operationIDs[e]
+	if !ok {
+		return Operation{}, false
+	}
+	op, ok := byID[operationID]
+	return op, ok
+}
+
 // withinSpan reports whether serverVersion falls inside span, treating an
 // unreadable version as inside.
 func withinSpan(span Span, serverVersion string) bool {
