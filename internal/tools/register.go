@@ -1,0 +1,105 @@
+// Package tools holds the single execution path every tool surface routes
+// through, and the surface interface they implement.
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
+)
+
+// Deps are what an action needs at execution time.
+type Deps struct {
+	Client   *portainer.Client
+	Logger   *slog.Logger
+	SafeMode bool
+}
+
+// Surface projects a catalog onto an MCP server.
+type Surface interface {
+	Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps Deps) error
+}
+
+// Execute runs one action, applying safe mode.
+//
+// Every surface routes through here rather than calling a handler directly.
+// That is deliberate: read-only mode is enforced by the catalog, which never
+// contains a mutating action when it is set, and safe mode is enforced here.
+// A surface that called handlers itself would bypass both, which is exactly
+// how a server ends up advertising protections it does not apply.
+func Execute(ctx context.Context, spec toolutil.ActionSpec, deps Deps, input json.RawMessage) (*mcp.CallToolResult, error) {
+	if deps.SafeMode && spec.Mutating {
+		return safeModePreview(spec, input), nil
+	}
+
+	if deps.Logger != nil {
+		deps.Logger.Debug("executing action", "action", spec.Name, "mutating", spec.Mutating)
+	}
+
+	out, err := spec.Handler(ctx, deps.Client, input)
+	if err != nil {
+		if deps.Logger != nil {
+			deps.Logger.Error("action failed", "action", spec.Name, "error", err)
+		}
+		return errorResult(fmt.Sprintf("%s: %v", spec.Name, err)), nil
+	}
+
+	encoded, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return errorResult(fmt.Sprintf("%s: encode result: %v", spec.Name, err)), nil
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}, nil
+}
+
+// safeModePreview describes what the action would have done, without doing it.
+func safeModePreview(spec toolutil.ActionSpec, input json.RawMessage) *mcp.CallToolResult {
+	kind := "mutating"
+	if spec.Destructive {
+		kind = "destructive"
+	}
+	preview := map[string]any{
+		"safe_mode": true,
+		"action":    spec.Name,
+		"kind":      kind,
+		"would_call": map[string]any{
+			"operation_id": spec.OperationID,
+			"input":        input,
+		},
+		"note": "Safe mode is enabled, so this " + kind + " action was not executed. " +
+			"Restart the server without --safe-mode to apply it.",
+	}
+	encoded, err := json.MarshalIndent(preview, "", "  ")
+	if err != nil {
+		return errorResult(fmt.Sprintf("%s: encode safe-mode preview: %v", spec.Name, err))
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}
+}
+
+func errorResult(message string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: message}},
+	}
+}
+
+// AnnotationsFor derives the MCP annotations a client uses to decide whether to
+// confirm an action with the user.
+func AnnotationsFor(spec toolutil.ActionSpec) *mcp.ToolAnnotations {
+	a := &mcp.ToolAnnotations{
+		Title:          spec.Title,
+		ReadOnlyHint:   !spec.Mutating,
+		IdempotentHint: spec.Idempotent,
+	}
+	if spec.Mutating {
+		destructive := spec.Destructive
+		a.DestructiveHint = &destructive
+	}
+	return a
+}
