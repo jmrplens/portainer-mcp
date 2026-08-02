@@ -163,3 +163,53 @@ func TestByDomain_GroupsAndSorts(t *testing.T) {
 		t.Errorf("ByDomain(tags) = %v, want create then list, sorted", tags)
 	}
 }
+
+// One catalog is shared by every tool surface. If Actions, Domains or
+// ByDomain handed out their backing slice, one surface sorting, filtering in
+// place, or editing a returned spec would silently corrupt what every other
+// surface sees.
+func TestAccessors_ReturnCopies_SoCallersCannotCorruptTheCatalog(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{
+		spec("tags.list", "tags", "TagList", edition.CE),
+		spec("tags.create", "tags", "TagCreate", edition.CE),
+	}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	got := c.Actions()
+	got[0].Name = "MUTATED"
+	if c.Actions()[0].Name == "MUTATED" {
+		t.Error("mutating the slice returned by Actions corrupted the catalog")
+	}
+
+	domains := c.Domains()
+	domains[0] = "MUTATED"
+	if c.Domains()[0] == "MUTATED" {
+		t.Error("mutating the slice returned by Domains corrupted the catalog")
+	}
+
+	byDomain := c.ByDomain("tags")
+	byDomain[0].Name = "MUTATED"
+	if c.ByDomain("tags")[0].Name == "MUTATED" {
+		t.Error("mutating the slice returned by ByDomain corrupted the catalog")
+	}
+}
+
+func TestBuild_UnknownEdition_ReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE)},
+		Options{Edition: edition.Edition("bogus"), ServerVersion: "2.44.0"})
+	if err == nil {
+		t.Fatal("Build() = nil, want an error: an unknown edition would silently empty the catalog")
+	}
+}
+
+func TestBuild_EmptyEdition_ReturnsError(t *testing.T) {
+	t.Parallel()
+	if _, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE)},
+		Options{ServerVersion: "2.44.0"}); err == nil {
+		t.Fatal("Build() = nil, want an error for an empty edition")
+	}
+}

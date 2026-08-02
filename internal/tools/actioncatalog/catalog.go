@@ -7,7 +7,6 @@
 package actioncatalog
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 
@@ -42,8 +41,14 @@ type Catalog struct {
 // contrast, is expected: an action absent from this edition or version is
 // simply not offered.
 func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
-	if opts.Edition == "" {
-		return nil, errors.New("actioncatalog: an edition is required")
+	switch opts.Edition {
+	case edition.CE, edition.EE:
+	default:
+		// Not merely "non-empty": an unknown edition makes every ByOperationID
+		// lookup miss, which the filter branch would quietly read as "this
+		// action belongs to the other edition", yielding a silently empty
+		// catalog. Validation is fatal here for the same reason it is for specs.
+		return nil, fmt.Errorf("actioncatalog: edition %q is not CE or EE", opts.Edition)
 	}
 
 	c := &Catalog{
@@ -111,13 +116,22 @@ func otherEdition(e edition.Edition) edition.Edition {
 }
 
 // Actions returns every action in the catalog, sorted by name.
-func (c *Catalog) Actions() []toolutil.ActionSpec { return c.ordered }
+//
+// The slice is a copy: one catalog is shared by every surface, so handing out
+// the internal one would let any consumer corrupt what the others see.
+func (c *Catalog) Actions() []toolutil.ActionSpec {
+	return append([]toolutil.ActionSpec(nil), c.ordered...)
+}
 
 // Domains returns the domain names present, sorted.
-func (c *Catalog) Domains() []string { return c.domains }
+func (c *Catalog) Domains() []string {
+	return append([]string(nil), c.domains...)
+}
 
-// ByDomain returns one domain's actions, sorted by name.
-func (c *Catalog) ByDomain(domain string) []toolutil.ActionSpec { return c.byDomain[domain] }
+// ByDomain returns one domain's actions, sorted by name. The slice is a copy.
+func (c *Catalog) ByDomain(domain string) []toolutil.ActionSpec {
+	return append([]toolutil.ActionSpec(nil), c.byDomain[domain]...)
+}
 
 // Lookup finds an action by its canonical name.
 func (c *Catalog) Lookup(name string) (toolutil.ActionSpec, bool) {
