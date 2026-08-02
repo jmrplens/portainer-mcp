@@ -18,7 +18,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/logging"
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/tools"
+	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/version"
 )
 
@@ -99,14 +103,49 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := newServer(cfg).Run(ctx, &mcp.StdioTransport{}); err != nil {
+	client, err := portainer.New(cfg)
+	if err != nil {
+		return fmt.Errorf("build portainer client: %w", err)
+	}
+
+	// Bound the startup round trip. The client sets no http.Client.Timeout on
+	// purpose — that would cap long operations such as a stack redeploy that
+	// pulls multi-gigabyte images — so the deadline belongs on the context, and
+	// DefaultCallTimeout exists for exactly this. Without it an MCP host that
+	// starts this server before the network is up gets a silent, hung process.
+	detectCtx, cancelDetect := context.WithTimeout(ctx, portainer.DefaultCallTimeout)
+	defer cancelDetect()
+
+	catalog, resolvedEdition, serverVersion, err := buildCatalog(detectCtx, cfg, client, logger)
+	if err != nil {
+		return err
+	}
+	logger.Info("action catalog built",
+		"edition", resolvedEdition,
+		"server_version", serverVersion,
+		"action_count", len(catalog.Actions()),
+	)
+
+	deps := tools.Deps{Client: client, Logger: logger, SafeMode: cfg.SafeMode}
+
+	srv, err := newServer(cfg, catalog, deps, resolvedEdition, serverVersion)
+	if err != nil {
+		return fmt.Errorf("build server: %w", err)
+	}
+
+	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		return fmt.Errorf("serve stdio: %w", err)
 	}
 	return nil
 }
 
-// newServer builds the MCP server for the given configuration.
-func newServer(cfg *config.Config) *mcp.Server {
+// newServer builds the MCP server for the given configuration, registering
+// the status tool and the configured tool surface projected from catalog.
+//
+// The surface is always obtained through surfaceFor rather than by
+// referencing a surface package directly here: that keeps the mapping from
+// config.ToolSurface to its projection in exactly one place.
+func newServer(cfg *config.Config, catalog *actioncatalog.Catalog, deps tools.Deps, resolvedEdition edition.Edition, serverVersion string) (*mcp.Server, error) {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:       "portainer-mcp",
 		Title:      "Portainer MCP Server",
@@ -118,6 +157,10 @@ func newServer(cfg *config.Config) *mcp.Server {
 			"Call portainer_mcp_status to discover the active tool surface and whether read-only " +
 			"or safe mode is enabled before attempting any mutating operation.",
 	})
-	addStatusTool(server, cfg)
-	return server
+	addStatusTool(server, cfg, catalog, resolvedEdition, serverVersion)
+
+	if err := surfaceFor(cfg.ToolSurface).Register(server, catalog, deps); err != nil {
+		return nil, fmt.Errorf("register tool surface %q: %w", cfg.ToolSurface, err)
+	}
+	return server, nil
 }

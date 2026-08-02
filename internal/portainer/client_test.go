@@ -175,3 +175,234 @@ func TestNew_TrailingSlashURL_DoesNotProduceADoubleSlash(t *testing.T) {
 		t.Errorf("request path = %q, want no double slash", gotPath)
 	}
 }
+
+func TestDo_SendsMethodAndAPIKey(t *testing.T) {
+	t.Parallel()
+	var gotMethod, gotKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotKey = r.Method, r.Header.Get("X-API-Key")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "ptr_secret", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodPost, "/system/upgrade", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotKey != "ptr_secret" {
+		t.Errorf("X-API-Key = %q, want the configured token", gotKey)
+	}
+}
+
+// Both path-validation tests below point at a real, reachable httptest server
+// rather than the "https://portainer.example.com" placeholder used elsewhere
+// in this file. That placeholder's "portainer." subdomain does not resolve
+// (confirmed: example.com itself resolves; portainer.example.com does not,
+// with or without outbound network access) — DNS failure alone would make
+// client.Do return a non-nil error regardless of whether the validation being
+// tested exists, which would make these tests pass for the wrong reason and
+// never actually catch a removed check. Pointing at a live server, with a
+// handler that fails the test if it is ever reached, means the assertion only
+// holds when validation rejects the path before any request is sent.
+
+func TestDo_PathWithoutLeadingSlash_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached the server for an invalid path: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "system/status", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a path without a leading slash")
+	}
+}
+
+func TestDo_PathWithTraversal_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("request reached the server for a traversal path: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/../../etc/passwd", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a traversal path")
+	}
+}
+
+// A percent-encoded traversal survives a literal ".." scan but the server
+// decodes it before routing, so the check must run on the decoded path.
+func TestDo_PercentEncodedTraversal_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; validation should have refused it", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/%2e%2e/%2e%2e/etc/passwd", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a percent-encoded traversal")
+	}
+}
+
+// A resource name containing two dots is not traversal and must be allowed.
+func TestDo_NameContainingTwoDots_IsAllowed(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/tags/a..b", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v, want a legitimate name containing two dots to be allowed", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotPath != "/api/tags/a..b" {
+		t.Errorf("server saw %q, want /api/tags/a..b", gotPath)
+	}
+}
+
+// Invalid percent-encoding must not reach the network. This does not pin down
+// which layer produces the error: url.NewRequestWithContext's own URL parsing
+// rejects a malformed escape such as %zz independently of Do's explicit
+// PathUnescape check, so this guards the observable contract (an error, no
+// request sent) rather than proving the explicit check is what catches it.
+func TestDo_InvalidPercentEncoding_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q for invalid percent-encoding", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/%zz", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for invalid percent-encoding")
+	}
+}
+
+// A malformed escape in the query is the case that discriminates: net/url
+// stores RawQuery without validating it, so http.NewRequestWithContext accepts
+// what url.PathUnescape rejects. Without the explicit unescape check this
+// reaches the network.
+func TestDo_InvalidPercentEncodingInQuery_ReturnsError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; validation should have refused it", r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/tags?x=%zz", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want an error for a malformed escape in the query")
+	}
+}
+
+// TestDo_TraversalLookingQueryValue_IsAllowed is the regression guard: before
+// the fix, Do percent-decoded and split the whole argument — path and query
+// together — on "/", so a query value that legitimately contains "/.." (for
+// example a redirect target) produced a standalone ".." segment and was
+// rejected as traversal even though query content never affects server-side
+// routing. The path and query must be validated separately.
+func TestDo_TraversalLookingQueryValue_IsAllowed(t *testing.T) {
+	t.Parallel()
+	var gotRequestURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestURI = r.URL.RequestURI()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/foo?redirect=/..", nil)
+	if err != nil {
+		t.Fatalf("Do() error = %v, want a query value containing /.. to be accepted", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotRequestURI != "/api/foo?redirect=/.." {
+		t.Errorf("server saw %q, want /api/foo?redirect=/..", gotRequestURI)
+	}
+}
+
+// TestDo_PathTraversalAlongsideQuery_IsStillRefused pins the other half of the
+// same fix: splitting path from query must not accidentally stop validating
+// the path segments once a query string is present.
+func TestDo_PathTraversalAlongsideQuery_IsStillRefused(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the request reached the server at %q; a traversal path must still be refused even with a query string", r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	resp, err := client.Do(context.Background(), http.MethodGet, "/foo/../bar", nil)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if err == nil {
+		t.Error("Do() error = nil, want a traversal path to still be refused")
+	}
+}

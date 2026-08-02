@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -64,19 +66,61 @@ func New(cfg *config.Config) (*Client, error) {
 	return &Client{API: api, baseURL: baseURL, token: token, httpClient: httpClient}, nil
 }
 
-// Get issues a raw authenticated GET against a path below the API root. It
-// exists for the handful of callers that run before the typed client is
-// useful — edition detection, health checks — and for endpoints outside the
-// spec.
-func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+// Do issues a raw authenticated request against a path below the API root.
+// path may also carry a query string (for example "/tags?x=1"): callers that
+// need one have no other way to pass it today, since Do takes no separate
+// query parameter.
+//
+// It exists for the handful of operations that have no generated method:
+// the client is generated from the EE specification, and two operations —
+// POST /system/upgrade and GET /kubernetes/config — exist only in Community
+// Edition. Everything else should go through the generated client.
+func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	if !strings.HasPrefix(path, "/") {
+		return nil, fmt.Errorf("%s %s: path must start with /", method, path)
+	}
+	// Validate the path segments and the query separately: a "/.." inside a
+	// query value (for example "/foo?redirect=/..") is not a routable path
+	// segment and must not be rejected as traversal, since query content
+	// never affects server-side routing. The query still needs its own
+	// percent-encoding check, since net/url stores RawQuery without
+	// validating it.
+	pathPart, queryPart, hasQuery := strings.Cut(path, "?")
+
+	// Check the decoded path: %2e%2e survives a literal ".." scan, and the
+	// server decodes before routing. Comparing whole segments rather than
+	// scanning for a substring also keeps a legitimate resource name such as
+	// "a..b" from being rejected as traversal.
+	decodedPath, err := url.PathUnescape(pathPart)
 	if err != nil {
-		return nil, fmt.Errorf("build request for %s: %w", path, err)
+		return nil, fmt.Errorf("%s %s: path is not valid percent-encoding: %w", method, path, err)
+	}
+	for _, segment := range strings.Split(decodedPath, "/") {
+		if segment == ".." {
+			return nil, fmt.Errorf("%s %s: path must not traverse upward", method, path)
+		}
+	}
+	if hasQuery {
+		if _, err := url.PathUnescape(queryPart); err != nil {
+			return nil, fmt.Errorf("%s %s: query is not valid percent-encoding: %w", method, path, err)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("build %s request for %s: %w", method, path, err)
 	}
 	req.Header.Set("X-API-Key", c.token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", path, err)
+		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	return resp, nil
+}
+
+// Get issues a raw authenticated GET. It exists for the handful of callers
+// that run before the typed client is useful — edition detection, health
+// checks — and for endpoints outside the spec.
+func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
+	return c.Do(ctx, http.MethodGet, path, nil)
 }
