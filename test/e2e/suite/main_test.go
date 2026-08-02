@@ -10,6 +10,7 @@
 package suite
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,19 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "e2e: %v\nrun `make e2e-up` first\n", err)
 		os.Exit(1)
 	}
+
+	// cleanupOrphans is the net for a previous run that died between
+	// creating a resource and cleaning it up: tags and registries are
+	// server-wide and shared by every session in this run, so nothing but
+	// the e2e- prefix distinguishes an earlier run's leftovers from
+	// anything a fresh run is about to create. It runs before any test, not
+	// after, so a leftover from run N-1 never gets mistaken for something
+	// run N leaked.
+	if err := cleanupOrphans(context.Background(), estate); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: clean up orphaned fixtures: %v\n", err)
+		os.Exit(1)
+	}
+
 	sessions, err = newSessions(estate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: build sessions: %v\n", err)
