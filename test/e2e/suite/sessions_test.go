@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,6 +16,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/logging"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
+	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/wiring"
 	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
 )
@@ -64,7 +66,7 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 
 	for ed, srv := range legs {
 		for _, surface := range surfaceNames {
-			session, err := buildSession(srv, config.ToolSurface(surface), false, false, logger)
+			session, err := buildSession(srv, config.ToolSurface(surface), false, false, false, logger)
 			if err != nil {
 				return nil, fmt.Errorf("build %s/%s session: %w", surface, ed, err)
 			}
@@ -73,13 +75,13 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 	}
 
 	for _, surface := range surfaceNames {
-		ro, err := buildSession(e.CE, config.ToolSurface(surface), true, false, logger)
+		ro, err := buildSession(e.CE, config.ToolSurface(surface), true, false, false, logger)
 		if err != nil {
 			return nil, fmt.Errorf("build %s read-only session: %w", surface, err)
 		}
 		s.readOnly[surface] = ro
 
-		sm, err := buildSession(e.CE, config.ToolSurface(surface), false, true, logger)
+		sm, err := buildSession(e.CE, config.ToolSurface(surface), false, true, false, logger)
 		if err != nil {
 			return nil, fmt.Errorf("build %s safe-mode session: %w", surface, err)
 		}
@@ -95,13 +97,21 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 // allocation, and a panic in a handler surfaces as a test failure rather
 // than a hung read. The Portainer client underneath is real and talks to the
 // estate over HTTP; only the MCP transport is in-memory.
-func buildSession(srv harness.Server, surface config.ToolSurface, readOnly, safeMode bool, logger *slog.Logger) (*mcp.ClientSession, error) {
+//
+// skipTLSVerify exists for the Kubernetes leg alone: its Helm chart deploys a
+// self-signed certificate, and unlike the provisioner (see
+// harness.ClientWithCA), the estate file that survives into this process
+// carries no pinned CA to verify it against — only a base URL and
+// credentials. Every compose leg is plain HTTP, so every other caller passes
+// false.
+func buildSession(srv harness.Server, surface config.ToolSurface, readOnly, safeMode, skipTLSVerify bool, logger *slog.Logger) (*mcp.ClientSession, error) {
 	cfg := &config.Config{
-		URL:         srv.BaseURL,
-		Token:       srv.Creds.APIKey,
-		ToolSurface: surface,
-		ReadOnly:    readOnly,
-		SafeMode:    safeMode,
+		URL:           srv.BaseURL,
+		Token:         srv.Creds.APIKey,
+		ToolSurface:   surface,
+		ReadOnly:      readOnly,
+		SafeMode:      safeMode,
+		SkipTLSVerify: skipTLSVerify,
 	}
 
 	client, err := portainer.New(cfg)
@@ -222,6 +232,73 @@ func toolResultText(res *mcp.CallToolResult) string {
 		return ""
 	}
 	return text.Text
+}
+
+// callAction is the one helper that hides the three surfaces' differences
+// from a domain test, so a domain test is written once and runs three times:
+//
+//   - individual calls one tool per action, named by actioncatalog.RenderToolName.
+//   - meta calls one tool per domain ("portainer_<domain>") with an "action"
+//     argument naming which of that domain's actions to run.
+//   - dynamic calls the fixed "portainer_execute_action" tool with an
+//     "action" argument naming the canonical action, catalog-wide.
+//
+// It delegates the individual surface's tool name to
+// actioncatalog.RenderToolName rather than reimplementing the "." -> "_"
+// mapping: Task 9's audit imports that same function to recognise an
+// individual-surface reference, and a second, hand-rolled copy here could
+// silently drift from it.
+func callAction[O any](t *testing.T, s *mcp.ClientSession, surface, action string, in map[string]any) O {
+	t.Helper()
+	toolName, args := actionCallParams(t, surface, action, in)
+	return callTool[O](t, s, toolName, args)
+}
+
+// actionCallParams computes the tool name and arguments callAction would use
+// for surface and action, without calling the tool.
+//
+// It exists so a test that must inspect a tool-error result directly — a
+// call expected to fail, such as an input the handler itself rejects, or a
+// Business-Edition-only action invoked against a Community estate — can
+// still route through the same surface-to-tool-name mapping callAction uses,
+// rather than keeping a second copy that could drift from it. callAction
+// itself cannot serve that case: callTool underneath it fails the test on
+// any IsError result, which is exactly what a "this call must fail" test
+// needs to see rather than treat as a test-harness failure.
+func actionCallParams(t *testing.T, surface, action string, in map[string]any) (string, any) {
+	t.Helper()
+
+	// wrapAction builds the {"action": ..., "input": ...} envelope meta and
+	// dynamic both take. "input" is omitted entirely when in is nil, rather
+	// than sent as an explicit JSON null: the MCP SDK infers both surfaces'
+	// input field as a JSON Schema object (map[string]any, not
+	// json.RawMessage — see meta.Input and dynamic.ExecuteInput's own
+	// comments on why), and schema validation rejects null against an
+	// object-typed field before the request ever reaches the handler that
+	// would otherwise treat "no input" and "null input" the same way.
+	wrapAction := func() map[string]any {
+		args := map[string]any{"action": action}
+		if in != nil {
+			args["input"] = in
+		}
+		return args
+	}
+
+	switch surface {
+	case "individual":
+		return actioncatalog.RenderToolName(action), in
+	case "meta":
+		domain, _, ok := strings.Cut(action, ".")
+		if !ok {
+			t.Fatalf("actionCallParams: action %q is not domain-qualified", action)
+		}
+		return "portainer_" + domain, wrapAction()
+	case "dynamic":
+		return "portainer_execute_action", wrapAction()
+	default:
+		t.Fatalf("actionCallParams: unknown surface %q, want individual, meta or dynamic", surface)
+		return "", nil
+	}
 }
 
 // TestSessions_EveryProvisionedSurfaceListsItsTools is the matrix smoke test:

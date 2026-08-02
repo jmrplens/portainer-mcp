@@ -46,43 +46,81 @@ const fixtureRetries = 5
 // meaningfully slowing a suite that never needs to retry at all.
 const fixtureRetryBackoff = 100 * time.Millisecond
 
-// fixtureClient is the single Portainer client every fixture helper talks
-// through, built once against the Community Edition leg.
+// fixtureClient is the Portainer client every fixture helper talks through,
+// one per edition rather than fixed to Community Edition: tags and
+// registries are server-wide resources, but Community and Business Edition
+// are different servers in this harness's estate (estate.CE and estate.EE),
+// so a fixture exercised through a Business Edition session must be created
+// against the Business Edition server, not Community's. Task 7 built this
+// CE-only; extended here rather than duplicated, because closing that gap is
+// this task's job, not a reason to grow a second copy of fixture plumbing.
 //
-// Community Edition, specifically, not "whichever edition the calling test
-// happens to be exercising": tags and registries are server-wide resources,
-// there is one Community Edition server in every estate this harness
-// provisions, and ReadOnly/SafeMode sessions above are already built against
-// it for the identical reason — it is the leg guaranteed present regardless
-// of licensing. A fixture built against it is reachable from every session
-// in the matrix, since the tool call under test talks to whichever server
-// backs the session, not to this client.
+// Built lazily and cached per edition: most test binaries never touch the
+// Business Edition leg (a contributor without the licence never asks for
+// "EE"), so a client for it is never constructed unless something actually
+// requests one.
 var (
-	fixtureClientOnce sync.Once
-	fixtureClientInst *portainer.Client
-	fixtureClientErr  error
+	fixtureClientsMu sync.Mutex
+	fixtureClients   = map[string]*portainer.Client{}
 )
 
-func fixtureClient(t *testing.T) *portainer.Client {
-	t.Helper()
-	fixtureClientOnce.Do(func() {
-		fixtureClientInst, fixtureClientErr = portainer.New(&config.Config{
-			URL:   estate.CE.BaseURL,
-			Token: estate.CE.Creds.APIKey,
-		})
-	})
-	if fixtureClientErr != nil {
-		t.Fatalf("build fixture client: %v", fixtureClientErr)
+// rawClientFor returns the fixture client for ed ("CE" or "EE") without a
+// *testing.T, for the handful of callers — ledger cleanup closures — that
+// only have a context. fixtureClient below is the *testing.T-friendly
+// wrapper every test calls directly.
+func rawClientFor(ed string) (*portainer.Client, error) {
+	fixtureClientsMu.Lock()
+	defer fixtureClientsMu.Unlock()
+
+	if c, ok := fixtureClients[ed]; ok {
+		return c, nil
 	}
-	return fixtureClientInst
+
+	var srv harness.Server
+	switch ed {
+	case "CE":
+		srv = estate.CE
+	case "EE":
+		srv = estate.EE
+	default:
+		return nil, fmt.Errorf("rawClientFor: unknown edition %q, want CE or EE", ed)
+	}
+	if srv.BaseURL == "" {
+		return nil, fmt.Errorf("rawClientFor: no %s server in this estate", ed)
+	}
+
+	client, err := portainer.New(&config.Config{URL: srv.BaseURL, Token: srv.Creds.APIKey})
+	if err != nil {
+		return nil, fmt.Errorf("build %s fixture client: %w", ed, err)
+	}
+	fixtureClients[ed] = client
+	return client, nil
 }
 
-// createTag creates an environment tag named name and returns its id. The
-// caller is expected to have built name with uniqueName so orphan cleanup
-// can find it if this test's own cleanup never runs.
-func createTag(t *testing.T, name string) int {
+func fixtureClient(t *testing.T, ed string) *portainer.Client {
 	t.Helper()
-	client := fixtureClient(t)
+	if ed == "EE" && !estate.HasBusinessEdition() {
+		t.Skipf("no Business Edition server in this estate")
+	}
+	client, err := rawClientFor(ed)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return client
+}
+
+// createTag creates an environment tag named name on edition ed's server and
+// returns its id. The caller is expected to have built name with uniqueName
+// so orphan cleanup can find it if this test's own cleanup never runs.
+//
+// Its registered cleanup deletes the tag only if it is still present:
+// tags.delete is exactly the mutation Task 8's own tests exercise against
+// this fixture, so by the time a test ends the tag it created may already be
+// gone. A cleanup that deleted unconditionally would then fail on an
+// already-deleted tag and report a spurious failure for a test that passed.
+func createTag(t *testing.T, ed, name string) int {
+	t.Helper()
+	client := fixtureClient(t, ed)
 
 	var id int
 	retryFixture(t, fmt.Sprintf("create tag %q", name), func() error {
@@ -104,18 +142,50 @@ func createTag(t *testing.T, name string) int {
 	})
 
 	newLedger(t).Register("tag", strconv.Itoa(id), func(ctx context.Context) error {
-		resp, err := client.API.TagDeleteWithResponse(ctx, id)
-		if err != nil {
-			return err
-		}
-		return toolutil.Check(resp)
+		return deleteTagIfPresent(ctx, ed, id)
 	})
 	return id
 }
 
-// createRegistry creates a custom-type registry named name and returns its
-// id. Like createTag, the caller is expected to have built name with
-// uniqueName.
+// deleteTagIfPresent deletes tag id on edition ed's server only if a
+// TagList still reports it, so a caller that already deleted it (through the
+// action under test, not through this helper) does not turn a passing test
+// into a spurious cleanup failure.
+func deleteTagIfPresent(ctx context.Context, ed string, id int) error {
+	client, err := rawClientFor(ed)
+	if err != nil {
+		return err
+	}
+	resp, err := client.API.TagListWithResponse(ctx)
+	if err != nil {
+		return fmt.Errorf("list tags before cleanup: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return fmt.Errorf("list tags before cleanup: %w", err)
+	}
+	if resp.JSON200 != nil {
+		present := false
+		for _, tag := range *resp.JSON200 {
+			if tag.ID != nil && *tag.ID == id {
+				present = true
+				break
+			}
+		}
+		if !present {
+			return nil
+		}
+	}
+	delResp, err := client.API.TagDeleteWithResponse(ctx, id)
+	if err != nil {
+		return err
+	}
+	return toolutil.Check(delResp)
+}
+
+// createRegistry creates a custom-type registry named name on edition ed's
+// server and returns its id. Like createTag, the caller is expected to have
+// built name with uniqueName, and its registered cleanup only deletes the
+// registry if it is still present, for the identical reason.
 //
 // It uses the generic "custom registry" type rather than a real registry
 // kind (Docker Hub, ECR, ...) because nothing here ever pulls an image
@@ -123,9 +193,9 @@ func createTag(t *testing.T, name string) int {
 // can exercise list/inspect/update/delete against it, and a custom registry
 // is the one type that stores whatever URL it is given without validating
 // that anything is listening there.
-func createRegistry(t *testing.T, name string) int {
+func createRegistry(t *testing.T, ed, name string) int {
 	t.Helper()
-	client := fixtureClient(t)
+	client := fixtureClient(t, ed)
 
 	var id int
 	retryFixture(t, fmt.Sprintf("create registry %q", name), func() error {
@@ -152,13 +222,41 @@ func createRegistry(t *testing.T, name string) int {
 	})
 
 	newLedger(t).Register("registry", strconv.Itoa(id), func(ctx context.Context) error {
-		resp, err := client.API.RegistryDeleteWithResponse(ctx, id)
-		if err != nil {
-			return err
-		}
-		return toolutil.Check(resp)
+		return deleteRegistryIfPresent(ctx, ed, id)
 	})
 	return id
+}
+
+// deleteRegistryIfPresent is deleteTagIfPresent's counterpart for registries.
+func deleteRegistryIfPresent(ctx context.Context, ed string, id int) error {
+	client, err := rawClientFor(ed)
+	if err != nil {
+		return err
+	}
+	resp, err := client.API.RegistryListWithResponse(ctx)
+	if err != nil {
+		return fmt.Errorf("list registries before cleanup: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return fmt.Errorf("list registries before cleanup: %w", err)
+	}
+	if resp.JSON200 != nil {
+		present := false
+		for _, reg := range *resp.JSON200 {
+			if reg.Id != nil && *reg.Id == id {
+				present = true
+				break
+			}
+		}
+		if !present {
+			return nil
+		}
+	}
+	delResp, err := client.API.RegistryDeleteWithResponse(ctx, id)
+	if err != nil {
+		return err
+	}
+	return toolutil.Check(delResp)
 }
 
 // retryFixture calls fn up to fixtureRetries times, retrying only when the
