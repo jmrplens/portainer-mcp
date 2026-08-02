@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
@@ -569,5 +570,138 @@ func TestRepositoryTagsDelete_MissingFields_ReturnErrorWithoutCallingAPI(t *test
 				t.Error("the API was called despite missing required input")
 			}
 		})
+	}
+}
+
+// A registry response carrying a password must never reach the model. No
+// fixture carried one before, which is why this went unnoticed.
+func TestRegistryInspect_ResponseWithPassword_IsRedacted(t *testing.T) {
+	t.Parallel()
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":1,"Name":"private","URL":"registry.example.com","Password":"hunter2"}`))
+	})
+
+	out, err := find(t, "registries.inspect")(context.Background(), c, json.RawMessage(`{"id":1}`))
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "hunter2") {
+		t.Errorf("the handler returned a password to the caller: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "private") {
+		t.Error("redaction removed more than the credential")
+	}
+}
+
+func TestRegistryCreate_ResponseWithPassword_IsRedacted(t *testing.T) {
+	t.Parallel()
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"my-registry","Password":"hunter2"}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{"name": "my-registry", "url": "registry.example.com", "type": 3})
+	out, err := find(t, "registries.create")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "hunter2") {
+		t.Errorf("the handler returned a password to the caller: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "my-registry") {
+		t.Error("redaction removed more than the credential")
+	}
+}
+
+func TestRegistryUpdate_ResponseWithPassword_IsRedacted(t *testing.T) {
+	t.Parallel()
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":4,"Name":"quay","Password":"hunter2"}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{"id": 4, "name": "quay", "url": "quay.io"})
+	out, err := find(t, "registries.update")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "hunter2") {
+		t.Errorf("the handler returned a password to the caller: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "quay") {
+		t.Error("redaction removed more than the credential")
+	}
+}
+
+// list returns an array, so this is the mutation-row-2 discriminator: if
+// redactList's per-element loop were skipped or the wrong call site dropped,
+// this is the one test among the four that catches it.
+func TestRegistryList_ResponseWithPassword_IsRedacted(t *testing.T) {
+	t.Parallel()
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"Id":1,"Name":"private","Password":"hunter2"},{"Id":2,"Name":"public"}]`))
+	})
+
+	out, err := find(t, "registries.list")(context.Background(), c, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "hunter2") {
+		t.Errorf("the handler returned a password to the caller: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "private") || !strings.Contains(string(encoded), "public") {
+		t.Error("redaction removed more than the credential")
+	}
+}
+
+// The nested ManagementConfiguration carries its own Password and AccessToken
+// fields, independent of the top-level ones. A fixture exercising only the
+// top-level field would not catch a redact that forgot the nested struct.
+func TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted(t *testing.T) {
+	t.Parallel()
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"Id": 1,
+			"Name": "private",
+			"ManagementConfiguration": {
+				"Password": "nested-secret",
+				"AccessToken": "nested-token",
+				"Username": "keep-me"
+			}
+		}`))
+	})
+
+	out, err := find(t, "registries.inspect")(context.Background(), c, json.RawMessage(`{"id":1}`))
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), "nested-secret") || strings.Contains(string(encoded), "nested-token") {
+		t.Errorf("the handler returned a nested management credential to the caller: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "keep-me") {
+		t.Error("redaction removed more than the nested credentials")
 	}
 }

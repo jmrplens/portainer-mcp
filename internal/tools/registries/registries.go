@@ -88,8 +88,9 @@ func Specs() []toolutil.ActionSpec {
 		},
 		{
 			Name: "registries.ecr_delete_tags", Domain: "registries", OperationID: "EcrDeleteTags",
-			Title:       "Delete ECR image tags",
-			Description: "Permanently deletes the given image tags from an Amazon ECR repository. Business Edition only. This cannot be undone.",
+			Title: "Delete ECR image tags",
+			Description: "Permanently deletes the given image tags from an Amazon ECR repository. Business Edition only. This cannot be undone. " +
+				"repositoryName here is Portainer's numeric repository identifier, not the repository's name — pass the integer id, not a string.",
 			Edition:     edition.EE,
 			Mutating:    true,
 			Destructive: true,
@@ -115,7 +116,7 @@ func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (
 	if err := toolutil.Check(resp); err != nil {
 		return nil, fmt.Errorf("registries list: %w", err)
 	}
-	return resp.JSON200, nil
+	return redactList(resp.JSON200), nil
 }
 
 // registryCreateInput is the parameter shape for registries.create.
@@ -169,7 +170,7 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 	if err := toolutil.Check(resp); err != nil {
 		return nil, fmt.Errorf("registries create: %w", err)
 	}
-	return resp.JSON200, nil
+	return redact(resp.JSON200), nil
 }
 
 // registryPingInput is the parameter shape for registries.ping.
@@ -242,7 +243,7 @@ func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMes
 	if err := toolutil.Check(resp); err != nil {
 		return nil, fmt.Errorf("registries inspect: %w", err)
 	}
-	return resp.JSON200, nil
+	return redact(resp.JSON200), nil
 }
 
 // registryUpdateInput is the parameter shape for registries.update.
@@ -289,7 +290,47 @@ func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMess
 	if err := toolutil.Check(resp); err != nil {
 		return nil, fmt.Errorf("registries update: %w", err)
 	}
-	return resp.JSON200, nil
+	return redact(resp.JSON200), nil
+}
+
+// redact removes credentials from a registry record before it is returned.
+//
+// PortainereeRegistry and its nested ManagementConfiguration each carry a
+// Password field ("Password or SecretAccessKey used to authenticate against
+// this registry" per the generated doc comment) and an AccessToken field
+// ("Stores temporary access token") — both are credentials, not registry
+// metadata, and a tool result is read by a model and lands in transcripts, so
+// neither must ever travel that way. Whether Portainer actually populates
+// them on a given response is not something this code should have to know,
+// and only List is documented by Portainer as pre-scrubbed — that claim is
+// Portainer's, not ours to rely on — so every handler that returns a
+// registry record redacts unconditionally.
+func redact(r *apigen.PortainereeRegistry) *apigen.PortainereeRegistry {
+	if r == nil {
+		return nil
+	}
+	scrubbed := *r
+	scrubbed.Password = nil
+	scrubbed.AccessToken = nil
+	if scrubbed.ManagementConfiguration != nil {
+		config := *scrubbed.ManagementConfiguration
+		config.Password = nil
+		config.AccessToken = nil
+		scrubbed.ManagementConfiguration = &config
+	}
+	return &scrubbed
+}
+
+// redactList applies redact to every element of a registry list response.
+func redactList(rs *[]apigen.PortainereeRegistry) *[]apigen.PortainereeRegistry {
+	if rs == nil {
+		return nil
+	}
+	out := make([]apigen.PortainereeRegistry, len(*rs))
+	for i := range *rs {
+		out[i] = *redact(&(*rs)[i])
+	}
+	return &out
 }
 
 // registryConfigureInput is the parameter shape for registries.configure.

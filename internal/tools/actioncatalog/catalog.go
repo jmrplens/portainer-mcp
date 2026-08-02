@@ -110,6 +110,11 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 		if !opts.Edition.Includes(spec.Edition) {
 			continue
 		}
+		// Note this is a third, independent edition filter: Available is
+		// edition-keyed because version spans are partitioned by edition, so it
+		// re-excludes an operation absent from this edition even if the checks
+		// above were bypassed. Worth knowing before mutating any one of them in
+		// isolation and concluding the filtering is untested.
 		if opts.ServerVersion != "" && !apiversion.Available(opts.Edition, op, opts.ServerVersion) {
 			continue
 		}

@@ -13,6 +13,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -172,5 +173,48 @@ func TestCallTool_EachToolReachesItsOwnAction(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("CallTool(%s) reached the wrong action: got %q, want it to mention %q", tool, text, want)
 		}
+	}
+}
+
+// TestRegister_Annotations_MarkDestructiveActions extends the annotation
+// check to a domain with a genuinely destructive action (system's five
+// actions are all read-only or plain mutating, none destructive). It proves
+// DestructiveHint propagates from ActionSpec through Register into the actual
+// registered MCP tool, end to end — not merely through AnnotationsFor called
+// in isolation on a struct.
+func TestRegister_Annotations_MarkDestructiveActions(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var found bool
+	for _, tool := range res.Tools {
+		if tool.Name != "portainer_tags_delete" {
+			continue
+		}
+		found = true
+		if tool.Annotations == nil {
+			t.Fatalf("%s has no annotations", tool.Name)
+		}
+		if tool.Annotations.ReadOnlyHint {
+			t.Errorf("%s ReadOnlyHint = true, want false: it is mutating", tool.Name)
+		}
+		if tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
+			t.Errorf("%s DestructiveHint = %v, want a pointer to true", tool.Name, tool.Annotations.DestructiveHint)
+		}
+	}
+	if !found {
+		t.Fatal("portainer_tags_delete is not registered")
 	}
 }
