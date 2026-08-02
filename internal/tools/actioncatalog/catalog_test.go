@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -270,5 +271,23 @@ func TestBuild_EmptyEdition_ReturnsError(t *testing.T) {
 	if _, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE)},
 		Options{ServerVersion: "2.44.0"}); err == nil {
 		t.Fatal("Build() = nil, want an error for an empty edition")
+	}
+}
+
+// The end-to-end property the registries pilot exists for: the same declared
+// specs must yield different catalogs on CE and EE.
+func TestBuild_RegistriesPilot_YieldsDifferentCatalogsPerEdition(t *testing.T) {
+	t.Parallel()
+	ceCatalog, err := Build(registries.Specs(), Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("CE Build: %v", err)
+	}
+	eeCatalog, err := Build(registries.Specs(), Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("EE Build: %v", err)
+	}
+	if len(ceCatalog.Actions()) >= len(eeCatalog.Actions()) {
+		t.Errorf("CE has %d actions and EE has %d; EE must offer strictly more in this domain",
+			len(ceCatalog.Actions()), len(eeCatalog.Actions()))
 	}
 }
