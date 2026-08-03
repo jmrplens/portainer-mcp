@@ -111,3 +111,31 @@ func TestFillScopeParameterGuidance_DoesNotMutateItsInput(t *testing.T) {
 		t.Error("the caller's own map entry was altered")
 	}
 }
+
+// TestFillScopeParameterGuidance_DoesNotAliasTheDefaultTable guards a subtler
+// leak than the map itself: FillScopeParameterGuidance copies each filled
+// ParameterGuidance by value, but CommonConfusions is a slice, so a value
+// copy still shares scopeParameterDefaults' backing array unless it is
+// cloned. A consumer that writes guidance.CommonConfusions[0] on a filled
+// entry would otherwise corrupt the package-level default table for every
+// later caller and every edition — actioncatalog.cloneActionSpec happens to
+// deep-copy this same field on its own read path, but nothing in this
+// package pinned that property before this test, and the corruption above is
+// created here, not there.
+func TestFillScopeParameterGuidance_DoesNotAliasTheDefaultTable(t *testing.T) {
+	t.Parallel()
+	type input struct {
+		EndpointID int `json:"endpointId"`
+	}
+	first := FillScopeParameterGuidance([]ActionSpec{{Name: "x.get", Input: input{}}})
+	confusions := first[0].ParameterGuidance["endpointId"].CommonConfusions
+	if len(confusions) == 0 {
+		t.Fatal("fixture carries no CommonConfusions; the mutation below would prove nothing")
+	}
+	confusions[0] = "corrupted"
+
+	second := FillScopeParameterGuidance([]ActionSpec{{Name: "x.get", Input: input{}}})
+	if second[0].ParameterGuidance["endpointId"].CommonConfusions[0] == "corrupted" {
+		t.Error("filled guidance shares CommonConfusions memory with scopeParameterDefaults")
+	}
+}

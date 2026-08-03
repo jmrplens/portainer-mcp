@@ -332,6 +332,13 @@ func specWithDiscoveryMetadata(name, domain, operationID string, ed edition.Edit
 	s.Aliases = []string{"original-alias"}
 	s.Tags = []string{"original-tag"}
 	s.RelatedActions = []string{"original-related"}
+	// Input carries an "id" field so ParameterGuidance's "id" entry below
+	// names a real JSON field of Input — Validate refuses a ParameterGuidance
+	// key absent from Input's JSON fields, and this fixture's whole point is
+	// a spec that passes validation while carrying real discovery metadata.
+	s.Input = struct {
+		ID int `json:"id"`
+	}{}
 	s.ParameterGuidance = map[string]toolutil.ParameterGuidance{
 		"id": {
 			SemanticRole:     "original",

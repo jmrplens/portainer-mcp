@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -430,5 +431,79 @@ func TestRegister_Description_MarksDangerousActions(t *testing.T) {
 		if strings.Contains(line, "`tags.list`") && (strings.Contains(line, "[mutating]") || strings.Contains(line, "[destructive]")) {
 			t.Errorf("read-only action marked dangerous: %q", line)
 		}
+	}
+}
+
+// --- warnIfDescriptionIsLarge ---
+
+func TestWarnIfDescriptionIsLarge_AboveThreshold_LogsAWarning(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	big := strings.Repeat("x", largeDescriptionThreshold+1)
+	warnIfDescriptionIsLarge(logger, "registries", paramSchemaFull, big)
+
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") {
+		t.Fatalf("warnIfDescriptionIsLarge() did not log a warning:\n%s", out)
+	}
+	if !strings.Contains(out, "domain=registries") {
+		t.Errorf("warning does not name the domain:\n%s", out)
+	}
+}
+
+// TestWarnIfDescriptionIsLarge_AtOrBelowThreshold_LogsNothing is the negative
+// control: the ordinary case (every pilot domain today) must not log at all.
+func TestWarnIfDescriptionIsLarge_AtOrBelowThreshold_LogsNothing(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	small := strings.Repeat("x", largeDescriptionThreshold)
+	warnIfDescriptionIsLarge(logger, "tags", paramSchemaFull, small)
+
+	if buf.Len() != 0 {
+		t.Errorf("warnIfDescriptionIsLarge() logged something for a description at the threshold:\n%s", buf.String())
+	}
+}
+
+// TestWarnIfDescriptionIsLarge_NilLogger_DoesNotPanic guards the case
+// Register actually exercises whenever no logger is configured (most tests
+// in this file build tools.Deps{} with none): a nil logger must be a no-op,
+// never a nil-pointer panic.
+func TestWarnIfDescriptionIsLarge_NilLogger_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+	big := strings.Repeat("x", largeDescriptionThreshold+1)
+	warnIfDescriptionIsLarge(nil, "registries", paramSchemaFull, big)
+}
+
+// TestRegister_LargeDescription_LogsAWarningThroughDeps proves the wiring
+// end to end: Register itself, not just the helper in isolation, must reach
+// the warning when a real domain's rendered description crosses the
+// threshold.
+func TestRegister_LargeDescription_LogsAWarningThroughDeps(t *testing.T) {
+	t.Parallel()
+	longDescription := strings.Repeat("word ", 4000) // well past largeDescriptionThreshold
+	spec := toolutil.ActionSpec{
+		Name: "bigdomain.action", Domain: "bigdomain", OperationID: "TagList",
+		Title: "t", Description: longDescription, Edition: edition.CE,
+		Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+	}
+	catalog, err := actioncatalog.Build([]toolutil.ActionSpec{spec}, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Logger: logger}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "domain=bigdomain") {
+		t.Errorf("Register() did not warn about bigdomain's large description through deps.Logger:\n%s", out)
 	}
 }

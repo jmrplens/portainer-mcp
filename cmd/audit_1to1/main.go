@@ -9,13 +9,20 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 18 of 441 Business-Edition actions declared, this fails today and
-// keeps failing for most of P3 — that is correct, not a bug to work around.
-// It is wired into CI as a separate, non-required job (see
-// .github/workflows/ci.yml) that reports the count on every pull request; it
-// becomes a required, blocking gate only once the count reaches zero. A gate
-// that blocks every commit for months teaches everyone to route around it
-// instead.
+// With 18 of 441 Business-Edition actions declared, plain run (what `make
+// audit-1to1` calls, and what a human asking "are we done" wants) fails
+// today and keeps failing for most of P3 — that is correct, not a bug to
+// work around.
+//
+// The CI job (see .github/workflows/ci.yml) does not call plain run, though:
+// it runs with -ratchet, which compares coverage against the number
+// committed in api/coverage-baseline.yaml instead of requiring 100%. That
+// ratchet is what lets this be a real, required CI gate from day one rather
+// than a job stuck failing for months (which teaches everyone to route
+// around it) or one that never fails at all (which would let coverage decay
+// silently behind a clean check) — see runRatchet's own doc comment for the
+// mechanics. `make audit-1to1` itself is untouched: it still fails on any
+// uncovered operation, ratchet or not.
 //
 // The allow-list is the audit's honesty mechanism, not a hiding place: an
 // entry excludes its operation from the failure but never from the report
@@ -32,6 +39,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -44,19 +52,35 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// Default locations of this audit's three inputs. Parameterised on run
-// rather than hardcoded there, so tests can point every one of them at a
-// temporary fixture without touching the working directory.
+// Default locations of this audit's inputs. Parameterised on run rather than
+// hardcoded there, so tests can point every one of them at a temporary
+// fixture without touching the working directory.
 const (
-	specsDir      = "api/specs"
-	ceSpecFile    = "ce-2.44.0.json"
-	eeSpecFile    = "ee-2.44.0.json"
-	allowListDir  = "api"
-	allowListFile = "coverage-allowlist.yaml"
+	specsDir       = "api/specs"
+	defaultSpecVer = "2.44.0"
+	allowListDir   = "api"
+	allowListFile  = "coverage-allowlist.yaml"
+	baselineDir    = "api"
+	baselineFile   = "coverage-baseline.yaml"
 )
 
 func main() {
-	if err := run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile); err != nil {
+	specVersion := flag.String("spec-version", defaultSpecVer,
+		"vendored Portainer spec version to audit (must match a ce-<version>.json/ee-<version>.json pair under api/specs)")
+	baseline := flag.Bool("ratchet", false,
+		"pass/fail by comparing coverage against the committed ratchet baseline (api/coverage-baseline.yaml) instead of requiring full coverage")
+	flag.Parse()
+
+	ceSpecFile := fmt.Sprintf("ce-%s.json", *specVersion)
+	eeSpecFile := fmt.Sprintf("ee-%s.json", *specVersion)
+
+	var err error
+	if *baseline {
+		err = runRatchet(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile)
+	} else {
+		err = run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit_1to1: %v\n", err)
 		os.Exit(1)
 	}
@@ -106,6 +130,81 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 	if result.HasGap() {
 		return fmt.Errorf("%d operation(s) in the vendored specs have no catalog action",
 			len(result.CE.Uncovered)+len(result.EE.Uncovered))
+	}
+	return nil
+}
+
+// runRatchet is run's sibling for the CI gate: it loads and audits exactly
+// the same inputs, and prints exactly the same coverage report, but decides
+// pass/fail differently.
+//
+// A gate that requires 100% coverage from day one — what run's HasGap decides
+// — is correct for a human asking "are we done", but wrong for CI at the
+// start of P3: with 659 of 692 combined operations uncovered, that gate would
+// fail every pull request for months. A red check nobody expects to turn
+// green for months is a check everyone learns to ignore, and worse, a red
+// check that never changes state hides a *new* regression in the same job:
+// nobody re-reads a report whose bottom line has said "FAIL" every day since
+// P3 started. But a gate that never fails at all is just as useless — it
+// would let coverage decay silently behind a permanently clean job.
+//
+// The ratchet is the third option. api/coverage-baseline.yaml commits the
+// coverage this project has already reached; this gate fails only when
+// current coverage drops below that committed floor (a real regression),
+// passes when it matches, and passes — while saying so plainly — when
+// coverage has improved beyond what the file records (the file is stale and
+// should be updated in the same commit that improved it, which is also what
+// makes the improvement visible in the diff). It cannot go backwards, it is
+// green today, and it tightens automatically as P3 lands each domain.
+func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile string) error {
+	ceData, err := readFileIn(specsDir, ceSpecFile)
+	if err != nil {
+		return err
+	}
+	eeData, err := readFileIn(specsDir, eeSpecFile)
+	if err != nil {
+		return err
+	}
+	allowData, err := readFileIn(allowListDir, allowListFile)
+	if err != nil {
+		return err
+	}
+	baselineData, err := readFileIn(baselineDir, baselineFile)
+	if err != nil {
+		return err
+	}
+
+	ceOps, err := parseSpecOperations(ceData)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", specsDir, ceSpecFile, err)
+	}
+	eeOps, err := parseSpecOperations(eeData)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", specsDir, eeSpecFile, err)
+	}
+	allowList, err := parseAllowList(allowData)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", allowListDir, allowListFile, err)
+	}
+	base, err := parseBaseline(baselineData)
+	if err != nil {
+		return fmt.Errorf("%s/%s: %w", baselineDir, baselineFile, err)
+	}
+
+	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(w, buildReport(result)); err != nil {
+		return fmt.Errorf("write report: %w", err)
+	}
+
+	outcomes := checkRatchet(result, base)
+	if _, err := fmt.Fprint(w, renderRatchet(outcomes)); err != nil {
+		return fmt.Errorf("write ratchet report: %w", err)
+	}
+	if ratchetRegressed(outcomes) {
+		return fmt.Errorf("coverage ratchet: regressed below the baseline committed in %s/%s", baselineDir, baselineFile)
 	}
 	return nil
 }

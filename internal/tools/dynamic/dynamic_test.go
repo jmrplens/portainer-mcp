@@ -528,3 +528,147 @@ func TestSearch_LongQuery_DoesNotLetDescriptionNoiseOutrankANameMatch(t *testing
 		t.Error("tags.list fell outside the result cap, so the model would never see the correct action")
 	}
 }
+
+// --- exampleFor / bindingAs / placeholderFor ---
+
+// TestExampleFor_IntegerGuidance_ProducesANumberNotAString is the regression
+// guard for the mistyped-example defect: ParameterGuidance.ExampleBinding is
+// always text (it is written as plain strings in
+// internal/toolutil/guidance.go's scopeParameterDefaults table, e.g.
+// endpointId's "3"), and FillScopeParameterGuidance fills guidance for
+// exactly the identifier parameters that commonly declare an integer schema
+// type. Before this fix, exampleFor assigned the binding's string value
+// straight into the example regardless of the property's declared type, so a
+// model copying the published example for an "integer" property would send a
+// quoted string that fails schema validation.
+func TestExampleFor_IntegerGuidance_ProducesANumberNotAString(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"endpointId": {ExampleBinding: "3"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"endpointId": map[string]any{"type": "integer"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	value, ok := example["endpointId"]
+	if !ok {
+		t.Fatal("exampleFor() did not carry a value for endpointId")
+	}
+	if _, isString := value.(string); isString {
+		t.Fatalf("exampleFor()[\"endpointId\"] = %#v (a string), want a number for an \"integer\"-typed property", value)
+	}
+	if n, ok := value.(int); !ok || n != 3 {
+		t.Errorf("exampleFor()[\"endpointId\"] = %#v, want the int 3", value)
+	}
+}
+
+// TestExampleFor_StringGuidance_StillProducesAString is the positive control:
+// a guided property actually declared "string" must still publish the
+// binding text unchanged.
+func TestExampleFor_StringGuidance_StillProducesAString(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"namespace": {ExampleBinding: "default"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"namespace": map[string]any{"type": "string"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if example["namespace"] != "default" {
+		t.Errorf("exampleFor()[\"namespace\"] = %#v, want the string \"default\"", example["namespace"])
+	}
+}
+
+// TestExampleFor_BooleanGuidance_ProducesABool guards the third scalar type
+// bindingAs converts.
+func TestExampleFor_BooleanGuidance_ProducesABool(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"force": {ExampleBinding: "true"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"force": map[string]any{"type": "boolean"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if v, ok := example["force"].(bool); !ok || v != true {
+		t.Errorf("exampleFor()[\"force\"] = %#v, want the bool true", example["force"])
+	}
+}
+
+// TestExampleFor_BindingThatDoesNotParseAsTheDeclaredType_FallsBackToPlaceholder
+// proves bindingAs's failure path is actually used: a binding that cannot
+// parse as the property's declared type must not be published verbatim
+// (that would still be schema-invalid), it must fall back to
+// placeholderFor's generic value instead.
+func TestExampleFor_BindingThatDoesNotParseAsTheDeclaredType_FallsBackToPlaceholder(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"count": {ExampleBinding: "not-a-number"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"count": map[string]any{"type": "integer"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if example["count"] != 0 {
+		t.Errorf("exampleFor()[\"count\"] = %#v, want placeholderFor's fallback (0) for an unparseable binding", example["count"])
+	}
+}
+
+// TestPlaceholderFor_TypeArray_UsesFirstNonNullEntry guards a nullable
+// property (declared as e.g. ["string", "null"], the JSON Schema idiom for
+// "optional and nullable"): before this fix, propType read raw["type"] as a
+// plain string only, so a type array always fell into the default branch and
+// published a bare null example — no shape at all.
+func TestPlaceholderFor_TypeArray_UsesFirstNonNullEntry(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"type": []any{"null", "string"}})
+	if got != "string" {
+		t.Errorf("placeholderFor(type=[null,string]) = %#v, want the string placeholder for the first non-null entry", got)
+	}
+}
+
+// TestPlaceholderFor_RefProperty_IsTreatedAsAnObject guards a $ref'd property,
+// which carries no "type" keyword of its own.
+func TestPlaceholderFor_RefProperty_IsTreatedAsAnObject(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"$ref": "#/components/schemas/Thing"})
+	if _, ok := got.(map[string]any); !ok {
+		t.Errorf("placeholderFor($ref) = %#v, want an object placeholder", got)
+	}
+}
+
+// TestPlaceholderFor_InlinePropertiesWithNoType_IsTreatedAsAnObject guards an
+// inline object schema that omits the redundant "type": "object" keyword.
+func TestPlaceholderFor_InlinePropertiesWithNoType_IsTreatedAsAnObject(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"properties": map[string]any{"x": map[string]any{"type": "string"}}})
+	if _, ok := got.(map[string]any); !ok {
+		t.Errorf("placeholderFor(properties, no type) = %#v, want an object placeholder", got)
+	}
+}
+
+// TestPlaceholderFor_NoTypeNoRefNoProperties_StaysNil is the negative control:
+// a genuinely shapeless schema must still fall back to nil, not be coerced
+// into some default type.
+func TestPlaceholderFor_NoTypeNoRefNoProperties_StaysNil(t *testing.T) {
+	t.Parallel()
+	if got := placeholderFor(map[string]any{}); got != nil {
+		t.Errorf("placeholderFor({}) = %#v, want nil", got)
+	}
+}

@@ -93,8 +93,10 @@ jobs:
     name: "Generated action Input structs are current"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Regenerate action Input structs and confirm no drift
@@ -142,24 +144,31 @@ jobs:
           exit $fail
 
   audit-1to1:
-    name: "1:1 API coverage (informational until P3 completes)"
+    name: "1:1 API coverage (ratchet)"
     runs-on: ubuntu-latest
     # This is the gate the whole P3 rewrite exists to install: it fails
     # whenever an operation documented in either vendored spec has no
     # matching catalog action, which is what the previous incarnation of
-    # this server never checked on its way to 37% coverage. With 18 of 441
-    # Business Edition operations declared, cmd/audit_1to1 fails today and
-    # keeps failing for most of P3 — that is correct, not a bug to silence.
-    # continue-on-error keeps that expected failure from turning this
-    # repository's required checks red: a gate that blocks every commit for
-    # months teaches everyone to route around it instead. Remove
-    # continue-on-error, making this job required, only once the count it
-    # reports reaches zero.
-    continue-on-error: true
+    # this server never checked on its way to 37% coverage.
+    #
+    # This job does not require 100% coverage — that would fail every pull
+    # request for most of P3, which teaches everyone to route around a gate
+    # stuck red for months, and previously meant this job ran with
+    # continue-on-error so the standing failure would not block every commit.
+    # A job that never fails is just as useless, though: it would let
+    # coverage decay silently. Instead this runs `make audit-1to1-ratchet`,
+    # which fails only when coverage drops below the floor committed in
+    # api/coverage-baseline.yaml — see cmd/audit_1to1/main.go's runRatchet
+    # doc comment for the full reasoning. That is what lets this be a real,
+    # required check (no continue-on-error) from day one: it is green today
+    # and tightens automatically as each P3 wave lands a domain and bumps the
+    # baseline in the same commit.
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Report 1:1 coverage of both vendored specs by the action catalog
-        run: make audit-1to1
+      - name: Report 1:1 coverage of both vendored specs by the action catalog, gated on the ratchet
+        run: make audit-1to1-ratchet

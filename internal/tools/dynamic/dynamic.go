@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -65,6 +66,11 @@ type match struct {
 	RequiredParams []string       `json:"requiredParams,omitempty"`
 	Example        map[string]any `json:"example,omitempty"`
 	score          int
+	// spec is carried unexported (never marshalled) so fillSchemaDetails can
+	// compute InputSchema/RequiredParams/Example after truncation, for only
+	// the matches actually returned — see search's doc comment for why that
+	// order matters at 441 actions.
+	spec toolutil.ActionSpec
 }
 
 // findResult wraps the matches so a truncated result can say so. A model that
@@ -97,6 +103,7 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 				"Showing the %d best matches of %d. Narrow the query to see the rest.",
 				maxMatches, len(matches))
 		}
+		fillSchemaDetails(result.Matches)
 
 		encoded, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
@@ -148,6 +155,14 @@ const (
 // exact name match beats a name substring, which beats a title or description
 // hit. P3 can add synonyms and fuzzy matching once the catalog is large enough
 // for the difference to be measurable.
+//
+// It does not compute InputSchema, RequiredParams or Example — that is left
+// to fillSchemaDetails, called by Register only after truncating to
+// maxMatches. Register discards everything past maxMatches, and at 441
+// actions a broad query can score most of the catalog; computing the schema
+// details (a deep copy plus a fresh example map, per match) for results that
+// are about to be thrown away is wasted work on the hot path every call to
+// portainer_find_action takes.
 func search(specs []toolutil.ActionSpec, query string) []match {
 	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
 	if len(terms) == 0 {
@@ -177,12 +192,10 @@ func search(specs []toolutil.ActionSpec, query string) []match {
 		if score == 0 {
 			continue
 		}
-		schema, required, example := schemaDetails(spec)
 		out = append(out, match{
 			Action: spec.Name, Domain: spec.Domain, Title: spec.Title,
 			Description: spec.Description, Mutating: spec.Mutating,
-			Destructive: spec.Destructive, score: score,
-			InputSchema: schema, RequiredParams: required, Example: example,
+			Destructive: spec.Destructive, score: score, spec: spec,
 		})
 	}
 
@@ -193,6 +206,17 @@ func search(specs []toolutil.ActionSpec, query string) []match {
 		return out[i].Action < out[j].Action
 	})
 	return out
+}
+
+// fillSchemaDetails populates InputSchema, RequiredParams and Example for
+// exactly the matches passed in, mutating each in place. Called by Register
+// after truncating search's results to maxMatches, so the per-match schema
+// deep-copy and example-map allocation are paid only for what the response
+// actually returns.
+func fillSchemaDetails(matches []match) {
+	for i := range matches {
+		matches[i].InputSchema, matches[i].RequiredParams, matches[i].Example = schemaDetails(matches[i].spec)
+	}
 }
 
 // schemaDetails computes the three parameter-shape fields a match carries:
@@ -225,14 +249,43 @@ func exampleFor(spec toolutil.ActionSpec, schema map[string]any) map[string]any 
 	}
 	example := make(map[string]any, len(props))
 	for name, raw := range props {
-		if guidance, ok := spec.ParameterGuidance[name]; ok && guidance.ExampleBinding != "" {
-			example[name] = guidance.ExampleBinding
-			continue
-		}
 		propSchema, _ := raw.(map[string]any)
+		if guidance, ok := spec.ParameterGuidance[name]; ok && guidance.ExampleBinding != "" {
+			if value, ok := bindingAs(propSchema, guidance.ExampleBinding); ok {
+				example[name] = value
+				continue
+			}
+		}
 		example[name] = placeholderFor(propSchema)
 	}
 	return example
+}
+
+// bindingAs converts a guidance ExampleBinding, which is always text, to the
+// property's declared JSON Schema type. FillScopeParameterGuidance fills
+// guidance for Portainer's identifier parameters, which commonly declare
+// "integer" (id, endpointId): publishing ExampleBinding as a bare string for
+// one of those would show a quoted value where the schema requires a number,
+// so a model copying the example verbatim would fail schema validation. It
+// reports false when the text does not parse as the declared type, so the
+// caller falls back to a generic placeholder rather than publishing an
+// example the schema itself would reject.
+func bindingAs(propSchema map[string]any, binding string) (any, bool) {
+	switch propType(propSchema) {
+	case "string":
+		return binding, true
+	case "integer":
+		n, err := strconv.Atoi(binding)
+		return n, err == nil
+	case "number":
+		f, err := strconv.ParseFloat(binding, 64)
+		return f, err == nil
+	case "boolean":
+		b, err := strconv.ParseBool(binding)
+		return b, err == nil
+	default:
+		return nil, false
+	}
 }
 
 // placeholderFor returns a generic value matching a JSON Schema property's
@@ -241,7 +294,7 @@ func exampleFor(spec toolutil.ActionSpec, schema map[string]any) map[string]any 
 // server, which is exactly the caveat ParameterGuidance.ExampleBinding
 // documents for its own, guidance-backed examples.
 func placeholderFor(propSchema map[string]any) any {
-	switch propSchema["type"] {
+	switch propType(propSchema) {
 	case "string":
 		return "string"
 	case "integer", "number":
@@ -255,6 +308,36 @@ func placeholderFor(propSchema map[string]any) any {
 	default:
 		return nil
 	}
+}
+
+// propType reads a JSON Schema property's effective type for placeholderFor
+// and bindingAs. "type" is not always the single plain string those two
+// switch on directly: a nullable property can declare it as an array (e.g.
+// ["string", "null"]), and a $ref'd or inline-object property can omit "type"
+// altogether while still declaring "properties". Reading only raw["type"] as
+// a string turned every one of those into the default branch, so
+// placeholderFor published a bare null — no shape at all — for exactly the
+// properties a model most needs an example of. A type array resolves to its
+// first non-"null" entry; a schema with no type but a $ref or its own
+// properties is treated as an object.
+func propType(propSchema map[string]any) string {
+	switch t := propSchema["type"].(type) {
+	case string:
+		return t
+	case []any:
+		for _, entry := range t {
+			if s, ok := entry.(string); ok && s != "null" {
+				return s
+			}
+		}
+	}
+	if _, hasRef := propSchema["$ref"]; hasRef {
+		return "object"
+	}
+	if _, hasProps := propSchema["properties"]; hasProps {
+		return "object"
+	}
+	return ""
 }
 
 // executeAnnotations describe the execute tool, which can reach anything in the

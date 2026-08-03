@@ -133,6 +133,16 @@ func FillScopeParameterGuidance(specs []ActionSpec) []ActionSpec {
 				continue
 			}
 			if def, ok := scopeParameterDefaults[name]; ok {
+				// def is copied by value above, but CommonConfusions is a
+				// slice: a value copy still shares def's backing array with
+				// scopeParameterDefaults. Without cloning it here, a caller
+				// that writes guidance.CommonConfusions[0] on the filled
+				// entry corrupts the package-level default table for every
+				// later caller and every edition — actioncatalog.cloneActionSpec
+				// happens to deep-copy this same field on its own read path,
+				// but nothing in this package pins that property, and this is
+				// where the alias is actually created.
+				def.CommonConfusions = append([]string(nil), def.CommonConfusions...)
 				merged[name] = def
 			}
 		}

@@ -135,6 +135,24 @@ func (s ActionSpec) Validate() error {
 			return fail("Input must be a struct or nil, got %s: the schema every surface publishes is reflected from it", t.Kind())
 		}
 	}
+	if len(s.ParameterGuidance) > 0 {
+		// A typo or a renamed field otherwise leaves a stale ParameterGuidance
+		// entry that silently does nothing — the same class of drift this
+		// project already refuses for EnumParams (see schema.go/schema_test.go)
+		// for the stated reason: a loud refusal beats a struct that is
+		// silently wrong. jsonFieldNames is the same resolution
+		// FillScopeParameterGuidance already uses, so a name valid there is
+		// valid here.
+		known := make(map[string]bool, len(s.ParameterGuidance))
+		for _, name := range jsonFieldNames(s.Input) {
+			known[name] = true
+		}
+		for name := range s.ParameterGuidance {
+			if !known[name] {
+				return fail("ParameterGuidance names %q, which is not a JSON field of Input", name)
+			}
+		}
+	}
 	return nil
 }
 

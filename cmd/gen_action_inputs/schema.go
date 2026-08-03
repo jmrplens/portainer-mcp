@@ -112,9 +112,19 @@ func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		node.Properties = nil
 		if node.Type == "" {
 			node.Type = "object"
+		}
+		// Union with whatever allOf already merged in above, rather than
+		// discarding it: a node can legitimately declare its own "properties"
+		// as a sibling of "allOf" ({"allOf": [{"$ref": "...Base"}],
+		// "properties": {...}} is the real shape), and resetting node.Properties
+		// to nil here dropped every property Base contributed, silently
+		// shrinking the generated struct and the published schema to just the
+		// node's own fields.
+		byName := map[string]schemaProperty{}
+		for _, p := range node.Properties {
+			byName[p.Name] = p
 		}
 		for _, name := range names {
 			propMap, ok := propsRaw[name].(map[string]any)
@@ -125,20 +135,32 @@ func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 			if err != nil {
 				return nil, fmt.Errorf("property %q: %w", name, err)
 			}
-			node.Properties = append(node.Properties, schemaProperty{Name: name, Schema: propNode, Required: required[name]})
+			byName[name] = schemaProperty{Name: name, Schema: propNode, Required: required[name]}
+		}
+		allNames := make([]string, 0, len(byName))
+		for n := range byName {
+			allNames = append(allNames, n)
+		}
+		sort.Strings(allNames)
+		node.Properties = nil
+		for _, n := range allNames {
+			node.Properties = append(node.Properties, byName[n])
 		}
 	}
 
 	if node.Type == "array" {
-		itemsRaw, ok := raw["items"].(map[string]any)
-		if !ok {
+		if itemsRaw, ok := raw["items"].(map[string]any); ok {
+			items, err := r.resolve(itemsRaw, depth+1)
+			if err != nil {
+				return nil, fmt.Errorf("array items: %w", err)
+			}
+			node.Items = items
+		} else if node.Items == nil {
+			// An allOf branch can supply both "type": "array" and "items"
+			// (mergeSchema already copied node.Items in that case); only refuse
+			// when neither this node's own "items" nor a merged one is present.
 			return nil, fmt.Errorf("array schema has no items")
 		}
-		items, err := r.resolve(itemsRaw, depth+1)
-		if err != nil {
-			return nil, fmt.Errorf("array items: %w", err)
-		}
-		node.Items = items
 	}
 
 	if node.Type == "object" && len(node.Properties) == 0 {

@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-discovery e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -85,13 +85,22 @@ audit-discovery:
 
 # audit-1to1 is the gate this whole rewrite exists for: it fails when any
 # operation documented in either vendored spec has no matching catalog
-# action. Unlike audit-e2e-gaps it is a real gate, not merely informational —
-# its non-zero exit is what a CI job wires up as a required check once P3
-# closes the gap it reports today. See cmd/audit_1to1's package doc for why
-# it currently fails (18 of 441 Business Edition operations declared) and why
-# that is the correct state for most of P3.
+# action. Unlike audit-e2e-gaps it is a real gate, not merely informational.
+# It is the 100%-or-bust check a human asking "are we done" runs; see
+# cmd/audit_1to1's package doc for why it currently fails (18 of 441 Business
+# Edition operations declared) and why that is the correct state for most of
+# P3. CI does not call this target directly — see audit-1to1-ratchet below.
 audit-1to1:
-	go run ./cmd/audit_1to1
+	go run ./cmd/audit_1to1 -spec-version=$(SPEC_VERSION)
+
+# audit-1to1-ratchet is what CI actually gates on: the same audit as
+# audit-1to1, but passing once coverage meets the floor committed in
+# api/coverage-baseline.yaml rather than requiring 100%. See runRatchet's own
+# doc comment in cmd/audit_1to1/main.go for why a ratchet, rather than either
+# a permanently-failing or a permanently-passing check, is the right gate
+# while P3 is still landing domains.
+audit-1to1-ratchet:
+	go run ./cmd/audit_1to1 -spec-version=$(SPEC_VERSION) -ratchet
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)

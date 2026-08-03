@@ -148,9 +148,38 @@ func typeOf(node *schemaNode, required bool, namePrefix string, structs *[]struc
 // (BaseURL -> "baseUrl", TLSSkipVerify -> "tlsSkipVerify").
 func assembleFields(props []schemaProperty, structNamePrefix string, structs *[]structSpec) ([]fieldSpec, error) {
 	fields := make([]fieldSpec, 0, len(props))
+	// goFieldName and bodyJSONTag are not injective (see their doc comments):
+	// two distinct wire property names can collapse onto one rendered Go
+	// field name or one rendered JSON tag. go/format only reformats, and
+	// go/types happily accepts two struct fields with distinct Go names that
+	// both carry the same `json:"..."` tag — encoding/json then silently
+	// drops both fields that share a tag at (un)marshal time, so the
+	// published schema would disagree with what the handler actually parses.
+	// Detected here, one struct at a time, so both the top-level Input and
+	// every nested object catch a collision the moment it is assembled,
+	// rather than only where a caller happens to merge fields from more than
+	// one source (assembleOperationFields's own "add" already catches this
+	// for the flat merge of path/query/body, but a nested object's own
+	// properties never pass through that merge at all).
+	jsonNames := make(map[string]string, len(props))
+	goNames := make(map[string]string, len(props))
 	for _, p := range props {
 		words := splitWords(p.Name)
 		goName := goFieldName(words)
+		jsonName := bodyJSONTag(words)
+		if existing, dup := jsonNames[jsonName]; dup {
+			return nil, fmt.Errorf(
+				"properties %q and %q of %s both render as JSON field %q: goFieldName/bodyJSONTag collision, refusing rather than silently dropping one at (un)marshal time",
+				existing, p.Name, structNamePrefix, jsonName)
+		}
+		jsonNames[jsonName] = p.Name
+		if existing, dup := goNames[goName]; dup {
+			return nil, fmt.Errorf(
+				"properties %q and %q of %s both render as Go field %q: goFieldName/bodyJSONTag collision, refusing rather than silently redeclaring one field",
+				existing, p.Name, structNamePrefix, goName)
+		}
+		goNames[goName] = p.Name
+
 		nestedName := structNamePrefix + goName
 		goType, err := typeOf(p.Schema, p.Required, nestedName, structs)
 		if err != nil {
@@ -159,7 +188,7 @@ func assembleFields(props []schemaProperty, structNamePrefix string, structs *[]
 		f := fieldSpec{
 			GoName:      goName,
 			GoType:      goType,
-			JSONName:    bodyJSONTag(words),
+			JSONName:    jsonName,
 			Required:    p.Required,
 			Description: p.Schema.Description,
 		}
@@ -223,7 +252,17 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		name, _ := param["name"].(string)
 		in, _ := param["in"].(string)
 		if name == "" {
-			continue
+			// A components.parameters $ref parameter object carries no "name"
+			// of its own — the name lives on the referenced component, which
+			// this generator does not resolve. Silently skipping it (as this
+			// loop used to) would drop an unmet required path/query parameter
+			// with no trace in the generated Input struct. None of the
+			// vendored specs use a parameter-level $ref today (verified
+			// against every operation in both specs), so this refusal is not
+			// expected to fire; it exists so a future spec that does use one
+			// fails generation loudly instead of publishing an incomplete
+			// struct.
+			return nil, fmt.Errorf("parameter with no name (possibly a components.parameters $ref, which this generator does not resolve): %v", param)
 		}
 		schemaRaw, _ := param["schema"].(map[string]any)
 		if schemaRaw == nil {

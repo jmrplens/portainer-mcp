@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -22,6 +23,35 @@ import (
 
 // Surface registers one tool per domain.
 type Surface struct{}
+
+// largeDescriptionThreshold is the rendered description size, in bytes, above
+// which Register warns. paramSchemaFull (the default) embeds one complete
+// JSON Schema per action into a single domain tool description, and every
+// MCP client resends every tool description on every request — a domain with
+// many actions carrying large generated inputs (registries, with its nested
+// provider and access-policy objects, is the real example) can grow a
+// description large enough that an operator would want to know, and switch
+// that one domain — or PORTAINER_META_PARAM_SCHEMA globally — to summary or
+// none. 16 KiB is comfortably above every pilot domain's current rendered
+// size and comfortably below where a single tool description starts to
+// dominate a model's context on its own.
+const largeDescriptionThreshold = 16 * 1024
+
+// warnIfDescriptionIsLarge logs a warning when description exceeds
+// largeDescriptionThreshold, naming the domain and mode so an operator can
+// tell which domain to reconfigure (or switch PORTAINER_META_PARAM_SCHEMA
+// globally) without inspecting the description itself. logger may be nil —
+// Register is exercised in tests and by editions of this surface that never
+// configure one — in which case this is a no-op rather than a nil-pointer
+// panic.
+func warnIfDescriptionIsLarge(logger *slog.Logger, domain string, mode paramSchemaMode, description string) {
+	if logger == nil || len(description) <= largeDescriptionThreshold {
+		return
+	}
+	logger.Warn("domain tool description is large; every MCP client request re-sends it",
+		"domain", domain, "mode", mode, "bytes", len(description),
+		"hint", "set PORTAINER_META_PARAM_SCHEMA=summary or none to shrink it")
+}
 
 // paramSchemaEnvVar selects how much parameter detail describeActions embeds
 // per action. This surface has only one place to publish a per-action shape —
@@ -105,6 +135,7 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 		if err != nil {
 			return fmt.Errorf("meta surface: %s: %w", domain, err)
 		}
+		warnIfDescriptionIsLarge(deps.Logger, domain, mode, description)
 
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "portainer_" + domain,

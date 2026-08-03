@@ -111,6 +111,20 @@ func sortOperations(ops []specOperation) {
 	sort.Slice(ops, func(i, j int) bool { return ops[i].OperationID < ops[j].OperationID })
 }
 
+// operationLine renders one report line for op, in both the allow-listed and
+// uncovered sections. "Deprecated" is documented as a legitimate reason to
+// allow-list an operation (see specOperation's own doc comment), but until
+// this it was never actually printed: a reviewer scanning "operations with no
+// catalog action" had to open the vendored spec directly to tell a deprecated
+// route from a live gap.
+func operationLine(op specOperation) string {
+	suffix := ""
+	if op.Deprecated {
+		suffix = " (deprecated)"
+	}
+	return fmt.Sprintf("    - %s (%s %s) [%s]%s\n", op.OperationID, op.Method, op.Path, op.Domain, suffix)
+}
+
 // buildReport renders result as a human-readable summary.
 //
 // The allow-list count is printed unconditionally, alongside the coverage
@@ -133,13 +147,13 @@ func buildReport(result *auditResult) string {
 		if len(r.AllowListed) > 0 {
 			fmt.Fprintln(&b, "  allow-listed operations:")
 			for _, op := range r.AllowListed {
-				fmt.Fprintf(&b, "    - %s (%s %s) [%s]\n", op.OperationID, op.Method, op.Path, op.Domain)
+				fmt.Fprint(&b, operationLine(op))
 			}
 		}
 		if len(r.Uncovered) > 0 {
 			fmt.Fprintln(&b, "  operations with no catalog action:")
 			for _, op := range r.Uncovered {
-				fmt.Fprintf(&b, "    - %s (%s %s) [%s]\n", op.OperationID, op.Method, op.Path, op.Domain)
+				fmt.Fprint(&b, operationLine(op))
 			}
 		}
 		fmt.Fprintln(&b)

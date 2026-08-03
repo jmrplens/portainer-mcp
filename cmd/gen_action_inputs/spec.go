@@ -163,9 +163,28 @@ func domainOperations(domainName string, domainTags map[string][]string, byTag m
 // under -tools-dir: it is a property of the table against the vendored spec,
 // not of how much of P3's domain wave has been written yet.
 func checkDomainTagsCoverSpec(domainTags map[string][]string, byTag map[string][]operation) error {
+	// Domain names are iterated in sorted order, not map order: two domains
+	// racing to claim the same tag would otherwise name each other in a
+	// nondeterministic order across runs, which is exactly the kind of
+	// flakiness this audit's own output must not have.
+	sortedDomains := make([]string, 0, len(domainTags))
+	for domain := range domainTags {
+		sortedDomains = append(sortedDomains, domain)
+	}
+	sort.Strings(sortedDomains)
+
 	coveredBy := map[string]string{}
-	for domain, tags := range domainTags {
-		for _, tag := range tags {
+	for _, domain := range sortedDomains {
+		for _, tag := range domainTags[domain] {
+			if other, dup := coveredBy[tag]; dup {
+				// A tag claimed by two domains passes both single-direction
+				// checks below silently: the forward check sees the tag has
+				// operations, and the reverse check sees the tag is present in
+				// coveredBy. Left undetected, domainOperations would return the
+				// same operations for both domains, generating two Input
+				// structs — and two catalog actions — for one operation.
+				return fmt.Errorf("tag %q is claimed by both domain %q and domain %q; each tag must belong to exactly one domain or its operations generate twice", tag, other, domain)
+			}
 			coveredBy[tag] = domain
 			if len(byTag[tag]) == 0 {
 				return fmt.Errorf("domain %q names tag %q, which has no operations in the vendored spec (check for a typo)", domain, tag)
@@ -229,9 +248,17 @@ func (d *document) requestBodySchema(rb map[string]any) (map[string]any, error) 
 		sort.Strings(kinds)
 		return nil, fmt.Errorf("requestBody declares %d content types (%s); no single Go type represents more than one", len(content), strings.Join(kinds, ", "))
 	}
-	for _, v := range content {
+	for kind, v := range content {
 		entry, _ := v.(map[string]any)
 		schema, _ := entry["schema"].(map[string]any)
+		if schema == nil {
+			// A content entry with no "schema" key must not be confused with
+			// "the operation has no body" (the rb == nil / len(content) == 0
+			// cases above): assembleOperationFields cannot tell those apart,
+			// and would silently generate an Input struct with no body fields
+			// for an operation that does declare one.
+			return nil, fmt.Errorf("requestBody content %q declares no schema; this generator refuses to emit a body-less Input for an operation that has a body", kind)
+		}
 		return schema, nil
 	}
 	return nil, nil

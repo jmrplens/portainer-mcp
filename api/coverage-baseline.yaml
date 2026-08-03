@@ -1,0 +1,20 @@
+# Portainer MCP 1:1 API coverage ratchet baseline.
+#
+# cmd/audit_1to1's CI job (invoked with -ratchet; see .github/workflows/ci.yml)
+# fails only when coverage drops below the numbers recorded here. It does not
+# require 100% coverage — that stays `make audit-1to1`'s job, the one a human
+# asking "are we done" runs, and it keeps failing on any uncovered operation
+# regardless of this file.
+#
+# ce_covered / ee_covered are the number of Community/Business Edition
+# operations the catalog covers today (auditResult.CE.Covered /
+# .EE.Covered, printed by the audit's own report as "covered: N of Total").
+# Update both numbers in the same commit that improves them: a wave that
+# lands new domain actions raises coverage, the CI job then reports the
+# baseline as stale (still green, never a failure), and bumping the numbers
+# here in that same commit is what makes the improvement itself visible in
+# the diff, rather than left for the ratchet to silently absorb. Never lower
+# either number to make a regression pass — that defeats the one thing this
+# file exists to catch.
+ce_covered: 15
+ee_covered: 18

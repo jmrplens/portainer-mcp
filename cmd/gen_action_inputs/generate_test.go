@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -210,6 +211,87 @@ func TestUnit_BodyObjectProperty_GeneratesNestedStruct(t *testing.T) {
 	}
 }
 
+// TestUnit_Resolve_AllOfPropertiesSurviveASiblingPropertiesKeyword guards the
+// allOf-overlay defect: a node can declare "properties" as a sibling of
+// "allOf" ({"allOf": [{"$ref": "...Base"}], "properties": {...}} is the real
+// shape), and resolve is supposed to overlay the node's own keywords on top
+// of what allOf merged in — a correct precedence rule for scalar keywords
+// like type or description. Before this fix, the properties overlay reset
+// node.Properties to nil unconditionally, discarding every property the
+// referenced Base schema contributed instead of adding to it, so the
+// generated struct (and the published schema) silently lost every allOf-
+// inherited field the moment the node also declared even one property of its
+// own.
+func TestUnit_Resolve_AllOfPropertiesSurviveASiblingPropertiesKeyword(t *testing.T) {
+	t.Parallel()
+	doc := newDoc(map[string]any{
+		"Base": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"name": map[string]any{"type": "string"}},
+			"required":   []any{"name"},
+		},
+	})
+	res := &resolver{doc: doc}
+	node, err := res.resolve(map[string]any{
+		"allOf":      []any{map[string]any{"$ref": "#/components/schemas/Base"}},
+		"properties": map[string]any{"extra": map[string]any{"type": "string"}},
+	}, 0)
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+	names := make([]string, 0, len(node.Properties))
+	for _, p := range node.Properties {
+		names = append(names, p.Name)
+	}
+	if !slices.Contains(names, "name") {
+		t.Fatalf("resolve().Properties = %v, want \"name\" preserved from the allOf-merged Base schema", names)
+	}
+	if !slices.Contains(names, "extra") {
+		t.Fatalf("resolve().Properties = %v, want \"extra\" from the node's own sibling \"properties\"", names)
+	}
+}
+
+// TestUnit_Resolve_ArrayItemsFromAllOf_AreNotDiscarded guards the sibling
+// defect in the same block: mergeSchema copies src.Items into the node, so
+// an allOf branch can legitimately supply both "type": "array" and "items".
+// Before this fix, the array-handling block read raw["items"] only,
+// ignoring whatever mergeSchema had already set, and returned "array schema
+// has no items" for a schema it had in fact already resolved correctly.
+func TestUnit_Resolve_ArrayItemsFromAllOf_AreNotDiscarded(t *testing.T) {
+	t.Parallel()
+	doc := newDoc(map[string]any{
+		"StringList": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+	})
+	res := &resolver{doc: doc}
+	node, err := res.resolve(map[string]any{
+		"allOf": []any{map[string]any{"$ref": "#/components/schemas/StringList"}},
+	}, 0)
+	if err != nil {
+		t.Fatalf("resolve() error = %v, want the allOf-merged Items to satisfy the array-items requirement", err)
+	}
+	if node.Items == nil || node.Items.Type != "string" {
+		t.Fatalf("resolve().Items = %+v, want the string item type merged in from the allOf branch", node.Items)
+	}
+}
+
+// TestUnit_Resolve_ArrayWithNoItemsAnywhere_IsStillRefused is the negative
+// control: an array schema with no items at all, from either the node's own
+// "items" keyword or an allOf-merged one, must still be refused.
+func TestUnit_Resolve_ArrayWithNoItemsAnywhere_IsStillRefused(t *testing.T) {
+	t.Parallel()
+	res := &resolver{doc: newDoc(nil)}
+	_, err := res.resolve(map[string]any{"type": "array"}, 0)
+	if err == nil {
+		t.Fatal("resolve() = nil error, want a refusal: an array schema with no items anywhere")
+	}
+	if !strings.Contains(err.Error(), "no items") {
+		t.Errorf("resolve() error = %q, want it to say the array has no items", err)
+	}
+}
+
 // TestUnit_MapTypedRequestBody_GeneratesMapField guards C2: a request body
 // that resolves to an object with a typed additionalProperties and no named
 // properties — the seven Kubernetes bulk-delete operations' real shape, "a
@@ -385,6 +467,77 @@ func TestUnit_NestedStructNameCollidesWithSiblingProperty(t *testing.T) {
 	conf := types.Config{Importer: importer.Default()}
 	if _, err := conf.Check("generated", fset, []*ast.File{file}, nil); err == nil {
 		t.Fatal("type-check succeeded despite two identical struct declarations; expected a redeclaration error, proving go/format alone cannot catch this")
+	}
+}
+
+// TestUnit_AssembleFields_FieldNameCollision_IsRefused is the field-level
+// analogue of TestUnit_NestedStructNameCollidesWithSiblingProperty above:
+// Task 4 added collision detection for struct names, but the same defect one
+// level down, on fields, went unguarded. "TLSSkipVerify" and "TlsSkipVerify"
+// are the real example naming.go's own doc comment now documents: both
+// collapse to the JSON tag "tlsSkipVerify" via bodyJSONTag (and to the same
+// Go field name "TLSSkipVerify" via goFieldName). Before this fix,
+// assembleFields built both fields anyway — go/format reformats the result,
+// go/types accepts two struct fields with distinct declarations sharing one
+// json tag, and encoding/json then silently drops both fields that share a
+// tag at (un)marshal time, so the published schema disagreed with what the
+// generated handler actually parsed.
+func TestUnit_AssembleFields_FieldNameCollision_IsRefused(t *testing.T) {
+	t.Parallel()
+	props := []schemaProperty{
+		{Name: "TLSSkipVerify", Schema: &schemaNode{Type: "boolean"}},
+		{Name: "TlsSkipVerify", Schema: &schemaNode{Type: "boolean"}},
+	}
+	var structs []structSpec
+	_, err := assembleFields(props, "widgetInput", &structs)
+	if err == nil {
+		t.Fatal("assembleFields() = nil error, want a refusal: both properties render the same JSON tag (\"tlsSkipVerify\")")
+	}
+	for _, want := range []string{"TLSSkipVerify", "TlsSkipVerify"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("assembleFields() error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestUnit_AssembleFields_NestedObjectFieldCollision_IsRefused proves the
+// check actually fires one level down, inside a nested object's own
+// properties — the case assembleOperationFields's top-level merge check (its
+// "add" closure, which only ever sees path/query parameters and a request
+// body's flattened top-level fields) never reaches, because a nested
+// object's properties are assembled by assembleFields directly and never
+// pass through that merge at all.
+func TestUnit_AssembleFields_NestedObjectFieldCollision_IsRefused(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "WidgetCreate",
+		Method:      "POST",
+		Path:        "/widgets",
+		RequestBody: map[string]any{
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"config": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"TLSSkipVerify": map[string]any{"type": "boolean"},
+									"TlsSkipVerify": map[string]any{"type": "boolean"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+	var nested []structSpec
+	_, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
+	if err == nil {
+		t.Fatal("assembleOperationFields() = nil error, want a refusal: the nested \"config\" object's two properties render the same JSON tag")
 	}
 }
 
@@ -571,6 +724,57 @@ func TestUnit_Refusals(t *testing.T) {
 				return err
 			},
 			wantErr: "not supported",
+		},
+		{
+			// A components.parameters $ref parameter object carries no "name"
+			// of its own. Before this fix, the loop's `if name == "" {
+			// continue }` silently dropped it — including an unmet required
+			// path/query parameter — with no trace in the generated Input
+			// struct.
+			name: "parameter with no name is refused rather than silently skipped",
+			build: func() error {
+				op := operation{
+					OperationID: "RefParamOp",
+					Method:      "GET",
+					Path:        "/ref-param-op/{id}",
+					Parameters: []map[string]any{
+						{"$ref": "#/components/parameters/IDParam"},
+					},
+				}
+				doc := newDoc(nil)
+				res := &resolver{doc: doc}
+				var nested []structSpec
+				_, err := assembleOperationFields(op, res, doc, "refParamOpInput", &nested)
+				return err
+			},
+			wantErr: "no name",
+		},
+		{
+			name: "requestBody content declares no schema",
+			build: func() error {
+				doc := newDoc(nil)
+				_, err := doc.requestBodySchema(map[string]any{
+					"content": map[string]any{
+						"application/json": map[string]any{},
+					},
+				})
+				return err
+			},
+			wantErr: "no schema",
+		},
+		{
+			name: "domain tag claimed by two domains",
+			build: func() error {
+				domainTags := map[string][]string{
+					"tags":      {"tags"},
+					"tags_dupe": {"tags"},
+				}
+				byTag := map[string][]operation{
+					"tags": {{OperationID: "TagList"}},
+				}
+				return checkDomainTagsCoverSpec(domainTags, byTag)
+			},
+			wantErr: "claimed by both",
 		},
 	}
 

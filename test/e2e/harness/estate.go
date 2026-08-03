@@ -19,6 +19,20 @@ const EstateFileEnv = "PORTAINER_E2E_ESTATE"
 // strings out of it.
 const EdgeEnvFileEnv = "PORTAINER_E2E_EDGE_ENV"
 
+// The well-known Environments names cmd/provision/main.go registers today:
+// EnvironmentDocker for each edition's own Docker-in-Docker endpoint,
+// EnvironmentAgent for the agent endpoint registered against the Community
+// Edition server only, and EnvironmentK3D for the Kubernetes leg. Exported so
+// a domain reading one of them by name — roughly twenty P3 domains will —
+// gets a typo caught at compile time instead of Environment silently
+// returning ok = false, which a domain action could too easily treat as "no
+// environment configured" rather than "the caller misspelled the name".
+const (
+	EnvironmentDocker = "docker"
+	EnvironmentAgent  = "agent"
+	EnvironmentK3D    = "k3d"
+)
+
 // Server is one provisioned Portainer.
 type Server struct {
 	Edition string      `json:"edition"`
@@ -73,8 +87,8 @@ type Server struct {
 // Environment returns the numeric endpoint id registered under name on this
 // server, and whether one was found. name is whatever
 // cmd/provision/main.go's provisionServer or runKubernetes called
-// WithEnvironment with — "docker" and, on the Community Edition leg only,
-// "agent" today.
+// WithEnvironment with — EnvironmentDocker and, on the Community Edition leg
+// only, EnvironmentAgent today.
 func (s Server) Environment(name string) (int, bool) {
 	id, ok := s.Environments[name]
 	return id, ok

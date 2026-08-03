@@ -188,6 +188,41 @@ func TestAudit_ActionCoveringBothEditions_CountsInBoth(t *testing.T) {
 	}
 }
 
+// TestUnit_BuildReport_PrintsDeprecatedInline guards against a reviewer
+// having to open the vendored spec directly to tell a deprecated route from
+// a live gap: Deprecated is documented as a legitimate reason to allow-list
+// an operation, so buildReport must say so next to the operation itself, in
+// both the allow-listed and the uncovered sections.
+func TestUnit_BuildReport_PrintsDeprecatedInline(t *testing.T) {
+	t.Parallel()
+	deprecatedAllowListed := op("OldRoute", "GET", "/old", "legacy")
+	deprecatedAllowListed.Deprecated = true
+	deprecatedUncovered := op("AnotherOldRoute", "GET", "/another-old", "legacy")
+	deprecatedUncovered.Deprecated = true
+	liveGap := op("LiveGap", "GET", "/live", "live")
+
+	result := &auditResult{
+		EE: editionReport{
+			Name:        "Business Edition (EE)",
+			Total:       3,
+			AllowListed: []specOperation{deprecatedAllowListed},
+			Uncovered:   []specOperation{deprecatedUncovered, liveGap},
+		},
+		CE: editionReport{Name: "Community Edition (CE)"},
+	}
+	report := buildReport(result)
+
+	if !strings.Contains(report, "OldRoute (GET /old) [legacy] (deprecated)") {
+		t.Errorf("buildReport() does not mark the deprecated allow-listed operation:\n%s", report)
+	}
+	if !strings.Contains(report, "AnotherOldRoute (GET /another-old) [legacy] (deprecated)") {
+		t.Errorf("buildReport() does not mark the deprecated uncovered operation:\n%s", report)
+	}
+	if strings.Contains(report, "LiveGap (GET /live) [live] (deprecated)") {
+		t.Errorf("buildReport() marks a non-deprecated operation as deprecated:\n%s", report)
+	}
+}
+
 func TestUnit_BuildReport_FullCoverage_StatesSo(t *testing.T) {
 	t.Parallel()
 	result := &auditResult{

@@ -107,6 +107,16 @@ func consumeInitialisms(run []rune) []string {
 // goFieldName renders wire identifier words as an exported Go field name:
 // each word is title-cased, except a word recognised as a common initialism
 // (case-insensitively), which is rendered fully upper-case.
+//
+// goFieldName is not injective, and neither is bodyJSONTag below: two
+// distinct wire property names can render to the same output. "TLSSkipVerify"
+// and "TlsSkipVerify" both produce "tlsSkipVerify" via bodyJSONTag (and the
+// identical "TLSSkipVerify" via this function); "baseUrl" and "BaseURL" both
+// produce "baseUrl" via bodyJSONTag too. Neither function can detect this on
+// its own — each only ever sees one name at a time — so a caller assembling
+// more than one field into the same struct must track the rendered names
+// across the whole set and refuse a repeat itself; see assembleFields, which
+// does exactly that for every struct this generator emits.
 func goFieldName(words []string) string {
 	var out []rune
 	for _, w := range words {

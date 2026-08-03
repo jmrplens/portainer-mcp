@@ -55,7 +55,7 @@ const (
 	// provisioner verify that certificate instead of skipping verification.
 	k8sCAFileEnv = "PORTAINER_E2E_K8S_CA_FILE"
 
-	k8sEndpointName    = "k3d"
+	k8sEndpointName    = harness.EnvironmentK3D
 	k8sEndpointEdition = "Kubernetes"
 
 	// recoverURLEnv names the throwaway server's address that
@@ -127,12 +127,12 @@ func run(kubernetes, releaseLicence, recoverLicence bool) error {
 	// reads it by name instead of hardcoding the number order of creation
 	// happened to give it.
 	agentID, err := harness.CreateEndpoint(context.Background(), client, ceURL, ce.Creds.APIKey,
-		harness.AgentEndpoint("agent", agentHost))
+		harness.AgentEndpoint(harness.EnvironmentAgent, agentHost))
 	if err != nil {
 		return fmt.Errorf("register agent endpoint: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "CE: registered agent endpoint %d\n", agentID)
-	ce = ce.WithEnvironment("agent", agentID)
+	ce = ce.WithEnvironment(harness.EnvironmentAgent, agentID)
 
 	estate := harness.Estate{CE: ce}
 
@@ -226,7 +226,7 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	}
 
 	endpointID, err := harness.CreateEndpoint(ctx, client, baseURL, creds.APIKey, harness.EndpointSpec{
-		Name:         "docker",
+		Name:         harness.EnvironmentDocker,
 		CreationType: 1,
 		URL:          dindDaemonURL,
 	})
@@ -238,7 +238,7 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	server := harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds, InstanceID: ready.InstanceID}
 	// Recorded under the name "docker" rather than logged and discarded: see
 	// the identical rationale on the agent endpoint in run(), above.
-	server = server.WithEnvironment("docker", endpointID)
+	server = server.WithEnvironment(harness.EnvironmentDocker, endpointID)
 	return server, nil
 }
 
