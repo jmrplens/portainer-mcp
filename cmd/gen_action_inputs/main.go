@@ -1,0 +1,136 @@
+// Command gen_action_inputs generates one Input struct per operation from a
+// vendored OpenAPI specification, one file per domain package under
+// internal/tools.
+//
+// Every tool surface publishes an action's JSON Schema by reflecting it from
+// toolutil.ActionSpec.Input (see internal/toolutil/schema.go), so an Input
+// struct is what turns "441 operations" into 441 real, model-facing
+// parameter shapes rather than one vacuous empty-object schema repeated 441
+// times. Measured against the vendored Business Edition specification: 608
+// parameters across path, query and request-body sources, 100% carrying a
+// description, 419 marked required, 13 enums across 7 operations.
+// Transcribing that by hand into a `jsonschema` struct tag on every one of
+// 441 actions is both enormous and, worse, a second declaration of the same
+// contract the spec already states once — precisely the drift that took the
+// previous incarnation of this server to 37% coverage. See
+// docs/superpowers's design specification and cmd/audit_1to1 for the measured
+// baseline this command exists to close.
+//
+// What this command refuses to do, rather than guess: express a parameter
+// whose schema uses oneOf/anyOf/not (no single Go type represents a union),
+// express a free-form object with no declared properties and no typed
+// additionalProperties, resolve a $ref outside #/components/schemas,
+// generate for an operation whose request body declares more than one
+// content type, or merge two of {path parameter, query parameter, body
+// property} that contribute the same wire name. Every one of these aborts
+// the whole run with the offending operation named — at 441 operations
+// nobody reads the generated output, so anything this command emits must be
+// trustworthy without review, and a refusal that is loud beats a struct that
+// is silently wrong.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "gen_action_inputs: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	fs := flag.NewFlagSet("gen_action_inputs", flag.ContinueOnError)
+	specPath := fs.String("spec", "api/specs/ee-2.44.0.json", "vendored OpenAPI spec to generate Input structs from")
+	toolsDir := fs.String("tools-dir", "internal/tools", "directory holding one subdirectory per domain package")
+	skipDirs := fs.String("skip", "actioncatalog,dynamic,individual,meta",
+		"comma-separated subdirectories of tools-dir that are tool surfaces, not domain packages")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	doc, paths, err := loadDocument(*specPath)
+	if err != nil {
+		return err
+	}
+	byDomain, err := operationsByDomain(paths)
+	if err != nil {
+		return err
+	}
+
+	skip := map[string]bool{}
+	for _, d := range strings.Split(*skipDirs, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			skip[d] = true
+		}
+	}
+
+	entries, err := os.ReadDir(*toolsDir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", *toolsDir, err)
+	}
+	var domains []string
+	for _, e := range entries {
+		if e.IsDir() && !skip[e.Name()] {
+			domains = append(domains, e.Name())
+		}
+	}
+	sort.Strings(domains)
+
+	res := &resolver{doc: doc}
+	written := 0
+	for _, domainName := range domains {
+		ops := byDomain[domainName]
+		if len(ops) == 0 {
+			continue
+		}
+
+		var allStructs []structSpec
+		for _, op := range ops {
+			structName := inputStructName(op.OperationID)
+			var nested []structSpec
+			fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+			if err != nil {
+				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+			}
+			// A parameterless action needs no Input struct at all: ActionSpec.Input
+			// stays nil and InputSchema publishes the empty-object schema — the
+			// pilot domains' system.* actions and registries.list/tags.list are
+			// all of this shape today.
+			if len(fields) == 0 {
+				continue
+			}
+			top := structSpec{
+				Name: structName,
+				Doc: fmt.Sprintf("%s is the parameter shape for operation %s (%s %s).",
+					structName, op.OperationID, op.Method, op.Path),
+				Fields: fields,
+			}
+			allStructs = append(allStructs, top)
+			allStructs = append(allStructs, nested...)
+		}
+		if len(allStructs) == 0 {
+			continue
+		}
+
+		source, err := renderFile(domainName, *specPath, allStructs)
+		if err != nil {
+			return fmt.Errorf("domain %s: %w", domainName, err)
+		}
+
+		outPath := filepath.Join(*toolsDir, domainName, "inputs.gen.go")
+		if err := os.WriteFile(outPath, source, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", outPath, err)
+		}
+		written++
+		fmt.Fprintf(os.Stderr, "wrote %s (%d struct(s) across %d operation(s))\n", outPath, len(allStructs), len(ops))
+	}
+	fmt.Fprintf(os.Stderr, "%d domain file(s) written\n", written)
+	return nil
+}

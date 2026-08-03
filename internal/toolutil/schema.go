@@ -76,11 +76,59 @@ func (s ActionSpec) InputSchema() (map[string]any, error) {
 		return nil, fmt.Errorf("input schema for %s: decode %s: %w", describeAction(s), t, err)
 	}
 
+	if enumer, ok := s.Input.(EnumParams); ok {
+		if err := applyEnumParams(asMap, enumer.EnumParams()); err != nil {
+			return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
+		}
+	}
+
 	schemaCacheMu.Lock()
 	schemaCache[t] = asMap
 	schemaCacheMu.Unlock()
 
 	return deepCopySchema(asMap), nil
+}
+
+// EnumParams optionally lets an Input type declare enum constraints per JSON
+// property name.
+//
+// google/jsonschema-go v0.4.3's reflector (jsonschema.ForType, called by
+// InputSchema below) recognises exactly one struct tag, "jsonschema", and
+// only as free-form description text — see its infer.go, which sets
+// fs.Description from the tag and nothing else. There is no tag syntax for
+// restricting a field to a fixed set of values. An Input whose spec-derived
+// shape includes an enum (cmd/gen_action_inputs measured 13 across 7
+// operations in the vendored Business Edition specification) implements this
+// interface instead of encoding a constraint the library would silently
+// ignore if it were written as a tag.
+type EnumParams interface {
+	// EnumParams returns, for each constrained field's JSON property name,
+	// the exact values that field may hold. A field name absent from the
+	// returned map carries no enum constraint.
+	EnumParams() map[string][]any
+}
+
+// applyEnumParams writes each entry of enums into schema's matching property
+// as JSON Schema's "enum" keyword, mutating schema in place.
+//
+// It refuses — returns an error rather than silently no-op-ing — an entry
+// naming a property the reflected schema does not have: a typo or a stale
+// entry left after a field was renamed would otherwise publish a schema that
+// looks complete while quietly failing to constrain anything, exactly the
+// kind of silent divergence this project's generators exist to avoid.
+func applyEnumParams(schema map[string]any, enums map[string][]any) error {
+	if len(enums) == 0 {
+		return nil
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for name, values := range enums {
+		propSchema, ok := props[name].(map[string]any)
+		if !ok {
+			return fmt.Errorf("EnumParams declares %q, which is not a property of this schema", name)
+		}
+		propSchema["enum"] = values
+	}
+	return nil
 }
 
 // RequiredParams returns the "required" property names from a decoded JSON

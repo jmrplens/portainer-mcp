@@ -61,6 +61,59 @@ func TestInputSchema_NoInput_ReturnsAnEmptyObjectSchema(t *testing.T) {
 	}
 }
 
+// enumInput is a fixture Input implementing EnumParams, standing in for what
+// cmd/gen_action_inputs emits for a spec-declared enum (e.g.
+// registries.registryCreatePayload's "Type").
+type enumInput struct {
+	Type int `json:"type"`
+}
+
+func (enumInput) EnumParams() map[string][]any {
+	return map[string][]any{"type": {1, 2, 3}}
+}
+
+func TestInputSchema_EnumParams_PublishesTheEnumOnItsProperty(t *testing.T) {
+	t.Parallel()
+	schema, err := (ActionSpec{Input: enumInput{}}).InputSchema()
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map[string]any", schema["properties"])
+	}
+	typeSchema, ok := props["type"].(map[string]any)
+	if !ok {
+		t.Fatalf(`properties["type"] = %#v, want map[string]any`, props["type"])
+	}
+	enum, ok := typeSchema["enum"].([]any)
+	if !ok || len(enum) != 3 {
+		t.Fatalf(`properties["type"]["enum"] = %#v, want [1 2 3]`, typeSchema["enum"])
+	}
+}
+
+// enumInputWithUnknownProperty implements EnumParams naming a JSON property
+// the struct does not actually have — a typo, or a field renamed without its
+// EnumParams entry following along.
+type enumInputWithUnknownProperty struct {
+	Type int `json:"type"`
+}
+
+func (enumInputWithUnknownProperty) EnumParams() map[string][]any {
+	return map[string][]any{"typ": {1, 2, 3}} // "typ", not "type"
+}
+
+func TestInputSchema_EnumParams_UnknownProperty_IsRefused(t *testing.T) {
+	t.Parallel()
+	// Silently ignoring this would publish a schema that looks complete
+	// while a caller-facing constraint quietly does nothing — exactly the
+	// kind of divergence between what is published and what is true that
+	// this project's generators exist to prevent.
+	if _, err := (ActionSpec{Input: enumInputWithUnknownProperty{}}).InputSchema(); err == nil {
+		t.Error("InputSchema() error = nil, want a refusal for an EnumParams entry naming an unknown property")
+	}
+}
+
 func TestInputSchema_NonStructInput_IsRefused(t *testing.T) {
 	t.Parallel()
 	// A slice or a bare string would reflect into something no MCP client can

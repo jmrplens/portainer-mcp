@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-discovery e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-discovery e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -114,6 +114,15 @@ fetch-history:
 gen-applicability:
 	go run ./cmd/gen_applicability -history api/specs/history -out internal/apiversion/applicability_gen.go
 	gofmt -w internal/apiversion/applicability_gen.go
+
+# gen-action-inputs regenerates internal/tools/<domain>/inputs.gen.go from the
+# vendored Business Edition specification: one Input struct per operation
+# already declared by a domain package, merging its path parameters, query
+# parameters and request body into the flat, model-facing shape
+# toolutil.ActionSpec.Input expects. See cmd/gen_action_inputs's package doc
+# for what it refuses to guess rather than generate.
+gen-action-inputs:
+	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools
 
 # check-spec verifies the committed specifications still match a fresh fetch.
 # It writes into a temporary directory rather than over api/specs, so a failure

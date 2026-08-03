@@ -128,18 +128,16 @@ func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (
 	return redactList(resp.JSON200), nil
 }
 
-// registryCreateInput is the parameter shape for registries.create.
-type registryCreateInput struct {
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	Type           int    `json:"type"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	TLS            *bool  `json:"tls,omitempty"`
-	BaseURL        string `json:"baseUrl,omitempty"`
-}
-
+// registryCreate's Ecr/Github/Gitlab/Quay/RegistryAccesses fields (all
+// optional, per registries.registryCreatePayload) are declared on the
+// generated registryCreateInput because the spec declares them, but are
+// deliberately not forwarded below: they are provider-specific nested
+// configuration this handler has never populated (the hand-written Input
+// this generator replaced omitted them entirely), and wiring them into
+// apigen's distinct nested types is business logic beyond what a struct
+// generator should decide silently. A caller that sends them today gets no
+// error and no effect — flagged in task-4-report.md as a real gap the
+// generated schema now surfaces that it did not before.
 func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryCreateInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -157,17 +155,11 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 		URL:            params.URL,
 		Type:           apigen.PortainerRegistryType(params.Type),
 		Authentication: params.Authentication,
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		Username:       params.Username,
+		Password:       params.Password,
+		BaseURL:        params.BaseURL,
 	}
 	body.TLS = params.TLS
-	if params.BaseURL != "" {
-		body.BaseURL = &params.BaseURL
-	}
 
 	resp, err := c.API.RegistryCreateWithResponse(ctx, body)
 	if err != nil {
@@ -177,15 +169,6 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 		return nil, fmt.Errorf("registries create: %w", err)
 	}
 	return redact(resp.JSON200), nil
-}
-
-// registryPingInput is the parameter shape for registries.ping.
-type registryPingInput struct {
-	URL      string `json:"url"`
-	Type     int    `json:"type"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	TLS      *bool  `json:"tls,omitempty"`
 }
 
 func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -198,14 +181,10 @@ func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessag
 	}
 
 	body := apigen.RegistryPingJSONRequestBody{
-		URL:  params.URL,
-		Type: apigen.PortainerRegistryType(params.Type),
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		URL:      params.URL,
+		Type:     apigen.PortainerRegistryType(params.Type),
+		Username: params.Username,
+		Password: params.Password,
 	}
 	body.TLS = params.TLS
 
@@ -217,12 +196,6 @@ func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessag
 		return nil, fmt.Errorf("registries ping: %w", err)
 	}
 	return resp.JSON200, nil
-}
-
-// registryInspectInput is the parameter shape for registries.inspect.
-type registryInspectInput struct {
-	ID         int  `json:"id"`
-	EndpointID *int `json:"endpointId,omitempty"`
 }
 
 func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -249,16 +222,11 @@ func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMes
 	return redact(resp.JSON200), nil
 }
 
-// registryUpdateInput is the parameter shape for registries.update.
-type registryUpdateInput struct {
-	ID             int    `json:"id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-}
-
+// registryUpdate's BaseURL/Ecr/Github/Quay/RegistryAccesses fields (all
+// optional, per registries.registryUpdatePayload) are declared on the
+// generated registryUpdateInput because the spec declares them, but — like
+// registryCreate's identical nested fields above — are deliberately not
+// forwarded below; see that function's comment for why.
 func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryUpdateInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -278,12 +246,8 @@ func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMess
 		Name:           params.Name,
 		URL:            params.URL,
 		Authentication: params.Authentication,
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		Username:       params.Username,
+		Password:       params.Password,
 	}
 
 	resp, err := c.API.RegistryUpdateWithResponse(ctx, params.ID, body)
@@ -341,17 +305,13 @@ func redactList(rs *[]apigen.PortainereeRegistry) *[]apigen.PortainereeRegistry 
 	return &out
 }
 
-// registryConfigureInput is the parameter shape for registries.configure.
-type registryConfigureInput struct {
-	ID             int    `json:"id"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	Region         string `json:"region,omitempty"`
-	TLS            *bool  `json:"tls,omitempty"`
-	TLSSkipVerify  *bool  `json:"tlsSkipVerify,omitempty"`
-}
-
+// registryConfigure's TLSCACertFile/TLSCertFile/TLSKeyFile fields (all
+// optional, per registries.registryConfigurePayload) are declared on the
+// generated registryConfigureInput because the spec declares them, but are
+// deliberately not forwarded below, for the same reason as
+// registryCreate's nested fields: this handler never populated them before,
+// and wiring raw certificate bytes through is business logic beyond a
+// struct generator's remit.
 func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryConfigureInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -361,15 +321,11 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 		return nil, fmt.Errorf("registries configure: id must be a positive integer, got %d", params.ID)
 	}
 
-	body := apigen.RegistryConfigureJSONRequestBody{Authentication: params.Authentication}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
-	}
-	if params.Region != "" {
-		body.Region = &params.Region
+	body := apigen.RegistryConfigureJSONRequestBody{
+		Authentication: params.Authentication,
+		Username:       params.Username,
+		Password:       params.Password,
+		Region:         params.Region,
 	}
 	body.TLS = params.TLS
 	body.TLSSkipVerify = params.TLSSkipVerify
@@ -382,11 +338,6 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 		return nil, fmt.Errorf("registries configure: %w", err)
 	}
 	return map[string]any{"configured": true, "id": params.ID}, nil
-}
-
-// registryDeleteInput is the parameter shape for registries.delete.
-type registryDeleteInput struct {
-	ID int `json:"id"`
 }
 
 func registryDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -406,12 +357,6 @@ func registryDelete(ctx context.Context, c *portainer.Client, input json.RawMess
 		return nil, fmt.Errorf("registries delete: %w", err)
 	}
 	return map[string]any{"deleted": true, "id": params.ID}, nil
-}
-
-// ecrDeleteRepositoryInput is the parameter shape for registries.ecr_delete_repository.
-type ecrDeleteRepositoryInput struct {
-	ID             int    `json:"id"`
-	RepositoryName string `json:"repositoryName"`
 }
 
 func ecrDeleteRepository(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -436,18 +381,6 @@ func ecrDeleteRepository(ctx context.Context, c *portainer.Client, input json.Ra
 	return map[string]any{"deleted": true, "id": params.ID, "repositoryName": params.RepositoryName}, nil
 }
 
-// ecrDeleteTagsInput is the parameter shape for registries.ecr_delete_tags.
-//
-// RepositoryName is an integer here, not a string, because the generated
-// method's second parameter is typed int — matching the vendored EE
-// specification for this operation exactly, however unusual that looks next
-// to every other repositoryName in this domain.
-type ecrDeleteTagsInput struct {
-	ID             int      `json:"id"`
-	RepositoryName int      `json:"repositoryName"`
-	Tags           []string `json:"tags,omitempty"`
-}
-
 func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params ecrDeleteTagsInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -470,13 +403,6 @@ func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessa
 		return nil, fmt.Errorf("registries ecr_delete_tags: %w", err)
 	}
 	return map[string]any{"deleted": true, "id": params.ID, "repositoryName": params.RepositoryName}, nil
-}
-
-// repositoryTagsDeleteInput is the parameter shape for registries.repository_tags_delete.
-type repositoryTagsDeleteInput struct {
-	ID             int      `json:"id"`
-	RepositoryName string   `json:"repositoryName"`
-	Tags           []string `json:"tags,omitempty"`
 }
 
 func repositoryTagsDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
