@@ -15,3 +15,11 @@ docs/superpowers/
 # Generator input: 56 near-duplicate spec files (~40 MB), reproducible with
 # `make fetch-history`. The build depends only on the two committed specs.
 api/specs/history/
+
+# e2e estate: written by test/e2e/scripts/up.sh, carries a live API key.
+test/e2e/.estate.json
+test/e2e/.kubeconfig
+
+# Derived from the estate by the provisioner: EDGE_ID/EDGE_KEY for docker
+# compose --env-file, carries a live edge enrolment key.
+test/e2e/.edge.env

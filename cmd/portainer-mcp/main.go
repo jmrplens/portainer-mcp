@@ -18,15 +18,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
-	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/logging"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
-	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/version"
+	"github.com/jmrplens/portainer-mcp/internal/wiring"
 )
-
-const projectRepository = "https://github.com/jmrplens/portainer-mcp"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -38,6 +35,12 @@ func main() {
 // run parses flags, resolves configuration and serves the MCP server until the
 // context is cancelled. It returns an error rather than exiting so that it
 // stays testable.
+//
+// The catalog and server are built through internal/wiring rather than
+// locally: that package is also what the e2e harness calls to build its
+// in-memory servers, so both share the exact same construction path and a
+// harness built a different way cannot hide a defect that only the real
+// wiring has.
 func run(args []string) error {
 	fs := flag.NewFlagSet("portainer-mcp", flag.ContinueOnError)
 	var (
@@ -116,9 +119,9 @@ func run(args []string) error {
 	detectCtx, cancelDetect := context.WithTimeout(ctx, portainer.DefaultCallTimeout)
 	defer cancelDetect()
 
-	catalog, resolvedEdition, serverVersion, err := buildCatalog(detectCtx, cfg, client, logger)
+	catalog, resolvedEdition, serverVersion, err := wiring.BuildCatalog(detectCtx, cfg, client, logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("build action catalog: %w", err)
 	}
 	logger.Info("action catalog built",
 		"edition", resolvedEdition,
@@ -128,7 +131,7 @@ func run(args []string) error {
 
 	deps := tools.Deps{Client: client, Logger: logger, SafeMode: cfg.SafeMode}
 
-	srv, err := newServer(cfg, catalog, deps, resolvedEdition, serverVersion)
+	srv, err := wiring.NewServer(cfg, catalog, deps, resolvedEdition, serverVersion)
 	if err != nil {
 		return fmt.Errorf("build server: %w", err)
 	}
@@ -137,30 +140,4 @@ func run(args []string) error {
 		return fmt.Errorf("serve stdio: %w", err)
 	}
 	return nil
-}
-
-// newServer builds the MCP server for the given configuration, registering
-// the status tool and the configured tool surface projected from catalog.
-//
-// The surface is always obtained through surfaceFor rather than by
-// referencing a surface package directly here: that keeps the mapping from
-// config.ToolSurface to its projection in exactly one place.
-func newServer(cfg *config.Config, catalog *actioncatalog.Catalog, deps tools.Deps, resolvedEdition edition.Edition, serverVersion string) (*mcp.Server, error) {
-	server := mcp.NewServer(&mcp.Implementation{
-		Name:       "portainer-mcp",
-		Title:      "Portainer MCP Server",
-		Version:    version.Version,
-		WebsiteURL: projectRepository,
-	}, &mcp.ServerOptions{
-		Instructions: "portainer-mcp exposes the Portainer REST API as MCP tools for managing " +
-			"container environments, stacks, registries, users, teams and edge deployments.\n\n" +
-			"Call portainer_mcp_status to discover the active tool surface and whether read-only " +
-			"or safe mode is enabled before attempting any mutating operation.",
-	})
-	addStatusTool(server, cfg, catalog, resolvedEdition, serverVersion)
-
-	if err := surfaceFor(cfg.ToolSurface).Register(server, catalog, deps); err != nil {
-		return nil, fmt.Errorf("register tool surface %q: %w", cfg.ToolSurface, err)
-	}
-	return server, nil
 }

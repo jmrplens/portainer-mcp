@@ -1,0 +1,149 @@
+# Two Portainer servers, an agent, and their own Docker daemon. All disposable.
+#
+# The estate runs against Docker-in-Docker rather than the host's socket. That
+# is the difference between an isolated world and the developer's real one: with
+# the host socket mounted, Portainer's "local" environment lists every container
+# on the machine, and P3 will write container, stack and volume actions that
+# delete things. Measured: through dind Portainer sees 0 containers; through the
+# host socket it saw 12, including the developer's own Portainer edge agent.
+# The isolation is the kernel's, not a naming convention the tests have to
+# honour correctly every time.
+#
+# The cost is 23 seconds for the daemon to become ready instead of 1, and one
+# privileged container. Both are acceptable; a delete that reaches a real
+# container is not.
+#
+# Both servers run with --no-setup-token: Portainer 2.44.0 otherwise refuses to
+# create the first administrator without a token printed to its logs. The
+# Kubernetes leg in k3d-up.sh cannot pass the flag and does scrape the logs.
+#
+# One named volume, added in Task 4: dind-var-run. It carries a Unix socket,
+# not state — the estate is still rebuilt from empty every run, and down.sh's
+# `-v` removes it along with everything else.
+#
+# That volume exists because the agent's Docker proxy does not honour
+# DOCKER_HOST. Measured directly: with the agent given nothing but
+# DOCKER_HOST=tcp://docker:2375, its own startup code (engine detection, the
+# self-IP lookup) reaches the dind daemon over that variable just fine, but the
+# handler that actually proxies a registered environment's Docker calls
+# (agent's http/proxy/local.go) dials a hardcoded "unix:///var/run/docker.sock"
+# regardless — there is no flag or environment variable to redirect it. Every
+# attempt to register the agent as an endpoint failed with the same opaque
+# 500 ("Request returned 500 Internal Server Error ... check if the server
+# supports the requested API version"), and the agent's own debug log named
+# the real cause: `msg="Unable to proxy the request via the Docker socket"
+# error="dial unix /var/run/docker.sock: connect: no such file or directory"`.
+# So dind is told to listen on a Unix socket as well as TCP, and that socket is
+# shared with the agent through the named volume below — verified end to end:
+# registration succeeds (Status 1) and GET .../docker/version through the
+# agent's proxy returns the real engine version.
+
+name: portainer-mcp-e2e
+
+volumes:
+  dind-var-run:
+
+services:
+  # The estate's own Docker daemon. Nothing outside this compose project exists
+  # inside it.
+  docker:
+    image: docker:28-dind
+    privileged: true
+    environment:
+      # Plain TCP on an internal network with no published port. Enabling TLS
+      # here would mean provisioning certificates for a daemon unreachable from
+      # outside the compose network.
+      DOCKER_TLS_CERTDIR: ""
+    # TCP for the CE/EE servers' own "docker" endpoint (CreationType 1); the
+    # Unix socket for the agent, over the shared dind-var-run volume. Passing
+    # --host at all replaces dockerd's default host list, so both must be
+    # listed explicitly or the socket disappears.
+    command: ["--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock"]
+    volumes:
+      - dind-var-run:/var/run
+    healthcheck:
+      test: ["CMD", "docker", "-H", "tcp://127.0.0.1:2375", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  portainer-ce:
+    image: portainer/portainer-ce:2.44.0
+    command: ["--no-setup-token"]
+    # Bound to loopback explicitly: Docker binds a bare "host:container" port
+    # mapping to every interface, not just localhost, so the administrator
+    # credentials this harness provisions (see harness.Provision) would
+    # otherwise be reachable, for the run's duration, from anything that can
+    # route to this host — not merely from processes on it. Tests only ever
+    # connect from the host itself, so 127.0.0.1 is all the reachability
+    # this estate needs.
+    ports:
+      - "127.0.0.1:${E2E_CE_PORT:-19000}:9000"
+    depends_on:
+      docker:
+        condition: service_healthy
+
+  portainer-ee:
+    image: portainer/portainer-ee:2.44.0
+    command: ["--no-setup-token"]
+    # See portainer-ce's identical binding above for why.
+    ports:
+      - "127.0.0.1:${E2E_EE_PORT:-19001}:9000"
+    depends_on:
+      docker:
+        condition: service_healthy
+
+  # A second real environment, so endpoint and container actions are exercised
+  # through the agent proxy and not only through a direct daemon connection.
+  # It reaches the estate's daemon through the shared Unix socket (see the
+  # dind-var-run note above), which is what its Docker proxy actually uses;
+  # DOCKER_HOST is kept for the agent's own startup-time engine detection,
+  # which does read it. It logs one warning at startup — "unable to retrieve
+  # agent container IP address" — because it looks for itself inside a daemon
+  # it does not run on, and falls back to 0.0.0.0. That is cosmetic and
+  # expected.
+  portainer-agent:
+    image: portainer/agent:2.44.0
+    environment:
+      AGENT_CLUSTER_ADDR: portainer-agent
+      DOCKER_HOST: tcp://docker:2375
+    volumes:
+      - dind-var-run:/var/run
+    depends_on:
+      docker:
+        condition: service_healthy
+
+  # An Edge Agent, wired in at Task 4 after measuring its check-in latency
+  # against a live estate: three consecutive enrolments checked in at ~19-21s
+  # each, comfortably inside the ~60s threshold the plan set for deciding to
+  # cover the edge domains (edge_stacks, edge_jobs, edge_configs,
+  # edge_update_schedules) with a real agent rather than httptest alone. See
+  # plan/carry-forward.md.
+  #
+  # EDGE_ID and EDGE_KEY do not exist until the provisioner has registered
+  # this environment against EE and the server has issued them — there is no
+  # way to know them upfront the way the other three services' addresses are
+  # known upfront. So this service carries the "edge" profile, which excludes
+  # it from a plain `docker compose up`: up.sh brings up everything else and
+  # runs the provisioner first, then starts this service in a second pass
+  # with EDGE_ID/EDGE_KEY exported from what the provisioner wrote to the
+  # estate file. Business Edition only: with no licence there is no EE server
+  # to poll, and up.sh skips this second pass entirely.
+  edge:
+    image: portainer/agent:2.44.0
+    profiles: ["edge"]
+    environment:
+      EDGE: 1
+      EDGE_ID: ${EDGE_ID:-}
+      EDGE_KEY: ${EDGE_KEY:-}
+      # The tunnel's certificate is self-signed for the same reason the
+      # agent's is (see portainer-agent above): EDGE_INSECURE_POLL is the
+      # edge equivalent of TLSSkipVerify, applied on the polling side rather
+      # than the registering side.
+      EDGE_INSECURE_POLL: 1
+    volumes:
+      - dind-var-run:/var/run
+    depends_on:
+      docker:
+        condition: service_healthy
