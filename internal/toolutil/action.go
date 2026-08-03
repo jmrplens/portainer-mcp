@@ -51,6 +51,27 @@ type ActionSpec struct {
 	// type — one declaration, so the published shape and the parsed shape
 	// cannot drift.
 	Input any
+
+	// Aliases are alternative names a model might reach for instead of Name,
+	// such as a REST verb or a synonym used elsewhere in Portainer's own
+	// documentation. Purely discovery metadata: no surface resolves an
+	// alias to the action, it only helps a model recognise the right one.
+	Aliases []string
+	// Tags group actions by concept across domains — e.g. "kubernetes" or
+	// "audit-log" — independent of Domain, which groups them by meta-tool.
+	Tags []string
+	// Usage is one or two sentences of model-facing guidance on when to
+	// reach for this action instead of a neighbouring one, complementing
+	// Description rather than repeating it.
+	Usage string
+	// RelatedActions names other actions' Name values a model is likely to
+	// need next to, or instead of, this one.
+	RelatedActions []string
+	// ParameterGuidance carries per-parameter discovery metadata, keyed by
+	// the parameter's JSON field name. Populate it directly for anything
+	// genuinely confusable; FillScopeParameterGuidance fills the rest from a
+	// central table of Portainer's well-known identifier names.
+	ParameterGuidance map[string]ParameterGuidance
 }
 
 // Validate reports whether the spec is internally coherent.
