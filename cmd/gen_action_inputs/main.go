@@ -111,11 +111,25 @@ func run(args []string) error {
 			continue
 		}
 
+		domainDir := filepath.Join(*toolsDir, domainName)
+		overrides, err := scanHandOverrides(domainDir)
+		if err != nil {
+			return fmt.Errorf("domain %s: %w", domainName, err)
+		}
+
 		var allStructs []structSpec
+		var handlerSpecs []handlerSpec
+		var overriddenOps []string
 		for _, op := range ops {
 			structName := inputStructName(op.OperationID)
 			var nested []structSpec
-			fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+			// fields and pathOrder are computed exactly once here, from this
+			// one call, and feed both the Input struct below and the
+			// handler built from them further down — see fieldSpec.Origin's
+			// and assembleOperationFields' own doc comments for why a
+			// second, independent derivation of either is refused rather
+			// than risked.
+			fields, pathOrder, err := assembleOperationFields(op, res, doc, structName, &nested)
 			if err != nil {
 				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
 			}
@@ -123,37 +137,86 @@ func run(args []string) error {
 			// stays nil and InputSchema publishes the empty-object schema — the
 			// pilot domains' system.* actions and registries.list/tags.list are
 			// all of this shape today.
-			if len(fields) == 0 {
+			inputStruct := ""
+			if len(fields) > 0 {
+				inputStruct = structName
+				top := structSpec{
+					Name: structName,
+					Doc: fmt.Sprintf("%s is the parameter shape for operation %s (%s %s).",
+						structName, op.OperationID, op.Method, op.Path),
+					Fields: fields,
+				}
+				allStructs = append(allStructs, top)
+				allStructs = append(allStructs, nested...)
+			}
+
+			// The escape hatch: a domain's own non-generated files may
+			// already declare a handler for this operationId (or already
+			// occupy the mechanical function name this generator would
+			// otherwise mint) — recorded here and reported below, never
+			// silently skipped, so a reviewer can see which actions this
+			// generator does not cover.
+			if reason, overridden := overrides.overrideReason(op); overridden {
+				overriddenOps = append(overriddenOps, fmt.Sprintf("%s (%s)", op.OperationID, reason))
 				continue
 			}
-			top := structSpec{
-				Name: structName,
-				Doc: fmt.Sprintf("%s is the parameter shape for operation %s (%s %s).",
-					structName, op.OperationID, op.Method, op.Path),
-				Fields: fields,
+
+			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, inputStruct)
+			if err != nil {
+				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
 			}
-			allStructs = append(allStructs, top)
-			allStructs = append(allStructs, nested...)
-		}
-		if len(allStructs) == 0 {
-			continue
-		}
-		if name, dup := duplicateStructName(allStructs); dup {
-			return fmt.Errorf("domain %s: struct %q would be declared more than once; rename the colliding operation or nested property before generating (go/format only checks syntax and would not catch this)", domainName, name)
+			handlerSpecs = append(handlerSpecs, spec)
 		}
 
-		source, err := renderFile(domainName, *specPath, allStructs)
-		if err != nil {
-			return fmt.Errorf("domain %s: %w", domainName, err)
+		if len(overriddenOps) > 0 {
+			sort.Strings(overriddenOps)
+			fmt.Fprintf(os.Stderr, "domain %s: %d operation(s) already covered by hand-written code, no handler generated:\n", domainName, len(overriddenOps))
+			for _, o := range overriddenOps {
+				fmt.Fprintf(os.Stderr, "  - %s\n", o)
+			}
 		}
 
-		outPath := filepath.Join(*toolsDir, domainName, "inputs.gen.go")
-		if err := os.WriteFile(outPath, source, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", outPath, err)
+		if len(allStructs) > 0 {
+			if name, dup := duplicateStructName(allStructs); dup {
+				return fmt.Errorf("domain %s: struct %q would be declared more than once; rename the colliding operation or nested property before generating (go/format only checks syntax and would not catch this)", domainName, name)
+			}
+
+			source, err := renderFile(domainName, *specPath, allStructs)
+			if err != nil {
+				return fmt.Errorf("domain %s: %w", domainName, err)
+			}
+
+			outPath := filepath.Join(domainDir, "inputs.gen.go")
+			if err := os.WriteFile(outPath, source, 0o600); err != nil {
+				return fmt.Errorf("write %s: %w", outPath, err)
+			}
+			written++
+			fmt.Fprintf(os.Stderr, "wrote %s (%d struct(s) across %d operation(s))\n", outPath, len(allStructs), len(ops))
 		}
-		written++
-		fmt.Fprintf(os.Stderr, "wrote %s (%d struct(s) across %d operation(s))\n", outPath, len(allStructs), len(ops))
+
+		actionsPath := filepath.Join(domainDir, "actions.gen.go")
+		if len(handlerSpecs) > 0 {
+			source, err := renderActionsFile(domainName, *specPath, handlerSpecs)
+			if err != nil {
+				return fmt.Errorf("domain %s: %w", domainName, err)
+			}
+			if err := os.WriteFile(actionsPath, source, 0o600); err != nil {
+				return fmt.Errorf("write %s: %w", actionsPath, err)
+			}
+			written++
+			fmt.Fprintf(os.Stderr, "wrote %s (%d handler(s) across %d operation(s))\n", actionsPath, len(handlerSpecs), len(ops))
+		} else if _, statErr := os.Stat(actionsPath); statErr == nil {
+			// Every operation this domain covers is now hand-written or
+			// overridden: a previously generated actions.gen.go would be
+			// stale rather than merely empty, and CI's freshness check
+			// (git diff --exit-code internal/tools/) is exactly what would
+			// catch a lingering file this run no longer has any content
+			// for.
+			if err := os.Remove(actionsPath); err != nil {
+				return fmt.Errorf("remove stale %s: %w", actionsPath, err)
+			}
+		}
 	}
-	fmt.Fprintf(os.Stderr, "%d domain file(s) written\n", written)
+	fmt.Fprintf(os.Stderr, "%d file(s) written\n", written)
 	return nil
 }

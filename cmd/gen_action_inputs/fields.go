@@ -15,6 +15,14 @@ type structSpec struct {
 	Fields []fieldSpec
 }
 
+// Origin values identify which part of an operation contributed a
+// top-level field: see fieldSpec.Origin's doc comment for why this exists.
+const (
+	originPath  = "path"
+	originQuery = "query"
+	originBody  = "body"
+)
+
 // fieldSpec is one struct field.
 type fieldSpec struct {
 	GoName      string
@@ -22,6 +30,21 @@ type fieldSpec struct {
 	JSONName    string
 	Required    bool
 	Description string
+	// Origin is "path", "query" or "body" for a top-level field returned by
+	// assembleOperationFields — set at the exact point that function already
+	// decides which of the three it is contributing to the merge, so a
+	// generated handler (cmd/gen_action_inputs/handler.go) can route each
+	// field to the generated client's positional path arguments, its
+	// optional query-params struct or its body struct without re-running
+	// that classification itself. Two derivations of which bucket a field
+	// belongs to is precisely the "one fact, derived twice" defect that lost
+	// 127 operations in P3.0 (see toolutil.DomainTags's doc comment) — this
+	// field is what keeps handler.go from repeating that mistake one level
+	// down. Left "" for a nested struct's own fields (assembleFields' other
+	// caller, typeOf), which are never routed individually: a handler
+	// forwards a nested object whole, as one value, to whichever bucket its
+	// parent field belongs to.
+	Origin string
 	// Enum is non-nil when the spec constrains this field to a fixed set of
 	// values. google/jsonschema-go v0.4.3's reflector has no struct-tag
 	// syntax for "enum" — see internal/toolutil/schema.go's EnumParams for
@@ -235,7 +258,22 @@ type mergeSource struct {
 // {path, query, body} — the collision the brief calls out explicitly, since
 // silently letting the later source shadow the earlier one would mean a
 // caller's value for one silently governs both.
-func assembleOperationFields(op operation, res *resolver, doc *document, structPrefix string, structs *[]structSpec) ([]fieldSpec, error) {
+//
+// It returns the operation's flat fields (sorted by
+// JSON name, for deterministic struct rendering — unchanged from before this
+// doc comment) and, separately, pathOrder: the JSON names of every path
+// parameter in the order op.Parameters (and therefore the URL template and
+// the generated client method's own positional arguments — see
+// TestUnit_PathOrder_MatchesDeclarationOrderNotAlphabeticalOrder) declares
+// them. That second return exists only because fields is sorted and path
+// argument order is not alphabetical: /kubernetes/{id}/namespaces/{namespace}/configmaps/{configmap}
+// calls GetKubernetesConfigMapWithResponse(ctx, id, namespace, configmap),
+// not the alphabetical (configmap, id, namespace) — handler.go needs the real
+// order to bind each positional argument correctly, and re-scanning
+// op.Parameters a second time for it, independent of this function's own
+// pass, is exactly the "two derivations of one fact" risk fieldSpec.Origin's
+// doc comment already explains; both are produced by this one pass instead.
+func assembleOperationFields(op operation, res *resolver, doc *document, structPrefix string, structs *[]structSpec) (fields []fieldSpec, pathOrder []string, err error) {
 	byName := map[string]mergeSource{}
 	var order []string
 	add := func(origin string, f fieldSpec) error {
@@ -245,6 +283,9 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		}
 		byName[f.JSONName] = mergeSource{origin: origin, field: f}
 		order = append(order, f.JSONName)
+		if origin == "path parameter" {
+			pathOrder = append(pathOrder, f.JSONName)
+		}
 		return nil
 	}
 
@@ -262,7 +303,7 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			// expected to fire; it exists so a future spec that does use one
 			// fails generation loudly instead of publishing an incomplete
 			// struct.
-			return nil, fmt.Errorf("parameter with no name (possibly a components.parameters $ref, which this generator does not resolve): %v", param)
+			return nil, nil, fmt.Errorf("parameter with no name (possibly a components.parameters $ref, which this generator does not resolve): %v", param)
 		}
 		schemaRaw, _ := param["schema"].(map[string]any)
 		if schemaRaw == nil {
@@ -270,27 +311,28 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		}
 		node, err := res.resolve(schemaRaw, 0)
 		if err != nil {
-			return nil, fmt.Errorf("parameter %q: %w", name, err)
+			return nil, nil, fmt.Errorf("parameter %q: %w", name, err)
 		}
 		if d, ok := param["description"].(string); ok {
 			node.Description = d
 		}
 
 		var origin string
+		var fieldOrigin string
 		var required bool
 		switch in {
 		case "path":
-			origin, required = "path parameter", true // OpenAPI mandates path parameters are always required
+			origin, fieldOrigin, required = "path parameter", originPath, true // OpenAPI mandates path parameters are always required
 		case "query":
-			origin = "query parameter"
+			origin, fieldOrigin = "query parameter", originQuery
 			required, _ = param["required"].(bool)
 		default:
-			return nil, fmt.Errorf("parameter %q: location %q is not supported; only path and query parameters merge into a flat Input", name, in)
+			return nil, nil, fmt.Errorf("parameter %q: location %q is not supported; only path and query parameters merge into a flat Input", name, in)
 		}
 
 		goType, err := typeOf(node, required, structPrefix+goFieldName(splitWords(name)), structs)
 		if err != nil {
-			return nil, fmt.Errorf("%s %q: %w", origin, name, err)
+			return nil, nil, fmt.Errorf("%s %q: %w", origin, name, err)
 		}
 		f := fieldSpec{
 			GoName:      goFieldName(splitWords(name)),
@@ -298,27 +340,28 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			JSONName:    name, // path/query names are already the lower-camel-case OpenAPI declares; used verbatim
 			Required:    required,
 			Description: node.Description,
+			Origin:      fieldOrigin,
 		}
 		if len(node.Enum) > 0 && isEnumScalar(node.Type) {
 			f.Enum = node.Enum
 			f.EnumScalarType = node.Type
 		}
 		if err := add(origin, f); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	bodySchema, err := doc.requestBodySchema(op.RequestBody)
 	if err != nil {
-		return nil, fmt.Errorf("request body: %w", err)
+		return nil, nil, fmt.Errorf("request body: %w", err)
 	}
 	if bodySchema != nil {
 		node, err := res.resolve(bodySchema, 0)
 		if err != nil {
-			return nil, fmt.Errorf("request body: %w", err)
+			return nil, nil, fmt.Errorf("request body: %w", err)
 		}
 		if node.Type != "" && node.Type != "object" {
-			return nil, fmt.Errorf("request body: top-level type %q is not an object; only an object body flattens into named fields", node.Type)
+			return nil, nil, fmt.Errorf("request body: top-level type %q is not an object; only an object body flattens into named fields", node.Type)
 		}
 
 		switch {
@@ -330,11 +373,12 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			// list) is carried through unchanged.
 			bodyFields, err := assembleFields(node.Properties, structPrefix, structs)
 			if err != nil {
-				return nil, fmt.Errorf("request body: %w", err)
+				return nil, nil, fmt.Errorf("request body: %w", err)
 			}
 			for _, f := range bodyFields {
+				f.Origin = originBody
 				if err := add("body", f); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 		case node.MapValue != nil:
@@ -351,7 +395,7 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			// toolutil.scopeParameterDefaults already documents guidance for.
 			valueType, err := typeOf(node.MapValue, true, structPrefix+"Value", structs)
 			if err != nil {
-				return nil, fmt.Errorf("request body: map value: %w", err)
+				return nil, nil, fmt.Errorf("request body: map value: %w", err)
 			}
 			bodyRequired, _ := op.RequestBody["required"].(bool)
 			f := fieldSpec{
@@ -360,9 +404,10 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 				JSONName:    "namespace",
 				Required:    bodyRequired,
 				Description: bodyDescription(op.RequestBody, "Values keyed by Kubernetes namespace."),
+				Origin:      originBody,
 			}
 			if err := add("body", f); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		default:
 			// Neither named properties nor a typed additionalProperties: route
@@ -377,16 +422,16 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			// published the same empty-object schema as a genuinely
 			// parameterless action.
 			if _, err := typeOf(node, true, structPrefix, structs); err != nil {
-				return nil, fmt.Errorf("request body: %w", err)
+				return nil, nil, fmt.Errorf("request body: %w", err)
 			}
-			return nil, fmt.Errorf("request body: resolved to no fields even though a body is present; this generator has a gap for this schema shape")
+			return nil, nil, fmt.Errorf("request body: resolved to no fields even though a body is present; this generator has a gap for this schema shape")
 		}
 	}
 
 	sort.Strings(order)
-	fields := make([]fieldSpec, 0, len(order))
+	fields = make([]fieldSpec, 0, len(order))
 	for _, name := range order {
 		fields = append(fields, byName[name].field)
 	}
-	return fields, nil
+	return fields, pathOrder, nil
 }

@@ -291,7 +291,7 @@ func regenerateInputsFile(t *testing.T, domainName string) []byte {
 	for _, op := range ops {
 		structName := inputStructName(op.OperationID)
 		var nested []structSpec
-		fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+		fields, _, err := assembleOperationFields(op, res, doc, structName, &nested)
 		if err != nil {
 			t.Fatalf("assembleOperationFields(%s): %v", op.OperationID, err)
 		}
