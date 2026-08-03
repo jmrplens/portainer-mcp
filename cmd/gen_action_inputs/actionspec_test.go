@@ -563,3 +563,247 @@ func TestUnit_ApplyNarrative_RegeneratingMechanicalFieldsLeavesHookAuthoredTextU
 		t.Errorf("Tags = %v after editing the hook, want the hook's updated 2-element list", gotEdited.Tags)
 	}
 }
+
+// TestUnit_ApplyNarrative_HookOverridesTitleAndDescription is the standing
+// warning's exact shape, applied to Title/Description: a test that only
+// checked "the overridden text is present" would pass equally against an
+// implementation that concatenates the override onto the spec-derived text.
+// Both fixtures below are chosen so the spec-derived and overridden strings
+// share no long common substring (the real systemInfo case: mechanical
+// "Retrieve system info" vs. hand-authored "Get system information" /
+// "Returns counts of agents and edge agents..."), so a concatenating bug
+// fails the "must NOT contain" assertion rather than slipping through.
+func TestUnit_ApplyNarrative_HookOverridesTitleAndDescription(t *testing.T) {
+	t.Parallel()
+	const (
+		specTitle        = "Retrieve system info"
+		specDescription  = "Retrieve system info"
+		humanTitle       = "Get system information"
+		humanDescription = "Returns counts of agents and edge agents and other instance-wide information about this Portainer server."
+	)
+	hook := func(operationID string) actionNarrative {
+		if operationID != "SystemInfo" {
+			return actionNarrative{}
+		}
+		return actionNarrative{Title: humanTitle, Description: humanDescription}
+	}
+
+	got := applyNarrative(actionSpecFields{OperationID: "SystemInfo", Title: specTitle, Description: specDescription}, hook)
+
+	if got.Title != humanTitle {
+		t.Errorf("Title = %q, want the hook's override %q", got.Title, humanTitle)
+	}
+	if strings.Contains(got.Title, specTitle) {
+		t.Errorf("Title = %q still contains the spec-derived text %q: override must replace, not concatenate", got.Title, specTitle)
+	}
+	if got.Description != humanDescription {
+		t.Errorf("Description = %q, want the hook's override %q", got.Description, humanDescription)
+	}
+	if strings.Contains(got.Description, specDescription) {
+		t.Errorf("Description = %q still contains the spec-derived text %q: override must replace, not concatenate", got.Description, specDescription)
+	}
+}
+
+// TestUnit_ApplyNarrative_EmptyTitleDescriptionInNarrative_KeepsMechanicalValues
+// is the converse: a hook that returns the zero actionNarrative (or simply
+// does not override Title/Description for this operationId) must leave
+// buildActionSpecFields' own values completely alone.
+func TestUnit_ApplyNarrative_EmptyTitleDescriptionInNarrative_KeepsMechanicalValues(t *testing.T) {
+	t.Parallel()
+	hook := func(string) actionNarrative {
+		return actionNarrative{Usage: "some usage text, no Title/Description override"}
+	}
+	got := applyNarrative(actionSpecFields{OperationID: "TagList", Title: "List tags", Description: "List tags."}, hook)
+	if got.Title != "List tags" || got.Description != "List tags." {
+		t.Errorf("Title/Description = %q/%q, want the mechanical values untouched when the hook does not override them", got.Title, got.Description)
+	}
+}
+
+// TestUnit_ApplyNarrative_TitleDescriptionOverride_SurvivesMechanicalRegeneration
+// proves the Title/Description override is subject to the same "regenerating
+// never discards authored text" property as the narrative-only fields:
+// simulating a spec-summary edit (recomputed mechanical Title/Description,
+// hook untouched) must not move the overridden output at all.
+func TestUnit_ApplyNarrative_TitleDescriptionOverride_SurvivesMechanicalRegeneration(t *testing.T) {
+	t.Parallel()
+	hook := func(operationID string) actionNarrative {
+		if operationID != "SystemInfo" {
+			return actionNarrative{}
+		}
+		return actionNarrative{Title: "Get system information", Description: "Returns counts of agents and edge agents and other instance-wide information about this Portainer server."}
+	}
+
+	before := actionSpecFields{OperationID: "SystemInfo", Title: "Retrieve system info", Description: "Retrieve system info"}
+	gotBefore := applyNarrative(before, hook)
+
+	after := before
+	after.Title = "Some regenerated spec-derived title"             // simulates the spec's own summary changing
+	after.Description = "Some regenerated spec-derived description" // simulates the spec's own description changing
+	gotAfter := applyNarrative(after, hook)
+
+	if gotAfter.Title != gotBefore.Title {
+		t.Errorf("Title changed across a mechanical-only regeneration: before %q, after %q — the override must survive untouched", gotBefore.Title, gotAfter.Title)
+	}
+	if gotAfter.Description != gotBefore.Description {
+		t.Errorf("Description changed across a mechanical-only regeneration: before %q, after %q — the override must survive untouched", gotBefore.Description, gotAfter.Description)
+	}
+	if gotAfter.Title == after.Title || gotAfter.Description == after.Description {
+		t.Fatal("the override was not actually applied: got() equals the mechanical (regenerated) value verbatim, so this test proves nothing")
+	}
+}
+
+// TestUnit_DescriptionIsEmpty_RealSystemInfoShape and
+// TestUnit_DescriptionRestatesSummary_RealSharedGitUpdateShape pin the two
+// detectors against the two real, named shapes from the vendored
+// specification the coordinator's own measurement cites.
+func TestUnit_DescriptionIsEmpty_RealSystemInfoShape(t *testing.T) {
+	t.Parallel()
+	op := operation{OperationID: "SystemInfo", Summary: "Retrieve system info", Description: "**Access policy**: authenticated"}
+	if !descriptionIsEmpty(op) {
+		t.Error("descriptionIsEmpty(SystemInfo) = false, want true: nothing survives stripping the access-policy line")
+	}
+	if descriptionRestatesSummary(op) {
+		t.Error("descriptionRestatesSummary(SystemInfo) = true, want false: an empty description is reported under its own heading, not double-counted as a restatement")
+	}
+}
+
+func TestUnit_DescriptionRestatesSummary_RealSharedGitUpdateShape(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "SharedGitUpdate",
+		Summary:     "Update a Shared Git Credential",
+		Description: "Update a shared git credential",
+	}
+	if descriptionIsEmpty(op) {
+		t.Error("descriptionIsEmpty(SharedGitUpdate) = true, want false: it has a real, non-empty description")
+	}
+	if !descriptionRestatesSummary(op) {
+		t.Error("descriptionRestatesSummary(SharedGitUpdate) = false, want true: it differs from its summary only in capitalisation")
+	}
+}
+
+// TestUnit_DescriptionRestatesSummary_GenuinelyDifferentText_IsNotFlagged is
+// the negative case: a description that actually says more than its
+// summary must not be flagged, or every real, well-written description in
+// the specification would show up as a false positive. RegistryList is the
+// real fixture, not tags.create/tags.delete/tags.update — every one of
+// those pilot descriptions turns out to be its summary plus a trailing
+// period, so all three are themselves counted among the measured 74 (see
+// TestUnit_DescriptionQualityByDomain_..., restatesByDomain["tags"] == 3)
+// rather than being a safe negative example.
+func TestUnit_DescriptionRestatesSummary_GenuinelyDifferentText_IsNotFlagged(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "RegistryList",
+		Summary:     "List Registries",
+		Description: "List all registries.\nAdministrators and edge-admins receive the full registry record (minus passwords).\nAll other authenticated users receive a scrubbed record containing only ID, Name, and Type.\n**Access policy**: authenticated",
+	}
+	if descriptionRestatesSummary(op) {
+		t.Error("descriptionRestatesSummary(RegistryList) = true, want false: the description says substantially more than its summary")
+	}
+	if descriptionIsEmpty(op) {
+		t.Error("descriptionIsEmpty(RegistryList) = true, want false: it has real content")
+	}
+}
+
+// TestUnit_DescriptionQualityWarnings_AcrossTheRealEESpecification_MatchesTheMeasuredCounts
+// is this task's own Step against the real vendored specification the
+// coordinator measured against: 94 operations with no description at all,
+// 74 whose description merely restates its summary. Asserting the exact
+// counts (not a range) is what a mutation loosening or tightening either
+// detector would actually be caught by.
+func TestUnit_DescriptionQualityWarnings_AcrossTheRealEESpecification_MatchesTheMeasuredCounts(t *testing.T) {
+	t.Parallel()
+	_, paths, err := loadDocument("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("loadDocument() error = %v", err)
+	}
+	byTag, err := operationsByDomain(paths)
+	if err != nil {
+		t.Fatalf("operationsByDomain() error = %v", err)
+	}
+	var all []operation
+	for _, ops := range byTag {
+		all = append(all, ops...)
+	}
+
+	empty, restatesSummary := descriptionQualityWarnings(all)
+	if len(empty) != 94 {
+		t.Errorf("descriptionQualityWarnings() empty count = %d, want 94 (the coordinator's own measurement against the real EE specification)", len(empty))
+	}
+	if len(restatesSummary) != 74 {
+		t.Errorf("descriptionQualityWarnings() restatesSummary count = %d, want 74", len(restatesSummary))
+	}
+
+	// The two categories must stay disjoint: no operationId appears in both,
+	// since an empty description is reported once, under its own heading.
+	seen := map[string]bool{}
+	for _, line := range empty {
+		seen[line] = true
+	}
+	for _, line := range restatesSummary {
+		if seen[line] {
+			t.Errorf("line %q appears in both the empty and restatesSummary reports, want the categories disjoint", line)
+		}
+	}
+}
+
+// TestUnit_DescriptionQualityByDomain_AcrossTheRealEESpecification_MatchesTheMeasuredDistribution
+// answers the coordinator's own question directly: do the 94 empty
+// descriptions cluster in a few domains, or spread evenly across all 44?
+// Measured directly against the real specification (not asserted from this
+// task's own report): they cluster. Four domains — edge_stacks (17),
+// edge_jobs (11), backup (10), edge_update_schedules (7) — account for 45
+// of the 94 (48%), and the full 94 span only 20 of the 44 domains.
+func TestUnit_DescriptionQualityByDomain_AcrossTheRealEESpecification_MatchesTheMeasuredDistribution(t *testing.T) {
+	t.Parallel()
+	if err := toolutil.ValidateDomainTags(toolutil.DomainTags); err != nil {
+		t.Fatalf("toolutil.ValidateDomainTags() error = %v", err)
+	}
+	_, paths, err := loadDocument("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("loadDocument() error = %v", err)
+	}
+	byTag, err := operationsByDomain(paths)
+	if err != nil {
+		t.Fatalf("operationsByDomain() error = %v", err)
+	}
+
+	emptyByDomain, restatesByDomain := descriptionQualityByDomain(byTag, toolutil.DomainTags)
+
+	wantEmpty := map[string]int{
+		"edge_stacks": 17, "edge_jobs": 11, "backup": 10, "edge_update_schedules": 7,
+		"helm": 6, "docker": 5, "endpoints": 5, "edge_groups": 5, "webhooks": 5,
+		"stacks": 4, "licenses": 4, "edge_agent": 3, "ldap": 3, "auth": 2, "system": 2,
+		"auto_updates": 1, "edge_configurations": 1, "endpoint_groups": 1, "motd": 1, "support": 1,
+	}
+	for domain, want := range wantEmpty {
+		if got := emptyByDomain[domain]; got != want {
+			t.Errorf("emptyByDomain[%q] = %d, want %d", domain, got, want)
+		}
+	}
+	var totalEmpty int
+	for _, n := range emptyByDomain {
+		totalEmpty += n
+	}
+	if totalEmpty != 94 {
+		t.Errorf("total across emptyByDomain = %d, want 94", totalEmpty)
+	}
+	if len(emptyByDomain) != 20 {
+		t.Errorf("empty descriptions span %d domains, want 20 of the 44 total (i.e. clustered, not spread evenly)", len(emptyByDomain))
+	}
+
+	wantRestatesTop := map[string]int{"kubernetes": 9, "settings": 9, "cloud": 7, "custom_templates": 7}
+	for domain, want := range wantRestatesTop {
+		if got := restatesByDomain[domain]; got != want {
+			t.Errorf("restatesByDomain[%q] = %d, want %d", domain, got, want)
+		}
+	}
+	var totalRestates int
+	for _, n := range restatesByDomain {
+		totalRestates += n
+	}
+	if totalRestates != 74 {
+		t.Errorf("total across restatesByDomain = %d, want 74", totalRestates)
+	}
+}

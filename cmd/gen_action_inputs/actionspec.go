@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -103,8 +104,23 @@ func cleanTitleAndDescription(op operation) (title, description string, err erro
 	if title == "" {
 		return "", "", fmt.Errorf("operation has no summary to derive Title from")
 	}
+	description = stripAccessPolicyLines(op.Description)
+	if description == "" {
+		description = title
+	}
+	return title, description, nil
+}
 
-	lines := strings.Split(op.Description, "\n")
+// stripAccessPolicyLines removes every line of raw starting with
+// accessPolicyPrefix and trims the remainder — the one piece of
+// cleanTitleAndDescription's own logic that descriptionIsEmpty and
+// descriptionRestatesSummary below also need, extracted so both can tell
+// "the specification truly has nothing here" apart from "there is
+// something, but cleanTitleAndDescription's fallback happens to make it
+// equal Title" — a distinction cleanTitleAndDescription's own return value
+// alone cannot make once the fallback has already been applied.
+func stripAccessPolicyLines(raw string) string {
+	lines := strings.Split(raw, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), accessPolicyPrefix) {
@@ -112,11 +128,120 @@ func cleanTitleAndDescription(op operation) (title, description string, err erro
 		}
 		kept = append(kept, line)
 	}
-	description = strings.TrimSpace(strings.Join(kept, "\n"))
-	if description == "" {
-		description = title
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// normalizeForComparison folds s to its bare lowercase letters and digits,
+// discarding everything else, so two strings that differ only in
+// capitalisation or punctuation compare equal — SharedGitUpdate's real
+// shape in the vendored specification: summary "Update a Shared Git
+// Credential", description "Update a shared git credential".
+func normalizeForComparison(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
 	}
-	return title, description, nil
+	return b.String()
+}
+
+// descriptionIsEmpty reports whether op's own description, once
+// access-policy boilerplate is stripped, carries nothing at all — the
+// operation for which cleanTitleAndDescription's own fallback makes
+// Description literally equal Title, so a model reads the same sentence
+// twice and learns nothing from the second reading. Measured against the
+// real EE specification: 94 of 441 operations.
+func descriptionIsEmpty(op operation) bool {
+	return stripAccessPolicyLines(op.Description) == ""
+}
+
+// descriptionRestatesSummary reports whether op's own description, once
+// access-policy boilerplate is stripped, says nothing beyond its summary —
+// differing only in capitalisation or punctuation. Worse than an empty
+// description in the same way: it reads as authored content until compared
+// against the summary. A description that is empty outright is reported by
+// descriptionIsEmpty instead, so this returns false for one, keeping the two
+// categories disjoint rather than double-counting the same operation under
+// both headings. Measured against the real EE specification: 74 of 441
+// operations (SharedGitUpdate is the real, named example — see this
+// function's own doc comment on normalizeForComparison).
+func descriptionRestatesSummary(op operation) bool {
+	desc := stripAccessPolicyLines(op.Description)
+	if desc == "" {
+		return false
+	}
+	return normalizeForComparison(desc) == normalizeForComparison(op.Summary)
+}
+
+// tagToDomain inverts domainTags (domain -> OpenAPI tag(s), toolutil.DomainTags'
+// own shape) into tag -> domain, for grouping a per-operation warning by the
+// domain package name a model and a domain author would recognise rather
+// than the raw OpenAPI tag op.Domain carries — "cloud_credentials" reads as
+// "cloud", "license" as "licenses", "edge_configs" as "edge_configurations".
+// Every caller here runs after toolutil.ValidateDomainTags, which already
+// guarantees no tag is claimed by two domains, so this mapping is
+// unambiguous by construction rather than something this function itself
+// needs to re-check.
+func tagToDomain(domainTags map[string][]string) map[string]string {
+	out := make(map[string]string, len(domainTags))
+	for domain, tags := range domainTags {
+		for _, tag := range tags {
+			out[tag] = domain
+		}
+	}
+	return out
+}
+
+// descriptionQualityWarnings returns one report line per operation in ops
+// flagged by descriptionIsEmpty, and one per operation flagged by
+// descriptionRestatesSummary, both sorted for deterministic output — the
+// two headings a wave reads before deciding which descriptions in its own
+// domains are worth hand-writing, the same shape dangerMismatchWarnings
+// already reports danger-flag mismatches under.
+func descriptionQualityWarnings(ops []operation) (empty, restatesSummary []string) {
+	for _, op := range ops {
+		switch {
+		case descriptionIsEmpty(op):
+			empty = append(empty, fmt.Sprintf("%s %s (operationId %s): no description beyond stripped boilerplate; Description currently falls back to repeating Title",
+				op.Method, op.Path, op.OperationID))
+		case descriptionRestatesSummary(op):
+			restatesSummary = append(restatesSummary, fmt.Sprintf("%s %s (operationId %s): description merely restates its summary in different capitalisation or punctuation",
+				op.Method, op.Path, op.OperationID))
+		}
+	}
+	sort.Strings(empty)
+	sort.Strings(restatesSummary)
+	return empty, restatesSummary
+}
+
+// descriptionQualityByDomain groups descriptionIsEmpty's and
+// descriptionRestatesSummary's counts by domain (via tagToDomain), across
+// byTag — every operation this generator's domain processing enumerates,
+// grouped by OpenAPI tag exactly the way operationsByDomain already returns
+// it. This is what answers "do the 94 cluster in a few domains, or spread
+// evenly across all 44" — the question that decides whether writing better
+// descriptions is a small, concentrated piece of authoring or a cost every
+// wave carries evenly.
+func descriptionQualityByDomain(byTag map[string][]operation, domainTags map[string][]string) (emptyByDomain, restatesByDomain map[string]int) {
+	toDomain := tagToDomain(domainTags)
+	emptyByDomain = map[string]int{}
+	restatesByDomain = map[string]int{}
+	for tag, ops := range byTag {
+		domain, ok := toDomain[tag]
+		if !ok {
+			continue // an unmapped tag is checkDomainTagsCoverSpec's refusal to make, not this function's
+		}
+		for _, op := range ops {
+			switch {
+			case descriptionIsEmpty(op):
+				emptyByDomain[domain]++
+			case descriptionRestatesSummary(op):
+				restatesByDomain[domain]++
+			}
+		}
+	}
+	return emptyByDomain, restatesByDomain
 }
 
 // dangerFlags derives the three ActionSpec danger flags from an operation's
@@ -247,14 +372,34 @@ func dangerMismatchWarnings(ops []operation) []string {
 	return warnings
 }
 
-// actionNarrative carries the ActionSpec fields no specification determines:
-// Usage, RelatedActions, Aliases, Tags and any ParameterGuidance beyond the
-// central defaults toolutil.FillScopeParameterGuidance already applies. A
-// specification says nothing about which action a model should reach for
-// next, or what a caller elsewhere in Portainer's own documentation calls
-// the same operation — that is domain judgement, authored once by hand and
-// never regenerated.
+// actionNarrative carries the ActionSpec fields a domain author may supply
+// by hand: Usage, RelatedActions, Aliases, Tags and any ParameterGuidance
+// beyond the central defaults toolutil.FillScopeParameterGuidance already
+// applies — none of which any specification determines at all — plus Title
+// and Description, which the specification does determine (see
+// cleanTitleAndDescription) but which a domain may still override when it
+// judges the specification's own wording is genuinely poor.
+//
+// That override is deliberately an escape hatch, not the default path:
+// measured across all 441 operations in the vendored EE specification,
+// every one has a summary, but 94 have no description at all once
+// boilerplate is stripped (descriptionIsEmpty) and a further 74 differ from
+// their own summary only in capitalisation or punctuation
+// (descriptionRestatesSummary) — see descriptionQualityWarnings and
+// descriptionQualityByDomain, which report exactly these two sets so a wave
+// can decide, per domain, which ones are worth writing by hand rather than
+// discovering them one at a time. Nowhere near a scale that justifies
+// hand-authoring all 441 up front.
+//
+// Title and Description are both zero-value ("") when a domain has not
+// overridden them, which applyNarrative treats as "use the mechanical
+// value" — an override is a full replacement of that field, never a
+// prefix, suffix or merge; a domain that wants to keep the spec's title but
+// override only the description sets Description alone and leaves Title
+// empty.
 type actionNarrative struct {
+	Title             string
+	Description       string
 	Usage             string
 	RelatedActions    []string
 	Aliases           []string
@@ -310,11 +455,24 @@ type generatedActionSpec struct {
 // Aliases, RelatedActions or ParameterGuidance — is what keeps a
 // regeneration from being able to discard authored text: there is no
 // generated literal to discard.
+//
+// A non-empty narrative.Title or narrative.Description *replaces*
+// buildActionSpecFields' own value for that field entirely — never
+// concatenated, prefixed or suffixed onto it. fields itself (the local
+// copy) is mutated rather than generatedActionSpec's embedded fields being
+// patched after construction, so there is exactly one place either field's
+// final value is decided.
 func applyNarrative(fields actionSpecFields, hook narrativeHook) generatedActionSpec {
 	if hook == nil {
 		hook = noNarrative
 	}
 	narrative := hook(fields.OperationID)
+	if narrative.Title != "" {
+		fields.Title = narrative.Title
+	}
+	if narrative.Description != "" {
+		fields.Description = narrative.Description
+	}
 	return generatedActionSpec{
 		actionSpecFields:  fields,
 		Usage:             narrative.Usage,
