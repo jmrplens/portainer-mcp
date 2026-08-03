@@ -312,6 +312,131 @@ func TestAccessors_ReturnCopies_SoCallersCannotCorruptTheCatalog(t *testing.T) {
 	}
 }
 
+// specWithDiscoveryMetadata is the fixture TestCatalogAccessors_* needs and
+// spec() alone cannot provide: every pilot domain (system, tags, registries)
+// declares its specs with Aliases and ParameterGuidance left unset, so a
+// spec built from spec() alone has a nil slice and a nil map. Asserting that
+// mutating a returned Aliases or ParameterGuidance does not reach the
+// catalog is meaningless against those zero values — append(nil-slice,
+// "x") never aliases the original nil, and indexing into a nil map is a
+// read, not a write a clone could fail to isolate. This fixture gives both
+// fields real, non-empty content so the mutation below actually exercises
+// cloneActionSpec's slice- and map-copying, not merely its handling of zero
+// values.
+func specWithDiscoveryMetadata(name, domain, operationID string, ed edition.Edition) toolutil.ActionSpec {
+	s := spec(name, domain, operationID, ed)
+	s.Aliases = []string{"original-alias"}
+	s.ParameterGuidance = map[string]toolutil.ParameterGuidance{
+		"id": {SemanticRole: "original"},
+	}
+	return s
+}
+
+// TestCatalogAccessors_DoNotShareSliceOrMapMemory guards the knock-on Task 1
+// introduced silently: ActionSpec grew slice and map fields, and Actions,
+// ByDomain and Lookup used to return copies that only isolated scalar
+// fields. A caller that grows a returned spec's Aliases or writes into its
+// ParameterGuidance must never be able to reach what the catalog itself
+// stores — the very isolation every other surface's shared-catalog
+// assumption depends on.
+func TestCatalogAccessors_DoNotShareSliceOrMapMemory(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{
+		specWithDiscoveryMetadata("tags.list", "tags", "TagList", edition.CE),
+	}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// Sanity guard: if the fixture ever regresses to an empty Aliases or a nil
+	// ParameterGuidance, the mutations below would silently exercise nothing,
+	// exactly the non-discriminating-test trap this task is warned about.
+	actions := c.Actions()
+	if len(actions[0].Aliases) == 0 {
+		t.Fatal("fixture has no Aliases; the mutation below would prove nothing")
+	}
+	if actions[0].ParameterGuidance == nil {
+		t.Fatal("fixture has no ParameterGuidance; the mutation below would prove nothing")
+	}
+
+	actions[0].Aliases[0] = "corrupted"
+	actions[0].ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+
+	again := c.Actions()
+	if again[0].Aliases[0] == "corrupted" {
+		t.Error("Actions() shares Aliases slice memory with the catalog")
+	}
+	if _, leaked := again[0].ParameterGuidance["injected"]; leaked {
+		t.Error("Actions() shares ParameterGuidance map memory with the catalog")
+	}
+}
+
+// TestByDomainAccessor_DoesNotShareSliceOrMapMemory is the same guard for
+// ByDomain, which Actions' own test cannot cover: ByDomain reads from a
+// different backing slice (c.byDomain) than Actions does (c.ordered), so a
+// clone applied to one and forgotten on the other would pass every Actions
+// test while still leaking through ByDomain.
+func TestByDomainAccessor_DoesNotShareSliceOrMapMemory(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{
+		specWithDiscoveryMetadata("tags.list", "tags", "TagList", edition.CE),
+	}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	byDomain := c.ByDomain("tags")
+	if len(byDomain[0].Aliases) == 0 || byDomain[0].ParameterGuidance == nil {
+		t.Fatal("fixture lost its Aliases or ParameterGuidance; the mutation below would prove nothing")
+	}
+
+	byDomain[0].Aliases[0] = "corrupted"
+	byDomain[0].ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+
+	again := c.ByDomain("tags")
+	if again[0].Aliases[0] == "corrupted" {
+		t.Error("ByDomain() shares Aliases slice memory with the catalog")
+	}
+	if _, leaked := again[0].ParameterGuidance["injected"]; leaked {
+		t.Error("ByDomain() shares ParameterGuidance map memory with the catalog")
+	}
+}
+
+// TestLookupAccessor_DoesNotShareSliceOrMapMemory is the same guard for
+// Lookup, which reads from yet another backing map (c.byName) that Build
+// populates independently of c.ordered and c.byDomain.
+func TestLookupAccessor_DoesNotShareSliceOrMapMemory(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{
+		specWithDiscoveryMetadata("tags.list", "tags", "TagList", edition.CE),
+	}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	found, ok := c.Lookup("tags.list")
+	if !ok {
+		t.Fatal("Lookup(tags.list) = false, want the action present")
+	}
+	if len(found.Aliases) == 0 || found.ParameterGuidance == nil {
+		t.Fatal("fixture lost its Aliases or ParameterGuidance; the mutation below would prove nothing")
+	}
+
+	found.Aliases[0] = "corrupted"
+	found.ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+
+	again, ok := c.Lookup("tags.list")
+	if !ok {
+		t.Fatal("Lookup(tags.list) = false on the second call")
+	}
+	if again.Aliases[0] == "corrupted" {
+		t.Error("Lookup() shares Aliases slice memory with the catalog")
+	}
+	if _, leaked := again.ParameterGuidance["injected"]; leaked {
+		t.Error("Lookup() shares ParameterGuidance map memory with the catalog")
+	}
+}
+
 func TestBuild_UnknownEdition_ReturnsError(t *testing.T) {
 	t.Parallel()
 	_, err := Build([]toolutil.ActionSpec{spec("tags.list", "tags", "TagList", edition.CE)},

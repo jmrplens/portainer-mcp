@@ -177,26 +177,72 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 
 // Actions returns every action in the catalog, sorted by name.
 //
-// The slice is a copy: one catalog is shared by every surface, so handing out
-// the internal one would let any consumer corrupt what the others see.
+// Every element is a deep copy: one catalog is shared by every surface, so
+// handing out the internal slices and maps a spec now carries (Aliases, Tags,
+// RelatedActions, ParameterGuidance) would let any consumer corrupt what the
+// others see. A shallow top-level slice copy stopped being enough the moment
+// ActionSpec grew composite fields — see cloneActionSpec.
 func (c *Catalog) Actions() []toolutil.ActionSpec {
-	return append([]toolutil.ActionSpec(nil), c.ordered...)
+	return cloneActionSpecs(c.ordered)
 }
 
 // Domains returns the domain names present, sorted.
+//
+// A plain copy is enough here: unlike ActionSpec, a string cannot be mutated
+// through a returned value, so there is nothing nested for a caller to reach
+// into.
 func (c *Catalog) Domains() []string {
 	return append([]string(nil), c.domains...)
 }
 
-// ByDomain returns one domain's actions, sorted by name. The slice is a copy.
+// ByDomain returns one domain's actions, sorted by name. Every element is a
+// deep copy, for the same reason as Actions.
 func (c *Catalog) ByDomain(domain string) []toolutil.ActionSpec {
-	return append([]toolutil.ActionSpec(nil), c.byDomain[domain]...)
+	return cloneActionSpecs(c.byDomain[domain])
 }
 
-// Lookup finds an action by its canonical name.
+// Lookup finds an action by its canonical name. The returned spec is a deep
+// copy, for the same reason as Actions: a caller that grew found.Aliases or
+// found.ParameterGuidance in place must not reach the catalog's own copy.
 func (c *Catalog) Lookup(name string) (toolutil.ActionSpec, bool) {
 	spec, ok := c.byName[name]
-	return spec, ok
+	if !ok {
+		return toolutil.ActionSpec{}, false
+	}
+	return cloneActionSpec(spec), true
+}
+
+// cloneActionSpec deep-copies the slice and map fields ActionSpec carries, so
+// that mutating the result can never reach what the catalog stores internally.
+//
+// Handler and Input are deliberately left as-is: Handler is a function value
+// with no mutable state of its own, and Input is read only through
+// ActionSpec.InputSchema, which already returns its own defensive deep copy —
+// cloning Input here would protect nothing an existing caller depends on.
+func cloneActionSpec(spec toolutil.ActionSpec) toolutil.ActionSpec {
+	spec.Aliases = append([]string(nil), spec.Aliases...)
+	spec.Tags = append([]string(nil), spec.Tags...)
+	spec.RelatedActions = append([]string(nil), spec.RelatedActions...)
+	if spec.ParameterGuidance != nil {
+		cloned := make(map[string]toolutil.ParameterGuidance, len(spec.ParameterGuidance))
+		for name, guidance := range spec.ParameterGuidance {
+			guidance.CommonConfusions = append([]string(nil), guidance.CommonConfusions...)
+			cloned[name] = guidance
+		}
+		spec.ParameterGuidance = cloned
+	}
+	return spec
+}
+
+// cloneActionSpecs applies cloneActionSpec to every element of specs,
+// returning a new slice: the slice itself must be independent too, or
+// appending to one caller's result could reorder what another caller sees.
+func cloneActionSpecs(specs []toolutil.ActionSpec) []toolutil.ActionSpec {
+	out := make([]toolutil.ActionSpec, len(specs))
+	for i, spec := range specs {
+		out[i] = cloneActionSpec(spec)
+	}
+	return out
 }
 
 // RenderToolName renders an action's canonical name as an MCP tool name, by

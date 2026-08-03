@@ -258,6 +258,85 @@ func TestCallTool_OmittedInput_HandlerReceivesEmptyObject(t *testing.T) {
 	}
 }
 
+// TestIndividual_PublishesTheRealInputSchema is the defining property this
+// task adds: before it, every surface published
+// {"additionalProperties":true,"type":"object"} for every action regardless
+// of its real shape, so a model had to guess parameters from the
+// description and read the error to learn what was wrong. tags.create's
+// tagCreateInput has a required "name" field, which is exactly what a
+// published-but-still-permissive schema (a real "properties" map alongside
+// "additionalProperties":true) could not distinguish from the placeholder —
+// this test checks both properties, not just one.
+func TestIndividual_PublishesTheRealInputSchema(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var tool *mcp.Tool
+	for _, tt := range res.Tools {
+		if tt.Name == "portainer_tags_create" {
+			tool = tt
+		}
+	}
+	if tool == nil {
+		t.Fatal("portainer_tags_create is not registered")
+	}
+
+	schema, ok := tool.InputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("InputSchema = %#v, want a map[string]any", tool.InputSchema)
+	}
+	if additional, permissive := schema["additionalProperties"]; permissive && additional == true {
+		t.Error("the individual surface still publishes the permissive placeholder")
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("input schema has no \"name\" property: %v", schema)
+	}
+}
+
+// TestIndividual_NoInputAction_PublishesAnEmptyObjectSchema guards the other
+// half of the same property: an action with no parameters must still
+// publish a real, closed schema — {"type":"object","properties":{}} with
+// additionalProperties false — not the permissive placeholder either. system
+// has no domain actions that take parameters, which makes it the fixture for
+// this half.
+func TestIndividual_NoInputAction_PublishesAnEmptyObjectSchema(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"}))
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var tool *mcp.Tool
+	for _, tt := range res.Tools {
+		if tt.Name == "portainer_system_info" {
+			tool = tt
+		}
+	}
+	if tool == nil {
+		t.Fatal("portainer_system_info is not registered")
+	}
+	schema, ok := tool.InputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("InputSchema = %#v, want a map[string]any", tool.InputSchema)
+	}
+	if additional, permissive := schema["additionalProperties"]; !permissive || additional != false {
+		t.Errorf("additionalProperties = %v, want the closed schema false, not the permissive placeholder", schema["additionalProperties"])
+	}
+}
+
 // TestCallTool_SafeMode_InterceptsThroughTheIndividualSurface is the guard
 // against a surface that calls handlers directly. Every surface must route
 // through tools.Execute, which is where safe mode and the nil-client check

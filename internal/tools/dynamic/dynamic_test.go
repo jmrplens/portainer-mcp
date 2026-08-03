@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -183,6 +185,157 @@ func TestExecuteAction_SafeMode_Intercepts(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "safe mode") {
 		t.Error("safe mode did not intercept through the dynamic surface")
+	}
+}
+
+// TestFind_MatchesCarryTheirSchemaAndRequiredParameters is the reason this
+// surface's default status makes token cost a non-issue: find only ever
+// returns schemas for the matches a query produced, never for the whole
+// catalog, so the surface can publish the real shape unconditionally.
+// system.update has no Input struct, so this exercises tags.create instead,
+// via the "tags" package's real, already-declared tagCreateInput.
+func TestFind_MatchesCarryTheirSchemaAndRequiredParameters(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "create tag"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "tags.create" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("tags.create was not among the matches for \"create tag\"")
+	}
+	if found.InputSchema == nil {
+		t.Fatal("find returned a match with no schema; the model still has to guess")
+	}
+	if !slices.Contains(found.RequiredParams, "name") {
+		t.Errorf("RequiredParams = %v, want it to name the required parameter", found.RequiredParams)
+	}
+	props, _ := found.InputSchema["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("InputSchema has no \"name\" property: %v", found.InputSchema)
+	}
+}
+
+// TestFind_MatchesCarryAnExample guards the third field this task adds: an
+// illustrative value per parameter, so a model calling execute has something
+// concrete to shape its call around.
+func TestFind_MatchesCarryAnExample(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "create tag"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "tags.create" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("tags.create was not among the matches for \"create tag\"")
+	}
+	if _, ok := found.Example["name"]; !ok {
+		t.Errorf("Example = %v, want it to carry a value for \"name\"", found.Example)
+	}
+}
+
+// TestFindAction_NoInputAction_CarriesNoRequiredParamsOrExample guards the
+// other half: an action with no parameters must publish an input schema
+// (an empty, closed object, never nil), but neither RequiredParams nor
+// Example, since there is nothing to require or illustrate.
+func TestFindAction_NoInputAction_CarriesNoRequiredParamsOrExample(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, tools.Deps{}))
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "system version"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "system.version" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("system.version was not among the matches")
+	}
+	if found.InputSchema == nil {
+		t.Error("InputSchema = nil, want a real (empty) schema, not an absent one")
+	}
+	if len(found.RequiredParams) != 0 {
+		t.Errorf("RequiredParams = %v, want none for an action that takes no parameters", found.RequiredParams)
+	}
+	if found.Example != nil {
+		t.Errorf("Example = %v, want none for an action that takes no parameters", found.Example)
+	}
+}
+
+// TestFind_DescriptionNoLongerDisclaimsTheSchema guards against reverting to
+// P2's honest-at-the-time wording: it was accurate when schemas were not
+// published, and would now send a model back to guessing when they are.
+func TestFind_DescriptionNoLongerDisclaimsTheSchema(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, tools.Deps{}))
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var description string
+	for _, tool := range res.Tools {
+		if tool.Name == "portainer_find_action" {
+			description = tool.Description
+		}
+	}
+	if description == "" {
+		t.Fatal("portainer_find_action is not registered")
+	}
+	if strings.Contains(description, "not yet published") {
+		t.Error("find still tells the model its parameter shapes are unpublished")
 	}
 }
 

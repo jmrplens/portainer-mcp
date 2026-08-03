@@ -48,14 +48,23 @@ type ExecuteInput struct {
 }
 
 // match is one search result.
+//
+// InputSchema, RequiredParams and Example are what make this surface's token
+// cost acceptable at 441 actions: find only ever returns them for the
+// handful of matches a query produced, never for the whole catalog, so
+// publishing the full shape here costs nothing the surface wasn't already
+// paying to describe the match at all.
 type match struct {
-	Action      string `json:"action"`
-	Domain      string `json:"domain"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Mutating    bool   `json:"mutating"`
-	Destructive bool   `json:"destructive"`
-	score       int
+	Action         string         `json:"action"`
+	Domain         string         `json:"domain"`
+	Title          string         `json:"title"`
+	Description    string         `json:"description"`
+	Mutating       bool           `json:"mutating"`
+	Destructive    bool           `json:"destructive"`
+	InputSchema    map[string]any `json:"inputSchema"`
+	RequiredParams []string       `json:"requiredParams,omitempty"`
+	Example        map[string]any `json:"example,omitempty"`
+	score          int
 }
 
 // findResult wraps the matches so a truncated result can say so. A model that
@@ -71,7 +80,7 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "portainer_find_action",
 		Title:       "Find a Portainer action",
-		Description: "Searches the available Portainer actions and returns those matching your query. Call this first, then pass the chosen action's canonical name to portainer_execute_action. Results say whether an action mutates or destroys state. Parameter shapes are not yet published — pass the parameters the action's description implies and read the error if they are wrong.",
+		Description: "Searches the available Portainer actions and returns those matching your query. Call this first, then pass the chosen action's canonical name to portainer_execute_action. Results say whether an action mutates or destroys state, and each match carries its full parameter JSON Schema, which of those parameters are required, and an example value for each — use them instead of guessing.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in FindInput) (*mcp.CallToolResult, any, error) {
 		matches := search(catalog.Actions(), in.Query)
@@ -168,10 +177,12 @@ func search(specs []toolutil.ActionSpec, query string) []match {
 		if score == 0 {
 			continue
 		}
+		schema, required, example := schemaDetails(spec)
 		out = append(out, match{
 			Action: spec.Name, Domain: spec.Domain, Title: spec.Title,
 			Description: spec.Description, Mutating: spec.Mutating,
 			Destructive: spec.Destructive, score: score,
+			InputSchema: schema, RequiredParams: required, Example: example,
 		})
 	}
 
@@ -182,6 +193,68 @@ func search(specs []toolutil.ActionSpec, query string) []match {
 		return out[i].Action < out[j].Action
 	})
 	return out
+}
+
+// schemaDetails computes the three parameter-shape fields a match carries:
+// its input schema, the required parameter names within it, and an
+// illustrative example. actioncatalog.Build already runs spec.Validate before
+// any action reaches a catalog, which guarantees Input is nil or a struct —
+// the only cases InputSchema can fail on — so an error here would mean a
+// defect elsewhere in the catalog, not bad input a caller of search supplied.
+// Rather than fail the whole find call over one such spec, this degrades to
+// no schema for that match alone.
+func schemaDetails(spec toolutil.ActionSpec) (schema map[string]any, required []string, example map[string]any) {
+	schema, err := spec.InputSchema()
+	if err != nil {
+		return nil, nil, nil
+	}
+	return schema, toolutil.RequiredParams(schema), exampleFor(spec, schema)
+}
+
+// exampleFor builds a single illustrative value per property in schema, so a
+// model calling execute has something concrete to shape its call around
+// instead of inferring types from the schema alone. A property named in
+// spec.ParameterGuidance uses that guidance's ExampleBinding; every other
+// property falls back to a generic placeholder for its JSON Schema type.
+// Returns nil when the schema declares no properties, so an action that
+// takes nothing carries no empty example object.
+func exampleFor(spec toolutil.ActionSpec, schema map[string]any) map[string]any {
+	props, _ := schema["properties"].(map[string]any)
+	if len(props) == 0 {
+		return nil
+	}
+	example := make(map[string]any, len(props))
+	for name, raw := range props {
+		if guidance, ok := spec.ParameterGuidance[name]; ok && guidance.ExampleBinding != "" {
+			example[name] = guidance.ExampleBinding
+			continue
+		}
+		propSchema, _ := raw.(map[string]any)
+		example[name] = placeholderFor(propSchema)
+	}
+	return example
+}
+
+// placeholderFor returns a generic value matching a JSON Schema property's
+// declared type, for a property exampleFor has no ParameterGuidance for. It
+// illustrates shape only — never a value claimed to be valid on any real
+// server, which is exactly the caveat ParameterGuidance.ExampleBinding
+// documents for its own, guidance-backed examples.
+func placeholderFor(propSchema map[string]any) any {
+	switch propSchema["type"] {
+	case "string":
+		return "string"
+	case "integer", "number":
+		return 0
+	case "boolean":
+		return false
+	case "array":
+		return []any{}
+	case "object":
+		return map[string]any{}
+	default:
+		return nil
+	}
 }
 
 // executeAnnotations describe the execute tool, which can reach anything in the

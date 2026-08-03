@@ -83,6 +83,22 @@ func (s ActionSpec) InputSchema() (map[string]any, error) {
 	return deepCopySchema(asMap), nil
 }
 
+// RequiredParams returns the "required" property names from a decoded JSON
+// Schema object such as ActionSpec.InputSchema's return value, in schema
+// order. Both the meta and dynamic surfaces call this rather than each
+// decoding the "required" array themselves, so a change to that decoding
+// cannot drift between the two.
+func RequiredParams(schema map[string]any) []string {
+	raw, _ := schema["required"].([]any)
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if s, ok := r.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // describeAction names the action for error messages, falling back to
 // something legible when the spec is incomplete.
 func describeAction(s ActionSpec) string {

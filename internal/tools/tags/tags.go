@@ -35,6 +35,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     tagCreate,
+			Input:       tagCreateInput{},
 		},
 		{
 			Name: "tags.delete", Domain: "tags", OperationID: "TagDelete",
@@ -44,6 +45,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     tagDelete,
+			Input:       tagDeleteInput{},
 		},
 	}
 }

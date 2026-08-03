@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,6 +22,52 @@ import (
 
 // Surface registers one tool per domain.
 type Surface struct{}
+
+// paramSchemaEnvVar selects how much parameter detail describeActions embeds
+// per action. This surface has only one place to publish a per-action shape —
+// the domain tool's own input schema is the same {action, input} shape for
+// every action, so it cannot carry it — which is why the description is what
+// this switch controls.
+const paramSchemaEnvVar = "PORTAINER_META_PARAM_SCHEMA"
+
+// paramSchemaMode is one of the three settings paramSchemaEnvVar accepts.
+type paramSchemaMode string
+
+const (
+	// paramSchemaFull embeds each action's complete JSON Schema plus its
+	// required parameters. This is the default: the owner ruled that token
+	// cost is not a constraint here, and hiding the schema — this surface's
+	// only behaviour before this switch existed — is what P2 already
+	// declared dishonest for portainer_find_action's description.
+	paramSchemaFull paramSchemaMode = "full"
+	// paramSchemaSummary embeds only the required parameter names, for a
+	// caller working under a tight context budget who still wants to know
+	// what a call must supply.
+	paramSchemaSummary paramSchemaMode = "summary"
+	// paramSchemaNone omits parameter detail entirely — this surface's
+	// behaviour before schemas were reflected at all. Kept as the tightest
+	// escape hatch, never the default.
+	paramSchemaNone paramSchemaMode = "none"
+)
+
+// resolveParamSchemaMode reads paramSchemaEnvVar directly, rather than
+// through internal/config, because this switch is local to how this one
+// surface renders its descriptions: no other package needs to know about it,
+// and threading it through Config and wiring.SurfaceFor would expose an
+// implementation detail of this package everywhere a Surface is constructed.
+// An empty value defaults to full, matching the owner's ruling that
+// publishing schemas is the default, not an opt-in.
+func resolveParamSchemaMode() (paramSchemaMode, error) {
+	mode := paramSchemaMode(strings.ToLower(strings.TrimSpace(os.Getenv(paramSchemaEnvVar))))
+	switch mode {
+	case "":
+		return paramSchemaFull, nil
+	case paramSchemaFull, paramSchemaSummary, paramSchemaNone:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid %s %q: want full, summary or none", paramSchemaEnvVar, mode)
+	}
+}
 
 // Input is what a meta-tool accepts.
 //
@@ -38,6 +85,11 @@ type Input struct {
 
 // Register adds one tool per domain in the catalog.
 func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps tools.Deps) error {
+	mode, err := resolveParamSchemaMode()
+	if err != nil {
+		return fmt.Errorf("meta surface: %w", err)
+	}
+
 	for _, domain := range catalog.Domains() {
 		actions := catalog.ByDomain(domain)
 		byName := make(map[string]toolutil.ActionSpec, len(actions))
@@ -49,10 +101,15 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 			names = append(names, spec.Name)
 		}
 
+		description, err := describeActions(domain, actions, mode)
+		if err != nil {
+			return fmt.Errorf("meta surface: %s: %w", domain, err)
+		}
+
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "portainer_" + domain,
 			Title:       describeDomain(domain),
-			Description: describeActions(domain, actions),
+			Description: description,
 			Annotations: domainAnnotations(actions),
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, in Input) (*mcp.CallToolResult, any, error) {
 			spec, ok := byName[in.Action]
@@ -88,8 +145,10 @@ func describeDomain(domain string) string {
 
 // describeActions enumerates the domain's actions in the tool description,
 // because on this surface the description is the only place a model can
-// discover what the tool can do.
-func describeActions(domain string, actions []toolutil.ActionSpec) string {
+// discover what the tool can do — including, per mode, each action's
+// parameter shape. paramSchemaNone reproduces this surface's behaviour before
+// schemas were reflected at all; it is never the default.
+func describeActions(domain string, actions []toolutil.ActionSpec, mode paramSchemaMode) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Performs %s operations on Portainer. Choose one with the `action` parameter and pass that action's parameters in `input`.\n\nAvailable actions:\n", domain)
 	for _, spec := range actions {
@@ -101,8 +160,40 @@ func describeActions(domain string, actions []toolutil.ActionSpec) string {
 			marker = " [mutating]"
 		}
 		fmt.Fprintf(&b, "- `%s`%s — %s\n", spec.Name, marker, spec.Description)
+
+		if mode == paramSchemaNone {
+			continue
+		}
+		schema, err := spec.InputSchema()
+		if err != nil {
+			return "", fmt.Errorf("%s: input schema: %w", spec.Name, err)
+		}
+		required := toolutil.RequiredParams(schema)
+
+		switch mode {
+		case paramSchemaSummary:
+			fmt.Fprintf(&b, "  Required parameters: %s\n", requiredOrNone(required))
+		case paramSchemaFull:
+			encoded, err := json.Marshal(schema)
+			if err != nil {
+				return "", fmt.Errorf("%s: encode input schema: %w", spec.Name, err)
+			}
+			fmt.Fprintf(&b, "  Parameters: %s\n", encoded)
+			fmt.Fprintf(&b, "  Required parameters: %s\n", requiredOrNone(required))
+		}
 	}
-	return b.String()
+	return b.String(), nil
+}
+
+// requiredOrNone renders a required-parameter list for the description,
+// saying "none" explicitly rather than leaving the line blank: a model must
+// be able to tell "this action takes no required parameters" apart from "this
+// line was never rendered".
+func requiredOrNone(required []string) string {
+	if len(required) == 0 {
+		return "none"
+	}
+	return strings.Join(required, ", ")
 }
 
 // domainAnnotations describe the whole tool, so they must reflect the most

@@ -279,6 +279,114 @@ func TestCallTool_SafeMode_InterceptsThroughTheMetaSurface(t *testing.T) {
 	}
 }
 
+// TestRegister_ParamSchemaMode_DefaultsToFullAndPublishesSchemas is the
+// owner's ruling made concrete: unlike portainer_find_action, this surface
+// has nowhere else to publish a per-action shape (every domain tool shares
+// one {action, input} input schema), so the description is where "the
+// default publishes the schemas" has to show up. No PORTAINER_META_PARAM_SCHEMA
+// is set here, which is exactly the zero-configuration case a real
+// deployment starts from.
+func TestRegister_ParamSchemaMode_DefaultsToFullAndPublishesSchemas(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	if !strings.Contains(description, "Parameters:") {
+		t.Error("default mode does not embed a Parameters: line; the schema is not published")
+	}
+	if !strings.Contains(description, `"name"`) {
+		t.Errorf("description does not carry tags.create's \"name\" property: %s", description)
+	}
+	if !strings.Contains(description, "Required parameters: name") {
+		t.Errorf("description does not name \"name\" as required for tags.create: %s", description)
+	}
+}
+
+// TestRegister_ParamSchemaMode_Summary_OmitsTheFullSchema is the escape hatch
+// for a tight context budget: it must still say what a call requires, just
+// without the complete JSON Schema the full mode embeds.
+func TestRegister_ParamSchemaMode_Summary_OmitsTheFullSchema(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "summary")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	if strings.Contains(description, "Parameters:") {
+		t.Error("summary mode still embeds the full Parameters: schema line")
+	}
+	if !strings.Contains(description, "Required parameters: name") {
+		t.Errorf("summary mode does not name \"name\" as required for tags.create: %s", description)
+	}
+}
+
+// TestRegister_ParamSchemaMode_None_MatchesThePreSchemaBehaviour is the
+// tightest escape hatch, reproducing this surface's description exactly as
+// it was before any parameter detail was reflected into it.
+func TestRegister_ParamSchemaMode_None_MatchesThePreSchemaBehaviour(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "none")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	for _, absent := range []string{"Parameters:", "Required parameters:"} {
+		if strings.Contains(description, absent) {
+			t.Errorf("none mode still embeds %q: %s", absent, description)
+		}
+	}
+}
+
+// An unrecognised PORTAINER_META_PARAM_SCHEMA must fail loudly, the same way
+// an unrecognised TOOL_SURFACE does in internal/config: silently falling back
+// to a default would hide a typo that changes what a deployment publishes.
+func TestRegister_ParamSchemaMode_Invalid_ReturnsError(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "bogus")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err == nil {
+		t.Error("Register() = nil, want an error for an invalid PORTAINER_META_PARAM_SCHEMA")
+	}
+}
+
 func toolsSpecForOtherDomain() toolutil.ActionSpec {
 	return toolutil.ActionSpec{
 		Name: "tags.list", Domain: "tags", OperationID: "TagList",

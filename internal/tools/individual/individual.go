@@ -33,10 +33,23 @@ func ToolName(actionName string) string {
 // Register adds every catalog action as its own tool.
 func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps tools.Deps) error {
 	for _, spec := range catalog.Actions() {
+		// The schema is set explicitly, rather than left for AddTool to infer
+		// from the handler's map[string]any parameter, precisely because that
+		// inference produces a permissive object schema — the placeholder
+		// every action published before this schema was reflected from each
+		// action's own Input type. AddTool only infers when InputSchema is
+		// nil, so setting it here to the real, per-action shape is what
+		// makes this surface publish something a model can act on instead of
+		// guessing and reading the error.
+		schema, err := spec.InputSchema()
+		if err != nil {
+			return fmt.Errorf("%s: input schema: %w", spec.Name, err)
+		}
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        ToolName(spec.Name),
 			Title:       spec.Title,
 			Description: spec.Description,
+			InputSchema: schema,
 			Annotations: tools.AnnotationsFor(spec),
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, input map[string]any) (*mcp.CallToolResult, any, error) {
 			raw, err := json.Marshal(input)

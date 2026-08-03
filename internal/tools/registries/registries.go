@@ -36,6 +36,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryCreate,
+			Input:       registryCreateInput{},
 		},
 		{
 			Name: "registries.ping", Domain: "registries", OperationID: "RegistryPing",
@@ -44,6 +45,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryPing,
+			Input:       registryPingInput{},
 		},
 		{
 			Name: "registries.inspect", Domain: "registries", OperationID: "RegistryInspect",
@@ -51,6 +53,7 @@ func Specs() []toolutil.ActionSpec {
 			Description: "Returns the details of a single registry by identifier.",
 			Edition:     edition.CE,
 			Handler:     registryInspect,
+			Input:       registryInspectInput{},
 		},
 		{
 			Name: "registries.update", Domain: "registries", OperationID: "RegistryUpdate",
@@ -59,6 +62,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryUpdate,
+			Input:       registryUpdateInput{},
 		},
 		{
 			Name: "registries.configure", Domain: "registries", OperationID: "RegistryConfigure",
@@ -67,6 +71,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryConfigure,
+			Input:       registryConfigureInput{},
 		},
 		{
 			Name: "registries.delete", Domain: "registries", OperationID: "RegistryDelete",
@@ -76,6 +81,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     registryDelete,
+			Input:       registryDeleteInput{},
 		},
 		{
 			Name: "registries.ecr_delete_repository", Domain: "registries", OperationID: "EcrDeleteRepository",
@@ -85,6 +91,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     ecrDeleteRepository,
+			Input:       ecrDeleteRepositoryInput{},
 		},
 		{
 			Name: "registries.ecr_delete_tags", Domain: "registries", OperationID: "EcrDeleteTags",
@@ -95,6 +102,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     ecrDeleteTags,
+			Input:       ecrDeleteTagsInput{},
 		},
 		{
 			Name: "registries.repository_tags_delete", Domain: "registries", OperationID: "RepositoryTagsDelete",
@@ -104,6 +112,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     repositoryTagsDelete,
+			Input:       repositoryTagsDeleteInput{},
 		},
 	}
 }
