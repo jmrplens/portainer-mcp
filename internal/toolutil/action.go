@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -44,6 +45,12 @@ type ActionSpec struct {
 	// effect. Only meaningful when Mutating.
 	Idempotent bool
 	Handler    Handler
+	// Input is a zero value of the action's parameter struct, or nil when the
+	// action takes none. The JSON Schema published by every surface is
+	// reflected from this type, and each handler unmarshals into the same
+	// type — one declaration, so the published shape and the parsed shape
+	// cannot drift.
+	Input any
 }
 
 // Validate reports whether the spec is internally coherent.
@@ -97,6 +104,15 @@ func (s ActionSpec) Validate() error {
 	}
 	if s.Handler == nil {
 		return fail("Handler is required")
+	}
+	if s.Input != nil {
+		t := reflect.TypeOf(s.Input)
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return fail("Input must be a struct or nil, got %s: the schema every surface publishes is reflected from it", t.Kind())
+		}
 	}
 	return nil
 }

@@ -117,3 +117,17 @@ func TestValidate_NameWithIllegalCharacter_ReturnsError(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_InputMustBeAStruct(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{
+		Name: "tags.list", Domain: "tags", OperationID: "TagList",
+		Title: "T", Description: "D", Edition: edition.CE, Input: "not a struct",
+		Handler: func(_ context.Context, _ *portainer.Client, _ json.RawMessage) (any, error) {
+			return nil, nil
+		},
+	}
+	if err := spec.Validate(); err == nil {
+		t.Error("Validate() error = nil, want a refusal for a non-struct Input")
+	}
+}
