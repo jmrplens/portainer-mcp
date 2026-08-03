@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-discovery e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -71,6 +71,17 @@ test-e2e:
 # swallowed, so coverage nobody has never reads as coverage verified.
 audit-e2e-gaps:
 	go run ./cmd/audit_e2e_gaps
+
+# audit-discovery reports which sibling actions (same domain, same base name
+# once CRUD and variant suffixes are stripped, e.g. registries.delete and
+# registries.repository_tags_delete) cannot yet be told apart because their
+# Usage text is identical or missing. Informational, like audit-e2e-gaps: it
+# exits 0 unless the catalog itself fails to build. Discovery quality is a
+# judgement call, and gating on one invites satisfying the gate with filler
+# text instead of writing text that actually helps — audit_1to1 is the audit
+# that blocks the build.
+audit-discovery:
+	go run ./cmd/audit_discovery
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
