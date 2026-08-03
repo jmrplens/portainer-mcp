@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -301,19 +303,53 @@ func isRetryableFixtureError(err error) bool {
 	return false
 }
 
-// isHarnessProvisioned reports whether srv carries the fixed administrator
-// credentials harness.Provision writes into every ephemeral estate this
-// harness stands up (see provision.go's AdminUsername/AdminPassword).
+// isHarnessProvisioned reports whether the server client talks to is the
+// same one this harness recorded srv as being, by re-reading its live
+// Server Instance ID (GET /system/status) and comparing it against
+// srv.InstanceID, the value cmd/provision/main.go's provisionServer recorded
+// there at provisioning time (see harness.Server.InstanceID and
+// harness.WaitReady's ReadyStatus).
+//
+// This replaced an earlier guard that compared an estate's stored
+// credentials against a fixed, published administrator password. That guard
+// stopped being possible the moment harness.Provision began minting a random
+// password every run (see provision.go's generateAdminPassword): nothing
+// about the credentials sitting in a JSON file can prove anything once the
+// password is no longer a constant to compare against. InstanceID is
+// different in kind, not just in value — Portainer persists it in its own
+// /data volume and it is stable across restarts, but it can only be
+// produced by asking a running server, live, right now. An estate's JSON
+// file recording the right InstanceID proves nothing by itself; only a
+// server that answers with the same one, at sweep time, does.
 //
 // It is the one signal cleanupOrphans is allowed to act on before deleting
 // anything: an estate's URL and API key are just data in a JSON file, and
 // nothing stops that file from being pointed, by mistake or by hand, at a
-// real Portainer instead of a disposable one. A real instance's
-// administrator password is not this fixed, published string — a
-// disposable estate's always is, because Provision always sets it. Anything
-// else is treated as "cannot confirm this is ours" and refused, not deleted.
-func isHarnessProvisioned(srv harness.Server) bool {
-	return srv.Creds.Username == harness.AdminUsername && srv.Creds.Password == harness.AdminPassword
+// real Portainer instead of a disposable one. Every failure mode — no
+// InstanceID was ever recorded, the live read errors out, or the live and
+// recorded values simply disagree — is treated identically: "cannot confirm
+// this is ours", reported as an error rather than resolved to false, so a
+// transient read failure can never look like "confirmed not ours" to a
+// caller checking only a boolean.
+func isHarnessProvisioned(ctx context.Context, client *portainer.Client, srv harness.Server) error {
+	if srv.InstanceID == "" {
+		return errors.New("no instance id was recorded for this server when it was provisioned")
+	}
+	resp, err := client.API.SystemStatusWithResponse(ctx)
+	if err != nil {
+		return fmt.Errorf("read live system status: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return fmt.Errorf("read live system status: %w", err)
+	}
+	if resp.JSON200 == nil || resp.JSON200.InstanceID == nil || *resp.JSON200.InstanceID == "" {
+		return errors.New("live system status carried no instance id")
+	}
+	if *resp.JSON200.InstanceID != srv.InstanceID {
+		return fmt.Errorf("live instance id %q does not match %q recorded at provisioning time",
+			*resp.JSON200.InstanceID, srv.InstanceID)
+	}
+	return nil
 }
 
 // orphanPrefix is what cleanupOrphans searches for. It is the fixed part of
@@ -388,16 +424,17 @@ func cleanupOrphans(ctx context.Context, e harness.Estate) error {
 
 	now := time.Now()
 	for name, srv := range legs {
-		if !isHarnessProvisioned(srv) {
-			return fmt.Errorf("cleanupOrphans: %s server %s does not carry this harness's fixed "+
-				"provisioning credentials; refusing to delete e2e- resources against a server this "+
-				"harness cannot confirm it provisioned", name, srv.BaseURL)
-		}
-
 		client, err := portainer.New(&config.Config{URL: srv.BaseURL, Token: srv.Creds.APIKey})
 		if err != nil {
 			return fmt.Errorf("cleanupOrphans: build %s client: %w", name, err)
 		}
+
+		if err := isHarnessProvisioned(ctx, client, srv); err != nil {
+			return fmt.Errorf("cleanupOrphans: %s server %s does not carry this harness's own "+
+				"provisioning identity; refusing to delete e2e- resources against a server this "+
+				"harness cannot confirm it provisioned: %w", name, srv.BaseURL, err)
+		}
+
 		if err := deleteOrphanTags(ctx, client, now); err != nil {
 			return fmt.Errorf("cleanupOrphans: %s: %w", name, err)
 		}
@@ -472,57 +509,74 @@ func deleteOrphanRegistries(ctx context.Context, client *portainer.Client, now t
 	return errors.Join(errs...)
 }
 
-func TestIsHarnessProvisioned_RequiresExactAdminCredentials(t *testing.T) {
-	base := harness.Server{BaseURL: "https://example.invalid"}
+// fakeSystemStatusServer stands in for a live Portainer's GET
+// /api/system/status, answering the fixed instanceID every call.
+func fakeSystemStatusServer(t *testing.T, instanceID string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"Version":"2.44.0","InstanceID":%q}`, instanceID)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
 
-	tests := []struct {
-		name string
-		srv  harness.Server
-		want bool
-	}{
-		{
-			name: "exact harness credentials",
-			srv: func() harness.Server {
-				s := base
-				s.Creds.Username = harness.AdminUsername
-				s.Creds.Password = harness.AdminPassword
-				return s
-			}(),
-			want: true,
-		},
-		{
-			name: "wrong password",
-			srv: func() harness.Server {
-				s := base
-				s.Creds.Username = harness.AdminUsername
-				s.Creds.Password = "hunter2"
-				return s
-			}(),
-			want: false,
-		},
-		{
-			name: "wrong username",
-			srv: func() harness.Server {
-				s := base
-				s.Creds.Username = "root"
-				s.Creds.Password = harness.AdminPassword
-				return s
-			}(),
-			want: false,
-		},
-		{
-			name: "empty credentials",
-			srv:  base,
-			want: false,
-		},
+// TestIsHarnessProvisioned_LiveInstanceIDMatchesRecorded_Permits and
+// TestIsHarnessProvisioned_LiveInstanceIDDiffersFromRecorded_Refuses are the
+// mutation-tested proof, in both directions, for the guard that replaced
+// comparing against harness.AdminPassword: a random per-run password (see
+// provision.go's generateAdminPassword) makes that comparison impossible, so
+// the guard now re-reads the server's live Server Instance ID and requires
+// it to match what was recorded in the estate at provisioning time. A guard
+// that always refuses would pass the "differs" case here while failing the
+// "matches" case below; a guard that always permits is the reverse — only
+// exercising both catches either defect.
+func TestIsHarnessProvisioned_LiveInstanceIDMatchesRecorded_Permits(t *testing.T) {
+	t.Parallel()
+	server := fakeSystemStatusServer(t, "same-instance-id")
+	client, err := portainer.New(&config.Config{URL: server.URL, Token: "irrelevant"})
+	if err != nil {
+		t.Fatalf("portainer.New() error = %v", err)
+	}
+	srv := harness.Server{BaseURL: server.URL, InstanceID: "same-instance-id"}
+
+	if err := isHarnessProvisioned(context.Background(), client, srv); err != nil {
+		t.Errorf("isHarnessProvisioned() error = %v, want nil: the live and recorded instance ids match", err)
+	}
+}
+
+func TestIsHarnessProvisioned_LiveInstanceIDDiffersFromRecorded_Refuses(t *testing.T) {
+	t.Parallel()
+	server := fakeSystemStatusServer(t, "a-different-instance-id")
+	client, err := portainer.New(&config.Config{URL: server.URL, Token: "irrelevant"})
+	if err != nil {
+		t.Fatalf("portainer.New() error = %v", err)
+	}
+	srv := harness.Server{BaseURL: server.URL, InstanceID: "recorded-instance-id"}
+
+	if err := isHarnessProvisioned(context.Background(), client, srv); err == nil {
+		t.Error("isHarnessProvisioned() error = nil, want an error: the live instance id does not match " +
+			"the one recorded at provisioning time")
+	}
+}
+
+// TestIsHarnessProvisioned_NoRecordedInstanceID_Refuses covers the estate a
+// provisioning run never finished writing (or one from before this field
+// existed): with nothing recorded to compare against, the guard must refuse
+// rather than treat the absence as "nothing to check".
+func TestIsHarnessProvisioned_NoRecordedInstanceID_Refuses(t *testing.T) {
+	t.Parallel()
+	// BaseURL points nowhere reachable on purpose: the empty-InstanceID check
+	// must short-circuit before any network call, so this failing for the
+	// wrong reason (a dial error) would be its own bug.
+	srv := harness.Server{BaseURL: "https://not-ours.example.invalid"}
+	client, err := portainer.New(&config.Config{URL: srv.BaseURL, Token: "irrelevant"})
+	if err != nil {
+		t.Fatalf("portainer.New() error = %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isHarnessProvisioned(tt.srv); got != tt.want {
-				t.Errorf("isHarnessProvisioned() = %v, want %v", got, tt.want)
-			}
-		})
+	if err := isHarnessProvisioned(context.Background(), client, srv); err == nil {
+		t.Error("isHarnessProvisioned() error = nil, want an error when no instance id was ever recorded")
 	}
 }
 
@@ -576,18 +630,20 @@ func TestIsOrphanEligible_OnlySweepsNamesOlderThanTheThreshold(t *testing.T) {
 	}
 }
 
-func TestCleanupOrphans_RefusesAnEstateWithoutHarnessCredentials(t *testing.T) {
+func TestCleanupOrphans_RefusesAnEstateWithoutARecordedInstanceID(t *testing.T) {
 	t.Parallel()
-	// BaseURL points nowhere reachable on purpose: if the credential guard
-	// were bypassed, cleanupOrphans would still fail here, but for an
-	// unrelated reason (a network error dialing an invalid host) that would
-	// let this test pass even with the guard broken. Asserting on the
-	// guard's own wording, rather than merely "err != nil", is what makes
-	// this test fail if the guard itself stops firing.
+	// BaseURL points nowhere reachable on purpose: if the identity guard were
+	// bypassed, cleanupOrphans would still fail here, but for an unrelated
+	// reason (a network error dialing an invalid host) that would let this
+	// test pass even with the guard broken. Asserting on the guard's own
+	// wording, rather than merely "err != nil", is what makes this test fail
+	// if the guard itself stops firing. No InstanceID is recorded on this
+	// Server, which the guard rejects before ever attempting to reach the
+	// (unreachable) host.
 	e := harness.Estate{CE: harness.Server{BaseURL: "https://not-ours.example.invalid"}}
 	err := cleanupOrphans(context.Background(), e)
 	if err == nil {
-		t.Fatal("cleanupOrphans accepted an estate whose CE credentials do not match this harness's provisioning")
+		t.Fatal("cleanupOrphans accepted an estate whose CE server carries no recorded instance id")
 	}
 	const wantSubstring = "cannot confirm it provisioned"
 	if !strings.Contains(err.Error(), wantSubstring) {

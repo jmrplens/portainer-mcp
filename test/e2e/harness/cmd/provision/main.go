@@ -209,11 +209,11 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	defer cancel()
 
 	fmt.Fprintf(os.Stderr, "waiting for %s (%s) to become ready\n", edition, baseURL)
-	version, err := harness.WaitReady(waitCtx, client, baseURL)
+	ready, err := harness.WaitReady(waitCtx, client, baseURL)
 	if err != nil {
 		return harness.Server{}, fmt.Errorf("wait for %s: %w", edition, err)
 	}
-	fmt.Fprintf(os.Stderr, "%s is ready: version %s\n", edition, version)
+	fmt.Fprintf(os.Stderr, "%s is ready: version %s\n", edition, ready.Version)
 
 	creds, err := harness.Provision(ctx, client, baseURL, "")
 	if err != nil {
@@ -230,7 +230,7 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	}
 	fmt.Fprintf(os.Stderr, "%s: registered docker endpoint %d\n", edition, endpointID)
 
-	return harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds}, nil
+	return harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds, InstanceID: ready.InstanceID}, nil
 }
 
 // provisionBusinessEdition provisions the Business Edition server and applies
@@ -373,11 +373,11 @@ func runKubernetes(estatePath string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	fmt.Fprintf(os.Stderr, "waiting for Kubernetes (%s) to become ready\n", baseURL)
-	version, err := harness.WaitReady(waitCtx, client, baseURL)
+	ready, err := harness.WaitReady(waitCtx, client, baseURL)
 	if err != nil {
 		return fmt.Errorf("wait for Kubernetes: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Kubernetes is ready: version %s\n", version)
+	fmt.Fprintf(os.Stderr, "Kubernetes is ready: version %s\n", ready.Version)
 
 	// Unlike the compose legs, this server cannot be started with
 	// --no-setup-token; its token was scraped from the pod logs by
@@ -408,6 +408,7 @@ func runKubernetes(estatePath string) error {
 	// chance. See run's identical rationale for the compose leg above.
 	estate = estate.MergeKubernetes(harness.Server{
 		Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds,
+		InstanceID:             ready.InstanceID,
 		ConflictingLicenceKeys: conflicting,
 	})
 	if err := estate.SaveTo(estatePath); err != nil {

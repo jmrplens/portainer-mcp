@@ -27,12 +27,15 @@ func TestWaitReady_ServerBecomesReady_ReturnsVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
-	version, err := WaitReady(ctx, server.Client(), server.URL)
+	ready, err := WaitReady(ctx, server.Client(), server.URL)
 	if err != nil {
 		t.Fatalf("WaitReady() error = %v", err)
 	}
-	if version != "2.44.0" {
-		t.Errorf("version = %q, want %q", version, "2.44.0")
+	if ready.Version != "2.44.0" {
+		t.Errorf("version = %q, want %q", ready.Version, "2.44.0")
+	}
+	if ready.InstanceID != "abc" {
+		t.Errorf("instance id = %q, want %q", ready.InstanceID, "abc")
 	}
 	if got := calls.Load(); got < 3 {
 		t.Errorf("attempts = %d, want at least 3: WaitReady gave up too early or did not retry", got)
@@ -57,12 +60,12 @@ func TestWaitReady_EmptyVersion_IsNotTreatedAsReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
-	version, err := WaitReady(ctx, server.Client(), server.URL)
+	ready, err := WaitReady(ctx, server.Client(), server.URL)
 	if err != nil {
 		t.Fatalf("WaitReady() error = %v", err)
 	}
-	if version != "2.44.0" {
-		t.Errorf("version = %q: an empty version was accepted as ready", version)
+	if ready.Version != "2.44.0" {
+		t.Errorf("version = %q: an empty version was accepted as ready", ready.Version)
 	}
 	if got := calls.Load(); got < 3 {
 		t.Errorf("attempts = %d, want at least 3: the empty-version responses were treated as ready", got)

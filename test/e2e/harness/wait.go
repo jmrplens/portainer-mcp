@@ -26,50 +26,62 @@ type systemStatus struct {
 	InstanceID string `json:"InstanceID"`
 }
 
+// ReadyStatus is what WaitReady confirms once a server answers its status
+// endpoint. InstanceID is Portainer's own Server Instance ID: the caller
+// persists it into the estate (see harness.Server.InstanceID) so a later,
+// live read of the same field can be compared against what was recorded here
+// — see cleanupOrphans' guard in test/e2e/suite/fixtures_test.go, which
+// refuses to run its destructive sweep against a server whose live identity
+// does not match.
+type ReadyStatus struct {
+	Version    string
+	InstanceID string
+}
+
 // WaitReady polls baseURL until Portainer serves its status endpoint, and
-// returns the version it reports.
+// returns what it reports.
 //
 // Every failure mode before that point is a retry, not an error: a refused
 // connection, a 503, a truncated body. The only thing that ends the loop
 // unsuccessfully is ctx expiring, which is what makes the caller's deadline
 // the single authority on how long startup may take.
-func WaitReady(ctx context.Context, client *http.Client, baseURL string) (string, error) {
+func WaitReady(ctx context.Context, client *http.Client, baseURL string) (ReadyStatus, error) {
 	var lastErr error
 	for {
-		version, err := probeStatus(ctx, client, baseURL)
+		status, err := probeStatus(ctx, client, baseURL)
 		if err == nil {
-			return version, nil
+			return status, nil
 		}
 		lastErr = err
 
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("wait for %s: %w (last probe: %w)", baseURL, ctx.Err(), lastErr)
+			return ReadyStatus{}, fmt.Errorf("wait for %s: %w (last probe: %w)", baseURL, ctx.Err(), lastErr)
 		case <-time.After(pollInterval):
 		}
 	}
 }
 
-func probeStatus(ctx context.Context, client *http.Client, baseURL string) (string, error) {
+func probeStatus(ctx context.Context, client *http.Client, baseURL string) (ReadyStatus, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/system/status", nil)
 	if err != nil {
-		return "", fmt.Errorf("build status request: %w", err)
+		return ReadyStatus{}, fmt.Errorf("build status request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("probe status: %w", err)
+		return ReadyStatus{}, fmt.Errorf("probe status: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("probe status: http %d", resp.StatusCode)
+		return ReadyStatus{}, fmt.Errorf("probe status: http %d", resp.StatusCode)
 	}
 	var status systemStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return "", fmt.Errorf("decode status: %w", err)
+		return ReadyStatus{}, fmt.Errorf("decode status: %w", err)
 	}
 	if status.Version == "" {
-		return "", fmt.Errorf("probe status: empty version")
+		return ReadyStatus{}, fmt.Errorf("probe status: empty version")
 	}
-	return status.Version, nil
+	return ReadyStatus(status), nil
 }

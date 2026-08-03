@@ -71,8 +71,15 @@ services:
   portainer-ce:
     image: portainer/portainer-ce:2.44.0
     command: ["--no-setup-token"]
+    # Bound to loopback explicitly: Docker binds a bare "host:container" port
+    # mapping to every interface, not just localhost, so the administrator
+    # credentials this harness provisions (see harness.Provision) would
+    # otherwise be reachable, for the run's duration, from anything that can
+    # route to this host — not merely from processes on it. Tests only ever
+    # connect from the host itself, so 127.0.0.1 is all the reachability
+    # this estate needs.
     ports:
-      - "${E2E_CE_PORT:-19000}:9000"
+      - "127.0.0.1:${E2E_CE_PORT:-19000}:9000"
     depends_on:
       docker:
         condition: service_healthy
@@ -80,8 +87,9 @@ services:
   portainer-ee:
     image: portainer/portainer-ee:2.44.0
     command: ["--no-setup-token"]
+    # See portainer-ce's identical binding above for why.
     ports:
-      - "${E2E_EE_PORT:-19001}:9000"
+      - "127.0.0.1:${E2E_EE_PORT:-19001}:9000"
     depends_on:
       docker:
         condition: service_healthy

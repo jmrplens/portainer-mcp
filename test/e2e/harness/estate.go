@@ -25,6 +25,19 @@ type Server struct {
 	BaseURL string      `json:"base_url"`
 	Creds   Credentials `json:"credentials"`
 
+	// InstanceID is this server's own Server Instance ID, read from GET
+	// /system/status at provisioning time (see harness.WaitReady's
+	// ReadyStatus and cmd/provision/main.go's provisionServer) and persisted
+	// here rather than used once and discarded. Portainer writes this value
+	// into its own /data volume, so it is stable across a restart of the
+	// same container — unlike the administrator credentials, which
+	// harness.Provision now mints fresh every run and which therefore cannot
+	// serve as a "this is the server we provisioned" marker any more.
+	// cleanupOrphans (test/e2e/suite/fixtures_test.go) re-reads this field
+	// live from whatever server an estate file points at and refuses its
+	// destructive sweep unless the two agree.
+	InstanceID string `json:"instance_id"`
+
 	// ConflictingLicenceKeys carries what POST /licenses/add named as
 	// "conflictingKeys" when this server's licence was attached, if it was
 	// non-null. A clean attach leaves this empty. A non-empty value is the

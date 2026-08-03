@@ -3,6 +3,8 @@ package harness
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,14 +15,35 @@ import (
 	"strings"
 )
 
-// AdminUsername and AdminPassword are the credentials every ephemeral estate
-// is provisioned with. They are fixed rather than generated because a fixed
-// value can be printed in a failure message without leaking anything: the
-// estate is disposable and unreachable from outside the test network.
-const (
-	AdminUsername = "admin"
-	AdminPassword = "e2e-Passw0rd-2026!"
-)
+// AdminUsername is the administrator username every ephemeral estate is
+// provisioned with. It names no secret, so it stays fixed: reaching the
+// estate still requires the password Provision mints fresh every run (see
+// generateAdminPassword), which is never a constant and never logged.
+const AdminUsername = "admin"
+
+// adminPasswordBytes is how much raw entropy generateAdminPassword reads from
+// crypto/rand for one provisioning run: 24 bytes is 192 bits, comfortably
+// beyond anything guessable, encoded below into a password Portainer's own
+// JSON body and this harness's HTTP calls can carry without escaping.
+const adminPasswordBytes = 24
+
+// generateAdminPassword mints a fresh, high-entropy administrator password
+// for the estate Provision is about to bring up.
+//
+// crypto/rand, not math/rand: this is a credential a real Portainer instance
+// will accept as administrator, and math/rand's output is predictable from
+// its seed — exactly the property a generated-rather-than-guessable password
+// exists to not have. Base64 URL-safe encoding avoids characters (notably
+// '/' and '+') that would need escaping wherever this value travels — a JSON
+// body, a compose env file, a shell command — none of which this function
+// controls once the password leaves it.
+func generateAdminPassword() (string, error) {
+	raw := make([]byte, adminPasswordBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate administrator password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
 
 // Credentials are what a provisioned Portainer will accept.
 type Credentials struct {
@@ -73,7 +96,11 @@ func AgentEndpoint(name, host string) EndpointSpec {
 // refuses to create the first administrator without it, which the design
 // specification does not mention.
 func Provision(ctx context.Context, c *http.Client, baseURL, setupToken string) (Credentials, error) {
-	creds := Credentials{Username: AdminUsername, Password: AdminPassword}
+	password, err := generateAdminPassword()
+	if err != nil {
+		return Credentials{}, fmt.Errorf("provision: %w", err)
+	}
+	creds := Credentials{Username: AdminUsername, Password: password}
 
 	initBody := map[string]string{"Username": creds.Username, "Password": creds.Password}
 	headers := map[string]string{}
