@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -101,6 +101,19 @@ audit-1to1:
 # while P3 is still landing domains.
 audit-1to1-ratchet:
 	go run ./cmd/audit_1to1 -spec-version=$(SPEC_VERSION) -ratchet
+
+# audit-spec-reality probes a live estate (see e2e-up) for every operation
+# the vendored specification documents, and reports which of them the
+# running server does not actually serve — the mechanism cmd/audit_spec_reality's
+# package doc describes in full. It is read-only against the estate (every
+# probe carries a credential that is not, and will never be, valid) and it
+# reports rather than gates: a divergence is a fact about Portainer, not a
+# defect in this project's code, so this never fails the build over what it
+# finds. It requires a running estate (PORTAINER_E2E_ESTATE, or the default
+# test/e2e/.estate.json that e2e-up writes) and fails only when it cannot run
+# at all — no estate, an unreadable spec, or a failed self-test.
+audit-spec-reality:
+	go run ./cmd/audit_spec_reality -spec-version=$(SPEC_VERSION)
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
