@@ -14,9 +14,9 @@ func TestEstate_RoundTrips(t *testing.T) {
 	want := Estate{
 		CE: Server{
 			Edition: "CE", BaseURL: "http://127.0.0.1:19000",
-			Creds: Credentials{Username: "admin", Password: "p", APIKey: "k", JWT: "j"},
+			Creds:        Credentials{Username: "admin", Password: "p", APIKey: "k", JWT: "j"},
+			Environments: map[string]int{"docker": 1, "agent": 2},
 		},
-		AgentID: 2,
 	}
 	if err := want.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo() error = %v", err)
@@ -25,8 +25,16 @@ func TestEstate_RoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEstate() error = %v", err)
 	}
-	if got.CE.Creds.APIKey != "k" || got.AgentID != 2 {
+	if got.CE.Creds.APIKey != "k" {
 		t.Errorf("round trip lost data: %+v", got)
+	}
+	dockerID, ok := got.CE.Environment("docker")
+	if !ok || dockerID != 1 {
+		t.Errorf("round trip: CE.Environment(\"docker\") = (%d, %v), want (1, true)", dockerID, ok)
+	}
+	agentID, ok := got.CE.Environment("agent")
+	if !ok || agentID != 2 {
+		t.Errorf("round trip: CE.Environment(\"agent\") = (%d, %v), want (2, true)", agentID, ok)
 	}
 }
 
@@ -226,9 +234,12 @@ func TestSyncEdgeEnv_PartialEdgeCredentials_RemovesStaleFile(t *testing.T) {
 func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
 	t.Parallel()
 	existing := Estate{
-		CE:             Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}},
+		CE: Server{
+			Edition: "CE", BaseURL: "http://ce",
+			Creds:        Credentials{APIKey: "ce-key"},
+			Environments: map[string]int{"docker": 1, "agent": 2},
+		},
 		EE:             Server{Edition: "EE", BaseURL: "http://ee", Creds: Credentials{APIKey: "ee-key"}},
-		AgentID:        2,
 		EdgeEndpointID: 3,
 		EdgeAgentID:    "edge-uuid",
 		EdgeKey:        "edge-key",
@@ -237,17 +248,15 @@ func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
 
 	got := existing.MergeKubernetes(k8s)
 
-	// Server now carries a []string field (ConflictingLicenceKeys), so it can
-	// no longer be compared with !=; reflect.DeepEqual is the direct
-	// replacement, not a weakening of the assertion.
+	// Server now carries a []string field (ConflictingLicenceKeys) and a map
+	// field (Environments), so it can no longer be compared with !=;
+	// reflect.DeepEqual is the direct replacement, not a weakening of the
+	// assertion.
 	if !reflect.DeepEqual(got.CE, existing.CE) {
 		t.Errorf("CE = %+v, want it unchanged at %+v", got.CE, existing.CE)
 	}
 	if !reflect.DeepEqual(got.EE, existing.EE) {
 		t.Errorf("EE = %+v, want it unchanged at %+v", got.EE, existing.EE)
-	}
-	if got.AgentID != existing.AgentID {
-		t.Errorf("AgentID = %d, want %d", got.AgentID, existing.AgentID)
 	}
 	if got.EdgeEndpointID != existing.EdgeEndpointID || got.EdgeAgentID != existing.EdgeAgentID || got.EdgeKey != existing.EdgeKey {
 		t.Errorf("edge fields changed: got %+v, want the edge fields from %+v", got, existing)
@@ -265,5 +274,103 @@ func TestLoadEstate_RejectsPathTraversal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "escapes") {
 		t.Errorf("error = %q, want it to name the traversal", err)
+	}
+}
+
+// TestServer_Environment_UnrecordedName_ReportsAbsent proves the zero-value
+// case before the "two environments" case below builds on it: a Server that
+// has never had WithEnvironment called reports every name absent, not a
+// zero id that could be confused with a real one.
+func TestServer_Environment_UnrecordedName_ReportsAbsent(t *testing.T) {
+	t.Parallel()
+	var s Server
+	if id, ok := s.Environment("docker"); ok {
+		t.Errorf("Environment(\"docker\") = (%d, true), want ok = false on a Server with none recorded", id)
+	}
+}
+
+// TestServer_WithEnvironment_CarriesMoreThanOneDockerEnvironment is the proof
+// task 7a's own brief calls for by name: a domain needing two Docker
+// environments (endpoint groups, edge groups, tag assignment and migration
+// all do) has no way to express that with a single AgentID field, which is
+// exactly what this task removes. The trap named in the brief is a test that
+// passes trivially by only ever putting one environment in — so this
+// constructs two, under different names, and requires each one to still
+// report its own distinct id after the other was added, not the last id
+// written clobbering the first.
+func TestServer_WithEnvironment_CarriesMoreThanOneDockerEnvironment(t *testing.T) {
+	t.Parallel()
+	srv := Server{Edition: "CE", BaseURL: "http://ce"}
+
+	withFirst := srv.WithEnvironment("docker", 3)
+	withBoth := withFirst.WithEnvironment("docker-secondary", 9)
+
+	firstID, ok := withBoth.Environment("docker")
+	if !ok || firstID != 3 {
+		t.Fatalf("Environment(\"docker\") = (%d, %v), want (3, true)", firstID, ok)
+	}
+	secondID, ok := withBoth.Environment("docker-secondary")
+	if !ok || secondID != 9 {
+		t.Fatalf("Environment(\"docker-secondary\") = (%d, %v), want (9, true)", secondID, ok)
+	}
+	// The one assertion that actually rules out the trivial pass: if adding
+	// the second environment had silently overwritten or aliased the first
+	// (for instance, by reusing the same underlying map without copying, or
+	// by a WithEnvironment that ignored its receiver's existing entries),
+	// both ids could come back equal, or the first could have vanished
+	// entirely. Neither id is zero and they must differ.
+	if firstID == secondID {
+		t.Fatal("both environments report the same id: the second is not distinguishable from the first")
+	}
+
+	// WithEnvironment must not mutate the receiver's own map: withFirst,
+	// built before withBoth existed, must still report only its own one
+	// entry. A shared, mutated-in-place map would make this call see the
+	// later addition too.
+	if _, ok := withFirst.Environment("docker-secondary"); ok {
+		t.Error("WithEnvironment mutated an earlier Server's map: withFirst sees the later call's addition")
+	}
+	// And srv itself, the Server neither WithEnvironment call was supposed to
+	// touch, must still report nothing recorded at all.
+	if _, ok := srv.Environment("docker"); ok {
+		t.Error("WithEnvironment mutated the original receiver: srv sees an environment recorded on a value derived from it")
+	}
+}
+
+// TestEstate_Legs_DerivesFromWhatWasActuallyProvisioned is 7b's proof: the
+// edition/platform axis is read off the Estate's own HasBusinessEdition and
+// HasKubernetes, not a literal every caller repeats and a fourth leg would
+// need copied into by hand. An estate with only a Community Edition leg
+// reports exactly one; adding a licensed Business Edition leg and a
+// Kubernetes leg each grow the result by exactly one more, distinguishable
+// by name.
+func TestEstate_Legs_DerivesFromWhatWasActuallyProvisioned(t *testing.T) {
+	t.Parallel()
+
+	ceOnly := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}}
+	legs := ceOnly.Legs()
+	if len(legs) != 1 || legs[0].Name != "CE" {
+		t.Fatalf("Legs() on a Community-only estate = %+v, want exactly one leg named CE", legs)
+	}
+
+	full := Estate{
+		CE:         Server{Edition: "CE", BaseURL: "http://ce"},
+		EE:         Server{Edition: "EE", BaseURL: "http://ee", Creds: Credentials{APIKey: "ee-key"}},
+		Kubernetes: Server{Edition: "Kubernetes", BaseURL: "https://k8s", Creds: Credentials{APIKey: "k8s-key"}},
+	}
+	legs = full.Legs()
+	if len(legs) != 3 {
+		t.Fatalf("Legs() on a fully provisioned estate returned %d legs, want 3: %+v", len(legs), legs)
+	}
+	names := []string{legs[0].Name, legs[1].Name, legs[2].Name}
+	want := []string{"CE", "EE", "Kubernetes"}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("Legs() names = %v, want %v", names, want)
+	}
+	if legs[1].Server.BaseURL != "http://ee" {
+		t.Errorf("EE leg carries the wrong Server: %+v", legs[1].Server)
+	}
+	if legs[2].Server.BaseURL != "https://k8s" {
+		t.Errorf("Kubernetes leg carries the wrong Server: %+v", legs[2].Server)
 	}
 }

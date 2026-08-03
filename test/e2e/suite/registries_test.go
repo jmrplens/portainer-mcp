@@ -27,7 +27,7 @@ const customRegistryType = 3
 // after create, registries.inspect after update (to see the new name stick),
 // and registries.list again after delete.
 func TestRegistries_CreateUpdateInspectThenDelete_AcrossSurfacesAndEditions(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -116,7 +116,7 @@ func TestRegistries_CreateUpdateInspectThenDelete_AcrossSurfacesAndEditions(t *t
 // independently observed through this API at all, which is a gap to report,
 // not a check to fake.
 func TestRegistries_Configure(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()

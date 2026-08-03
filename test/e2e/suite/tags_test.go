@@ -25,7 +25,7 @@ import (
 // read-back assertion below failed on all three surfaces, exactly as it
 // must.
 func TestTags_CreateThenListThenDelete_AcrossSurfacesAndEditions(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -87,7 +87,7 @@ func TestTags_CreateThenListThenDelete_AcrossSurfacesAndEditions(t *testing.T) {
 // task extends to take an edition, closing the gap noted in the task brief
 // — and tags.list here must still find it.
 func TestTags_List_ReflectsATagCreatedDirectly(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()
