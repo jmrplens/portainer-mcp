@@ -76,7 +76,7 @@ func buildRealHandlerSpec(t *testing.T, domain, operationID string) ([]structSpe
 		structs = append(structs, structSpec{Name: structName, Fields: fields})
 		structs = append(structs, nested...)
 	}
-	spec, err := buildHandlerSpec(domain, op, fields, pathOrder, nested, inputStruct)
+	spec, err := buildHandlerSpec(domain, op, fields, pathOrder, nested, inputStruct, "")
 	if err != nil {
 		t.Fatalf("buildHandlerSpec(%s) error = %v", operationID, err)
 	}
@@ -448,7 +448,7 @@ func TestUnit_BuildHandlerSpec_FieldWithNoOrigin_IsRefused(t *testing.T) {
 	// dropping it without a trace.
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
 	fields := []fieldSpec{{GoName: "ID", GoType: "int", JSONName: "id", Required: true}}
-	_, err := buildHandlerSpec("tags", op, fields, nil, nil, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, fields, nil, nil, "tagDeleteInput", "")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: the field carries no Origin")
 	}
@@ -464,7 +464,7 @@ func TestUnit_BuildHandlerSpec_PathOrderNamesAMissingField_IsRefused(t *testing.
 	// refused rather than indexing out of range or silently skipping the
 	// argument.
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
-	_, err := buildHandlerSpec("tags", op, nil, []string{"id"}, nil, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, nil, []string{"id"}, nil, "tagDeleteInput", "")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: pathOrder names a field with no match in fields")
 	}
@@ -483,7 +483,7 @@ func TestUnit_BuildHandlerSpec_PathArgumentTypeMismatch_IsRefused(t *testing.T) 
 	// internally consistent, just wrong against each other).
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
 	fields := []fieldSpec{{GoName: "ID", GoType: "string", JSONName: "id", Required: true, Origin: originPath}}
-	_, err := buildHandlerSpec("tags", op, fields, []string{"id"}, nil, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, fields, []string{"id"}, nil, "tagDeleteInput", "")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: the claimed path argument type (string) disagrees with the generated client's (int)")
 	}
@@ -518,7 +518,7 @@ func TestUnit_CheckWireWidth_RegistriesConfigure_RefusesNarrowedTLSCertificateBy
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
-	_, err = buildHandlerSpec("registries", op, fields, pathOrder, nested, "registryConfigureInput")
+	_, err = buildHandlerSpec("registries", op, fields, pathOrder, nested, "registryConfigureInput", "")
 	if err == nil {
 		t.Fatal("buildHandlerSpec(RegistryConfigure) = nil error, want a refusal: TLSCACertFile/TLSCertFile/TLSKeyFile narrow from []int to the generated client's []int32")
 	}

@@ -208,7 +208,21 @@ func run(args []string) error {
 				continue
 			}
 
-			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, nested, inputStruct)
+			// checkCredentialRedaction is task-4b's structural half of the
+			// registries redaction defect P2's review caught: an operation
+			// whose success response can carry a credential-shaped field
+			// (per toolutil.IsCredentialShapedName, resolved through the
+			// spec's own $refs) never gets a bare generated handler. Either
+			// the domain has already declared the redaction wrapper this
+			// generator's naming convention expects, or generation refuses
+			// right here, naming the operation and the field — not a test
+			// that might happen to exercise it.
+			redactWith, err := checkCredentialRedaction(op, res, overrides.funcNames)
+			if err != nil {
+				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+			}
+
+			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, nested, inputStruct, redactWith)
 			if err != nil {
 				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
 			}

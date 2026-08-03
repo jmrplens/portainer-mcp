@@ -101,6 +101,11 @@ type handlerSpec struct {
 	HasQuery    bool
 	HasBody     bool
 	Response    responseInfo
+	// RedactWith is the name of a domain-supplied function the generated
+	// handler must call on the response's success body before returning it —
+	// "" when the response carries nothing credential-shaped, per
+	// checkCredentialRedaction (credential.go). See renderHandlerFunc.
+	RedactWith string
 }
 
 // responseInfo is what handler.go needs from an operation's response shape:
@@ -243,7 +248,7 @@ func handlerFuncName(operationID string) string {
 // pathOrder and nested structs assembleOperationFields already computed for
 // its Input struct — the single source both the rendered struct and this
 // handler are built from, per this file's package doc.
-func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder []string, nested []structSpec, inputStruct string) (handlerSpec, error) {
+func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder []string, nested []structSpec, inputStruct string, redactWith string) (handlerSpec, error) {
 	byJSON := make(map[string]fieldSpec, len(fields))
 	for _, f := range fields {
 		byJSON[f.JSONName] = f
@@ -302,6 +307,7 @@ func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder
 		HasQuery:    hasQuery,
 		HasBody:     hasBody,
 		Response:    resp,
+		RedactWith:  redactWith,
 	}, nil
 }
 
@@ -562,9 +568,21 @@ func renderHandlerFunc(buf *strings.Builder, spec handlerSpec) {
 	buf.WriteString("\tif err := toolutil.Check(resp); err != nil {\n")
 	fmt.Fprintf(buf, "\t\treturn nil, fmt.Errorf(\"%s: %%w\", err)\n", spec.OperationID)
 	buf.WriteString("\t}\n")
-	if spec.Response.SuccessField != "" {
+	switch {
+	case spec.Response.SuccessField != "" && spec.RedactWith != "":
+		// checkCredentialRedaction (credential.go) is what requires
+		// spec.RedactWith to already name a function this domain's own
+		// hand-written file declares — never generated code calling itself —
+		// before this handler is emitted at all. If that function's parameter
+		// or return type does not actually match resp.<SuccessField>, this is
+		// where the resulting Go compile error names the mismatch: the
+		// generator's own refusal (credential.go) and this call site are the
+		// two ways task-4b's "compile error or a generator refusal" property
+		// is satisfied.
+		fmt.Fprintf(buf, "\treturn %s(resp.%s), nil\n", spec.RedactWith, spec.Response.SuccessField)
+	case spec.Response.SuccessField != "":
 		fmt.Fprintf(buf, "\treturn resp.%s, nil\n", spec.Response.SuccessField)
-	} else {
+	default:
 		buf.WriteString("\treturn map[string]any{\"status\": \"ok\"}, nil\n")
 	}
 	buf.WriteString("}\n")

@@ -9,8 +9,25 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
+
+// tagCreate is the generated handler for operation TagCreate.
+func tagCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var body apigen.TagCreateJSONRequestBody
+	if err := json.Unmarshal(input, &body); err != nil {
+		return nil, fmt.Errorf("TagCreate: parse request body: %w", err)
+	}
+	resp, err := c.API.TagCreateWithResponse(ctx, body)
+	if err != nil {
+		return nil, fmt.Errorf("TagCreate: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return nil, fmt.Errorf("TagCreate: %w", err)
+	}
+	return resp.JSON200, nil
+}
 
 // tagList is the generated handler for operation TagList.
 func tagList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
@@ -30,6 +47,15 @@ func tagList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, 
 // declares by hand.
 func generatedSpecs() []toolutil.ActionSpec {
 	return []toolutil.ActionSpec{
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "tags.create", Domain: "tags", OperationID: "TagCreate",
+			Title:       "Create a new tag",
+			Description: "Create a new tag.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Handler:     tagCreate,
+			Input:       tagCreateInput{},
+		}, narrative("TagCreate")),
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "tags.list", Domain: "tags", OperationID: "TagList",
 			Title:       "List tags",

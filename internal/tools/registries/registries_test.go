@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -16,6 +15,8 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
+	"github.com/jmrplens/portainer-mcp/internal/tools"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
 func clientFor(t *testing.T, handler http.HandlerFunc) *portainer.Client {
@@ -31,13 +32,22 @@ func clientFor(t *testing.T, handler http.HandlerFunc) *portainer.Client {
 
 func find(t *testing.T, name string) func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
 	t.Helper()
+	return findSpec(t, name).Handler
+}
+
+// findSpec returns the full declared ActionSpec for name, rather than just
+// its handler — needed by tests that must route through tools.Execute (which
+// takes the whole spec, to run the same schema validation every real caller
+// goes through) instead of calling the handler directly.
+func findSpec(t *testing.T, name string) toolutil.ActionSpec {
+	t.Helper()
 	for _, s := range Specs() {
 		if s.Name == name {
-			return s.Handler
+			return s
 		}
 	}
 	t.Fatalf("action %q not declared", name)
-	return nil
+	return toolutil.ActionSpec{}
 }
 
 func TestSpecs_AreAllValid(t *testing.T) {
@@ -182,6 +192,16 @@ func TestRegistryCreate_Success_SendsFieldsAndReturnsDecodedBody(t *testing.T) {
 	}
 }
 
+// TestRegistryCreate_MissingFields_ReturnErrorWithoutCallingAPI pins a
+// required-field check. registries.create now runs on generated code (see
+// task-4b's report): its generated handler deliberately carries no such
+// guard, because schema validation now runs once, centrally, in
+// tools.Execute, for every surface — a second, hand-rolled check on the
+// handler itself would only drift from the published schema. This therefore
+// routes through tools.Execute, the path every real caller actually takes,
+// rather than calling the handler directly and asserting a guard clause the
+// handler no longer has; the property under test (missing required input is
+// refused before the API is ever called) is unchanged.
 func TestRegistryCreate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -191,15 +211,19 @@ func TestRegistryCreate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T)
 		{"missing name", map[string]any{"url": "registry.example.com", "type": 3}},
 		{"missing url", map[string]any{"name": "my-registry", "type": 3}},
 	}
+	spec := findSpec(t, "registries.create")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var called atomic.Bool
 			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
-			_, err := find(t, "registries.create")(context.Background(), c, input)
-			if err == nil {
-				t.Fatal("handler error = nil, want an error for missing required input")
+			result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+			if err != nil {
+				t.Fatalf("Execute error = %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("result.IsError = false, want true for missing required input")
 			}
 			if called.Load() {
 				t.Error("the API was called despite missing required input")
@@ -305,14 +329,23 @@ func TestRegistryPing_Success_ReturnsDecodedBody(t *testing.T) {
 	}
 }
 
+// TestRegistryPing_MissingURL_ReturnsErrorWithoutCallingAPI is the ping
+// counterpart of registries.create's missing-fields guard above: routed
+// through tools.Execute for the same reason (registries.ping also runs on
+// generated code now, and central schema validation is where "url is
+// required" is enforced).
 func TestRegistryPing_MissingURL_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	var called atomic.Bool
 	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
-	_, err := find(t, "registries.ping")(context.Background(), c, json.RawMessage(`{"type":3}`))
-	if err == nil {
-		t.Fatal("handler error = nil, want an error for a missing url")
+	spec := findSpec(t, "registries.ping")
+	result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, json.RawMessage(`{"type":3}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("result.IsError = false, want true for a missing url")
 	}
 	if called.Load() {
 		t.Error("the API was called despite missing required input")
@@ -1014,76 +1047,6 @@ func TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted(t *t
 // types whose optional fields are all pointers.
 func ptr[T any](v T) *T { return &v }
 
-// suspiciousFieldMarkers are substrings that make an exported field name look
-// like it might carry a credential. Deliberately narrow: "auth" would also
-// match AuthorizedTeams/AuthorizedUsers/Authentication and produce noise, so
-// it and similarly broad candidates (bearer, signature, pat) are left out
-// pending an explicit ruling rather than added unilaterally.
-var suspiciousFieldMarkers = []string{"password", "token", "secret", "key", "credential", "cert"}
-
-// walkForCredentialShapedFields walks v and calls report with the path of
-// every populated field whose name matches a marker in
-// suspiciousFieldMarkers, skipping any path present in skip.
-//
-// It descends through pointers, interfaces, maps, slices and arrays as well
-// as structs — not structs alone. A first version of this walk stopped at
-// pointer/struct, which silently missed a credential-named field reached
-// through any of the other four kinds. PortainereeRegistry.RegistryAccesses
-// is exactly that shape (map[string]PortainerRegistryAccessPolicies), so the
-// gap was not hypothetical: it was already present in the type this walk
-// exists to guard.
-func walkForCredentialShapedFields(v reflect.Value, path string, skip map[string]string, report func(path string)) {
-	switch v.Kind() {
-	case reflect.Pointer:
-		if v.IsNil() {
-			return
-		}
-		walkForCredentialShapedFields(v.Elem(), path, skip, report)
-		return
-	case reflect.Interface:
-		if v.IsNil() {
-			return
-		}
-		walkForCredentialShapedFields(v.Elem(), path, skip, report)
-		return
-	case reflect.Map:
-		// RegistryAccesses is map-shaped, and a future credential field is as
-		// likely to appear inside a map value as anywhere else. A walk that
-		// stops at the map boundary would report coverage it does not have.
-		for _, key := range v.MapKeys() {
-			walkForCredentialShapedFields(v.MapIndex(key), fmt.Sprintf("%s[%v]", path, key.Interface()), skip, report)
-		}
-		return
-	case reflect.Slice, reflect.Array:
-		for i := range v.Len() {
-			walkForCredentialShapedFields(v.Index(i), fmt.Sprintf("%s[%d]", path, i), skip, report)
-		}
-		return
-	case reflect.Struct:
-	default:
-		return
-	}
-
-	for i := range v.NumField() {
-		field := v.Type().Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		child := v.Field(i)
-		name := strings.ToLower(field.Name)
-		fieldPath := path + "." + field.Name
-		if _, allowed := skip[fieldPath]; !allowed {
-			for _, marker := range suspiciousFieldMarkers {
-				if strings.Contains(name, marker) && !child.IsZero() {
-					report(fieldPath)
-					break
-				}
-			}
-		}
-		walkForCredentialShapedFields(child, fieldPath, skip, report)
-	}
-}
-
 // TestRedact_LeavesNoCredentialShapedFieldPopulated walks the redacted struct
 // and fails on any field whose name looks like a credential. It is deliberately
 // name-based and reflective rather than a fixed list: the generated type comes
@@ -1164,65 +1127,15 @@ func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
 	}
 
 	// And catch a field we have not thought of: any populated field whose name
-	// suggests a secret must be gone after redaction.
-	walkForCredentialShapedFields(reflect.ValueOf(redact(registry)), "Registry", nil, func(path string) {
+	// suggests a secret must be gone after redaction. The walk itself now
+	// lives in toolutil (see task-4b's report): every domain whose response
+	// can carry a credential-shaped field runs this identical check rather
+	// than reimplementing it.
+	toolutil.WalkForCredentialShapedFields(reflect.ValueOf(redact(registry)), "Registry", nil, func(path string) {
 		if reason, allowed := redactAllowList[path]; allowed {
 			t.Logf("%s is populated after redaction but allow-listed: %s", path, reason)
 			return
 		}
 		t.Errorf("%s is populated after redaction; if it is not a credential, add it to the allow list with a reason", path)
 	})
-}
-
-// TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces
-// proves the walk actually descends into maps, slices and interfaces, not
-// merely that it does not crash on them.
-//
-// PortainereeRegistry has no real credential-shaped field reachable through
-// any of the three today — checked by hand against every field on
-// PortainereeRegistry, PortainerRegistryManagementConfiguration, and every
-// type either of those points to (PortainerRegistryAccessPolicies,
-// PortainerTeamAccessPolicies, PortainerUserAccessPolicies, PortainerAccessPolicy):
-// none of their fields match a marker. So this uses synthetic local types,
-// purpose-built to carry one credential-shaped field behind each shape, run
-// through the exact same walkForCredentialShapedFields used above.
-func TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces(t *testing.T) {
-	t.Parallel()
-
-	type viaMap struct{ Password *string }
-	type viaSlice struct{ Password *string }
-	type viaInterface struct{ Password *string }
-
-	secret := "SENTINEL-SECRET"
-	fixture := struct {
-		ViaMap       map[string]viaMap
-		ViaSlice     []viaSlice
-		ViaInterface any
-	}{
-		ViaMap:       map[string]viaMap{"k": {Password: &secret}},
-		ViaSlice:     []viaSlice{{Password: &secret}},
-		ViaInterface: viaInterface{Password: &secret},
-	}
-
-	var flagged []string
-	walkForCredentialShapedFields(reflect.ValueOf(fixture), "Fixture", nil, func(path string) {
-		flagged = append(flagged, path)
-	})
-
-	for _, want := range []string{
-		"Fixture.ViaMap[k].Password",
-		"Fixture.ViaSlice[0].Password",
-		"Fixture.ViaInterface.Password",
-	} {
-		found := false
-		for _, got := range flagged {
-			if got == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("walk did not flag %s; flagged = %v", want, flagged)
-		}
-	}
 }
