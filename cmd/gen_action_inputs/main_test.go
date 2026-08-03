@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -119,6 +121,32 @@ func TestCheckDomainTagsCoverSpec_TableNamesATagAbsentFromSpec_ReturnsError(t *t
 	}
 	if !strings.Contains(err.Error(), "backupp") {
 		t.Errorf("error = %q, want it to name the typo'd tag", err)
+	}
+}
+
+// TestUnit_Run_CESpecPathEqualsEESpecPath_RefusesToClassifyEverythingAsCE
+// proves the guard on the CE spec derivation: -spec's filename carrying no
+// "ee-" substring for strings.Replace to swap must refuse rather than
+// silently resolving the CE spec path to *specPath itself. Before this
+// guard, that would load the EE document a second time under the "CE"
+// label, populate ceOperationIDs with every EE operationId, and make
+// editionOf classify every EE-only action as CE — the exact failure
+// editionConstName already refuses at render time (see emit.go), just one
+// step earlier and unguarded.
+func TestUnit_Run_CESpecPathEqualsEESpecPath_RefusesToClassifyEverythingAsCE(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "spec-with-no-edition-prefix.json")
+	if err := os.WriteFile(specPath, []byte(`{"paths": {}}`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := run([]string{"-spec", specPath})
+	if err == nil {
+		t.Fatal("run() error = nil, want a refusal: -spec's filename carries no \"ee-\" for the CE derivation to swap")
+	}
+	if !strings.Contains(err.Error(), "ee-") {
+		t.Errorf("error = %q, want it to explain the missing \"ee-\" substring", err)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/config"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/tools"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
 func clientFor(t *testing.T, handler http.HandlerFunc) *portainer.Client {
@@ -26,13 +28,22 @@ func clientFor(t *testing.T, handler http.HandlerFunc) *portainer.Client {
 
 func find(t *testing.T, name string) func(context.Context, *portainer.Client, json.RawMessage) (any, error) {
 	t.Helper()
+	return findSpec(t, name).Handler
+}
+
+// findSpec returns the full declared ActionSpec for name, rather than just
+// its handler — needed by tests that must route through tools.Execute (which
+// takes the whole spec, to run the same schema validation every real caller
+// goes through) instead of calling the handler directly.
+func findSpec(t *testing.T, name string) toolutil.ActionSpec {
+	t.Helper()
 	for _, s := range Specs() {
 		if s.Name == name {
-			return s.Handler
+			return s
 		}
 	}
 	t.Fatalf("action %q not declared", name)
-	return nil
+	return toolutil.ActionSpec{}
 }
 
 func TestSpecs_AreAllValid(t *testing.T) {
@@ -142,14 +153,27 @@ func TestTagCreate_Success_SendsNameAndReturnsDecodedBody(t *testing.T) {
 	}
 }
 
-func TestTagCreate_MissingName_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+// TestTagCreate_MissingName_ReturnsErrorWithoutCallingAPI pins a
+// required-field check. tags.create now runs on generated code (see this
+// file's package doc): its generated handler deliberately carries no such
+// guard, because schema validation now runs once, centrally, in
+// tools.Execute, for every surface. So this routes through tools.Execute, the
+// path every real caller actually takes, rather than calling the handler
+// directly and asserting a guard clause the handler no longer has; the
+// property under test (missing required input is refused before the API is
+// ever called) is unchanged.
+func TestUnit_TagCreate_MissingName_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	var called atomic.Bool
 	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
-	_, err := find(t, "tags.create")(context.Background(), c, json.RawMessage(`{}`))
-	if err == nil {
-		t.Fatal("handler error = nil, want an error for a missing name")
+	spec := findSpec(t, "tags.create")
+	result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("result.IsError = false, want true for a missing name")
 	}
 	if called.Load() {
 		t.Error("the API was called despite missing required input")
@@ -190,16 +214,26 @@ func TestTagDelete_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
-func TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+// TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI pins the
+// non-positive-id guard. tags.delete now runs on generated code (see this
+// file's package doc): the guard now lives in the generated input schema's
+// "minimum": 1 constraint on "id" (toolutil.MinimumParams), enforced by
+// tools.Execute before any handler runs, so this routes through it rather
+// than calling the handler directly.
+func TestUnit_TagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
+	spec := findSpec(t, "tags.delete")
 	for _, id := range []int{0, -1} {
 		called := false
 		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
-		_, err := find(t, "tags.delete")(context.Background(), c, input)
-		if err == nil {
-			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
+		result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+		if err != nil {
+			t.Fatalf("id=%d: Execute error = %v", id, err)
+		}
+		if !result.IsError {
+			t.Errorf("id=%d: result.IsError = false, want true for a non-positive id", id)
 		}
 		if called {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)

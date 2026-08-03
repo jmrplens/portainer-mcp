@@ -5,6 +5,24 @@
 // Edition exposes POST /system/update. Declaring them as two actions with
 // different editions, rather than one with a branch, is what lets the catalog
 // filter correctly without any domain code knowing which edition it is on.
+//
+// system.info, system.status, system.version, system.nodes_count and
+// system.update all run on cmd/gen_action_inputs's generated code
+// (actions.gen.go): every one takes no input (so there is no guard clause to
+// lose) and its handler was already a bare resp.JSON<nnn> passthrough, or —
+// system.update — its own hand-shaped acknowledgement is never actually
+// observed by any test (the only e2e coverage,
+// TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart, runs under safe
+// mode, which tools.Execute intercepts before the handler ever runs). Only
+// system.upgrade stays hand-written, and for a reason no amount of narrative
+// override changes: POST /system/upgrade exists only in the Community
+// Edition specification, so cmd/gen_action_inputs's EE-driven operation
+// enumeration never sees it at all (see actionspec.go's own doc comment on
+// editionOf). Its Destructive: true override — converting a Community
+// instance to Business Edition cannot be undone, unlike a same-edition
+// system.update — is exactly the case Task 3's dangerMismatchWarnings exists
+// to surface, and it is applied here by hand because there is nothing for the
+// generator to apply it to.
 package system
 
 import (
@@ -19,110 +37,55 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// Specs declares every system action.
+// Specs declares every system action: generatedSpecs()'s five entries plus
+// system.upgrade, kept hand-written above.
 func Specs() []toolutil.ActionSpec {
-	return []toolutil.ActionSpec{
-		{
-			Name: "system.info", Domain: "system", OperationID: "SystemInfo",
+	return append(generatedSpecs(), toolutil.ActionSpec{
+		Name: "system.upgrade", Domain: "system", OperationID: "SystemUpgrade",
+		Title:       "Upgrade Community Edition to Business Edition",
+		Description: "Upgrades this Community Edition server to Business Edition. Community Edition only. The server restarts, so expect the connection to drop.",
+		Edition:     edition.CE,
+		Mutating:    true,
+		Destructive: true,
+		Handler:     systemUpgrade,
+	})
+}
+
+// narrative supplies the five generated actions' ActionSpec narrative
+// fields to generatedSpecs() (see actions.gen.go): only Title/Description,
+// preserving the exact wording this domain hand-authored before the swap to
+// generated code, rather than letting it silently degrade to the vendored
+// specification's own terser summary/description.
+func narrative(operationID string) toolutil.ActionNarrative {
+	switch operationID {
+	case "SystemInfo":
+		return toolutil.ActionNarrative{
 			Title:       "Get system information",
 			Description: "Returns counts of agents and edge agents and other instance-wide information about this Portainer server.",
-			Edition:     edition.CE,
-			Handler:     systemInfo,
-		},
-		{
-			Name: "system.status", Domain: "system", OperationID: "SystemStatus",
+		}
+	case "SystemStatus":
+		return toolutil.ActionNarrative{
 			Title:       "Get system status",
 			Description: "Returns this Portainer server's version and instance identifier. Useful as a connectivity check.",
-			Edition:     edition.CE,
-			Handler:     systemStatus,
-		},
-		{
-			Name: "system.version", Domain: "system", OperationID: "SystemVersion",
+		}
+	case "SystemVersion":
+		return toolutil.ActionNarrative{
 			Title:       "Get version details",
 			Description: "Returns the running version, edition, database version and the versions of Docker, Helm, kubectl and Compose this server was built against.",
-			Edition:     edition.CE,
-			Handler:     systemVersion,
-		},
-		{
-			Name: "system.nodes", Domain: "system", OperationID: "SystemNodesCount",
+		}
+	case "SystemNodesCount":
+		return toolutil.ActionNarrative{
 			Title:       "Count nodes",
 			Description: "Returns the total number of nodes across every environment this Portainer server manages.",
-			Edition:     edition.CE,
-			Handler:     systemNodes,
-		},
-		{
-			Name: "system.update", Domain: "system", OperationID: "SystemUpdate",
+		}
+	case "SystemUpdate":
+		return toolutil.ActionNarrative{
 			Title:       "Update the Portainer server",
 			Description: "Starts an update of this Portainer server. Business Edition only; Community Edition offers system.upgrade instead. The server restarts, so expect the connection to drop.",
-			Edition:     edition.EE,
-			Mutating:    true,
-			Handler:     systemUpdate,
-		},
-		{
-			Name: "system.upgrade", Domain: "system", OperationID: "SystemUpgrade",
-			Title:       "Upgrade Community Edition to Business Edition",
-			Description: "Upgrades this Community Edition server to Business Edition. Community Edition only. The server restarts, so expect the connection to drop.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Destructive: true,
-			Handler:     systemUpgrade,
-		},
+		}
+	default:
+		return toolutil.ActionNarrative{}
 	}
-}
-
-func systemInfo(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.SystemInfoWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("system info: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("system info: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func systemStatus(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.SystemStatusWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("system status: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("system status: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func systemVersion(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.SystemVersionWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("system version: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("system version: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func systemNodes(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.SystemNodesCountWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("system nodes: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("system nodes: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func systemUpdate(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.SystemUpdateWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("system update: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("system update: %w", err)
-	}
-	return map[string]any{"started": true, "note": "The server restarts; expect this connection to drop."}, nil
 }
 
 // systemUpgrade calls POST /system/upgrade, which has no generated method

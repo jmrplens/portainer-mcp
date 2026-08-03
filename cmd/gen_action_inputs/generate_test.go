@@ -48,7 +48,7 @@ func TestUnit_RequiredPathParameter_GeneratesNonPointerFieldWithNoOmitempty(t *t
 	}
 	res := &resolver{doc: newDoc(nil)}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, newDoc(nil), "tagDeleteInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, newDoc(nil), "tagDeleteInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -87,7 +87,7 @@ func TestUnit_OptionalQueryParameter_GeneratesPointerFieldWithOmitempty(t *testi
 	}
 	res := &resolver{doc: newDoc(nil)}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, newDoc(nil), "registryInspectInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, newDoc(nil), "registryInspectInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestUnit_Enum_GeneratesEnumParamsMethodWithSpecValues(t *testing.T) {
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, doc, "registryPingInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, doc, "registryPingInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -188,7 +188,7 @@ func TestUnit_BodyObjectProperty_GeneratesNestedStruct(t *testing.T) {
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, doc, "registryCreateInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, doc, "registryCreateInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestUnit_MapTypedRequestBody_GeneratesMapField(t *testing.T) {
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, doc, "deleteServiceAccountsInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, doc, "deleteServiceAccountsInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -389,7 +389,7 @@ func TestUnit_FreeFormRequestBody_RefusedThroughAssembleOperationFields(t *testi
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	_, err := assembleOperationFields(op, res, doc, "policyCreateInput", &nested)
+	_, _, err := assembleOperationFields(op, res, doc, "policyCreateInput", &nested)
 	if err == nil {
 		t.Fatal("assembleOperationFields() = nil error, want a refusal: a genuinely free-form required body must not silently contribute zero fields")
 	}
@@ -437,7 +437,7 @@ func TestUnit_NestedStructNameCollidesWithSiblingProperty(t *testing.T) {
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	fields, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
+	fields, _, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
@@ -535,7 +535,7 @@ func TestUnit_AssembleFields_NestedObjectFieldCollision_IsRefused(t *testing.T) 
 	doc := newDoc(nil)
 	res := &resolver{doc: doc}
 	var nested []structSpec
-	_, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
+	_, _, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
 	if err == nil {
 		t.Fatal("assembleOperationFields() = nil error, want a refusal: the nested \"config\" object's two properties render the same JSON tag")
 	}
@@ -584,7 +584,7 @@ func TestUnit_WholeDomainFile_MultipleOperationsCompileTogether(t *testing.T) {
 	for _, op := range ops {
 		structName := inputStructName(op.OperationID)
 		var nested []structSpec
-		fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+		fields, _, err := assembleOperationFields(op, res, doc, structName, &nested)
 		if err != nil {
 			t.Fatalf("assembleOperationFields(%s) error = %v", op.OperationID, err)
 		}
@@ -701,7 +701,7 @@ func TestUnit_Refusals(t *testing.T) {
 				doc := newDoc(nil)
 				res := &resolver{doc: doc}
 				var nested []structSpec
-				_, err := assembleOperationFields(op, res, doc, "collideInput", &nested)
+				_, _, err := assembleOperationFields(op, res, doc, "collideInput", &nested)
 				return err
 			},
 			wantErr: "contributed by both",
@@ -720,7 +720,7 @@ func TestUnit_Refusals(t *testing.T) {
 				doc := newDoc(nil)
 				res := &resolver{doc: doc}
 				var nested []structSpec
-				_, err := assembleOperationFields(op, res, doc, "headerOpInput", &nested)
+				_, _, err := assembleOperationFields(op, res, doc, "headerOpInput", &nested)
 				return err
 			},
 			wantErr: "not supported",
@@ -744,7 +744,7 @@ func TestUnit_Refusals(t *testing.T) {
 				doc := newDoc(nil)
 				res := &resolver{doc: doc}
 				var nested []structSpec
-				_, err := assembleOperationFields(op, res, doc, "refParamOpInput", &nested)
+				_, _, err := assembleOperationFields(op, res, doc, "refParamOpInput", &nested)
 				return err
 			},
 			wantErr: "no name",

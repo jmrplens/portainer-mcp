@@ -5,96 +5,68 @@
 // pilot for that classification — tags.delete removes a tag outright, with no
 // softer alternative the way some domains offer a stop/disable short of
 // deletion.
+//
+// All three actions — tags.list, tags.create, tags.delete — run on
+// cmd/gen_action_inputs's generated code (actions.gen.go). TagList takes no
+// input, its handler is a bare resp.JSON200 passthrough with no hand-shaped
+// acknowledgement, and no existing test pins a guard clause a generated
+// handler would not have. TagCreate's and TagDelete's only existing tests
+// that called the handler directly
+// (TestTagCreate_MissingName_ReturnsErrorWithoutCallingAPI,
+// TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI) now route through
+// tools.Execute instead: the required-field check ("name is required") is
+// exactly what tools.Execute's central schema validation enforces for every
+// surface, and the non-positive-id check is now enforced the identical way,
+// via a generated JSON Schema "minimum": 1 on TagDelete's own "id" path
+// parameter (toolutil.MinimumParams, cmd/gen_action_inputs/fields.go's
+// isIdentifierPathParam — this project's own addition, not the
+// specification's; see that generator's doc comment for why). Neither test
+// is weaker for it — the property under test (invalid input refused before
+// the API is ever called) is unchanged, only where that refusal actually
+// happens. PortainerTag (every one of these three operations' response type)
+// carries nothing credential-shaped, so none needed a redaction wrapper the
+// way registries.list/create/inspect/update did (see task-4b's report).
 package tags
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-
-	"github.com/jmrplens/portainer-mcp/internal/edition"
-	"github.com/jmrplens/portainer-mcp/internal/portainer"
-	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// Specs declares every tag action.
+// Specs declares every tag action: all three now come from generatedSpecs().
 func Specs() []toolutil.ActionSpec {
-	return []toolutil.ActionSpec{
-		{
-			Name: "tags.list", Domain: "tags", OperationID: "TagList",
+	return generatedSpecs()
+}
+
+// narrative supplies TagList's, TagCreate's and TagDelete's ActionSpec
+// narrative fields to generatedSpecs() (see actions.gen.go): only
+// Title/Description, preserving the exact wording this domain hand-authored
+// before each's swap to generated code, rather than letting it silently
+// degrade to the vendored specification's own terser summary/description.
+// Every other operationId returns the zero toolutil.ActionNarrative —
+// nothing else in this domain is generated today.
+func narrative(operationID string) toolutil.ActionNarrative {
+	switch operationID {
+	case "TagList":
+		return toolutil.ActionNarrative{
 			Title:       "List tags",
 			Description: "Returns every environment tag defined on this Portainer server.",
-			Edition:     edition.CE,
-			Handler:     tagList,
-		},
-		{
-			Name: "tags.create", Domain: "tags", OperationID: "TagCreate",
+		}
+	case "TagCreate":
+		return toolutil.ActionNarrative{
 			Title:       "Create a tag",
 			Description: "Creates a new environment tag with the given name.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Handler:     tagCreate,
-			Input:       tagCreateInput{},
-		},
-		{
-			Name: "tags.delete", Domain: "tags", OperationID: "TagDelete",
+		}
+	case "TagDelete":
+		return toolutil.ActionNarrative{
 			Title:       "Delete a tag",
 			Description: "Permanently removes a tag, unassigning it from every environment and environment group that carries it. This cannot be undone.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Destructive: true,
-			Handler:     tagDelete,
-			Input:       tagDeleteInput{},
-		},
+		}
+	default:
+		return toolutil.ActionNarrative{}
 	}
 }
 
-func tagList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
-	resp, err := c.API.TagListWithResponse(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("tags list: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("tags list: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func tagCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params tagCreateInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("tags create: parse input: %w", err)
-	}
-	if params.Name == "" {
-		return nil, fmt.Errorf("tags create: name is required")
-	}
-
-	resp, err := c.API.TagCreateWithResponse(ctx, apigen.TagCreateJSONRequestBody{Name: params.Name})
-	if err != nil {
-		return nil, fmt.Errorf("tags create: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("tags create: %w", err)
-	}
-	return resp.JSON200, nil
-}
-
-func tagDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params tagDeleteInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("tags delete: parse input: %w", err)
-	}
-	if params.ID <= 0 {
-		return nil, fmt.Errorf("tags delete: id must be a positive integer, got %d", params.ID)
-	}
-
-	resp, err := c.API.TagDeleteWithResponse(ctx, params.ID)
-	if err != nil {
-		return nil, fmt.Errorf("tags delete: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("tags delete: %w", err)
-	}
-	return map[string]any{"deleted": true, "id": params.ID}, nil
-}
+// tagCreate and tagDelete are no longer declared here: both run on
+// cmd/gen_action_inputs's generated code (actions.gen.go) — see this file's
+// package doc. PortainerTag carries nothing credential-shaped, so neither
+// needed a redaction wrapper to become eligible.

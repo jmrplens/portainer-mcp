@@ -69,17 +69,17 @@ func TestSystemStatusVersionNodes_AcrossSurfacesAndEditions(t *testing.T) {
 					t.Errorf("system.version ServerEdition = %v, want %s", version["ServerEdition"], edition)
 				}
 
-				// system.nodes counts nodes across every environment this
+				// system.nodes_count counts nodes across every environment this
 				// server manages. The estate registers at least the local
 				// Docker environment Portainer creates at startup plus the
 				// agent environment task 6 registers, so the true count is
 				// never zero — asserting that is stronger than "returned
 				// something" without hardcoding the exact figure, which
 				// would need updating every time the estate's shape changes.
-				nodes := callAction[map[string]any](t, session, surface, "system.nodes", nil)
+				nodes := callAction[map[string]any](t, session, surface, "system.nodes_count", nil)
 				count, ok := nodes["nodes"].(float64)
 				if !ok || count <= 0 {
-					t.Errorf("system.nodes nodes = %v, want a positive count", nodes["nodes"])
+					t.Errorf("system.nodes_count nodes = %v, want a positive count", nodes["nodes"])
 				}
 			})
 		}

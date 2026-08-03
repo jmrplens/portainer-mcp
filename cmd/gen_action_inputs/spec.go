@@ -65,13 +65,31 @@ func loadDocument(path string) (*document, map[string]map[string]json.RawMessage
 // decoded to build an Input struct: its identity, its domain, and its raw
 // parameter and request-body nodes (left raw so schemaResolver can navigate
 // $ref/allOf/oneOf without a fixed shape).
+//
+// Summary and Description are carried verbatim (not yet cleaned — see
+// cmd/gen_action_inputs's cleanTitleAndDescription in actionspec.go) purely
+// because they are the only two fields of the raw operation object that
+// Title and Description, the two ActionSpec fields actionspec.go derives,
+// can be built from; nothing before Task 3 needed them.
 type operation struct {
 	OperationID string // exported form, e.g. "TagCreate"
 	Method      string
 	Path        string
 	Domain      string // first declared tag, "" if none
+	Summary     string
+	Description string
 	Parameters  []map[string]any
 	RequestBody map[string]any // nil if the operation has no body
+	// Responses is the raw "responses" object, keyed by HTTP status code
+	// string ("200", "204", "default", ...), left undecoded beyond that one
+	// level for the same reason RequestBody is: successResponseSchemas (see
+	// credential.go) navigates each entry's own "content"/"application/json"/
+	// "schema" path itself, and a $ref there is resolved by the same resolver
+	// requestBodySchema's caller already uses. None of the vendored specs
+	// declare a components.responses $ref at the response-object level itself
+	// (checked against both), so — unlike requestBody — there is no
+	// requestBodies-style indirection to resolve here.
+	Responses map[string]map[string]any
 }
 
 // operationsByDomain decodes every operation in paths and groups it by
@@ -85,10 +103,13 @@ func operationsByDomain(paths map[string]map[string]json.RawMessage) (map[string
 				continue
 			}
 			var op struct {
-				OperationID string           `json:"operationId"`
-				Tags        []string         `json:"tags"`
-				Parameters  []map[string]any `json:"parameters"`
-				RequestBody map[string]any   `json:"requestBody"`
+				OperationID string                    `json:"operationId"`
+				Tags        []string                  `json:"tags"`
+				Summary     string                    `json:"summary"`
+				Description string                    `json:"description"`
+				Parameters  []map[string]any          `json:"parameters"`
+				RequestBody map[string]any            `json:"requestBody"`
+				Responses   map[string]map[string]any `json:"responses"`
 			}
 			if err := json.Unmarshal(raw, &op); err != nil {
 				return nil, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
@@ -105,8 +126,11 @@ func operationsByDomain(paths map[string]map[string]json.RawMessage) (map[string
 				Method:      strings.ToUpper(method),
 				Path:        path,
 				Domain:      domain,
+				Summary:     op.Summary,
+				Description: op.Description,
 				Parameters:  op.Parameters,
 				RequestBody: op.RequestBody,
+				Responses:   op.Responses,
 			}
 			byDomain[domain] = append(byDomain[domain], o)
 		}
