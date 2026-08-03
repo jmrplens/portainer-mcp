@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -75,7 +76,7 @@ func buildRealHandlerSpec(t *testing.T, domain, operationID string) ([]structSpe
 		structs = append(structs, structSpec{Name: structName, Fields: fields})
 		structs = append(structs, nested...)
 	}
-	spec, err := buildHandlerSpec(domain, op, fields, pathOrder, inputStruct)
+	spec, err := buildHandlerSpec(domain, op, fields, pathOrder, nested, inputStruct)
 	if err != nil {
 		t.Fatalf("buildHandlerSpec(%s) error = %v", operationID, err)
 	}
@@ -447,7 +448,7 @@ func TestUnit_BuildHandlerSpec_FieldWithNoOrigin_IsRefused(t *testing.T) {
 	// dropping it without a trace.
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
 	fields := []fieldSpec{{GoName: "ID", GoType: "int", JSONName: "id", Required: true}}
-	_, err := buildHandlerSpec("tags", op, fields, nil, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, fields, nil, nil, "tagDeleteInput")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: the field carries no Origin")
 	}
@@ -463,7 +464,7 @@ func TestUnit_BuildHandlerSpec_PathOrderNamesAMissingField_IsRefused(t *testing.
 	// refused rather than indexing out of range or silently skipping the
 	// argument.
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
-	_, err := buildHandlerSpec("tags", op, nil, []string{"id"}, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, nil, []string{"id"}, nil, "tagDeleteInput")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: pathOrder names a field with no match in fields")
 	}
@@ -482,12 +483,95 @@ func TestUnit_BuildHandlerSpec_PathArgumentTypeMismatch_IsRefused(t *testing.T) 
 	// internally consistent, just wrong against each other).
 	op := operation{OperationID: "TagDelete", Method: "DELETE", Path: "/tags/{id}"}
 	fields := []fieldSpec{{GoName: "ID", GoType: "string", JSONName: "id", Required: true, Origin: originPath}}
-	_, err := buildHandlerSpec("tags", op, fields, []string{"id"}, "tagDeleteInput")
+	_, err := buildHandlerSpec("tags", op, fields, []string{"id"}, nil, "tagDeleteInput")
 	if err == nil {
 		t.Fatal("buildHandlerSpec() = nil error, want a refusal: the claimed path argument type (string) disagrees with the generated client's (int)")
 	}
 	if !strings.Contains(err.Error(), "mismatched type") {
 		t.Errorf("error = %q, want it to say the path argument type is mismatched", err)
+	}
+}
+
+// --- wire-width safety: the generic JSON round trip this file's package doc
+// describes is only correct where recasing a wire tag is the only thing
+// that differs between this generator's own Go type and the generated
+// client's. Where the generated client's own type is narrower — a value
+// this generator's own type can hold that the client's cannot — the round
+// trip can silently truncate or fail outright, which is exactly what
+// checkWireWidth exists to refuse before a handler is ever generated for
+// it, rather than leave 44 future domain authors to notice on their own.
+
+func TestUnit_CheckWireWidth_RegistriesConfigure_RefusesNarrowedTLSCertificateBytes(t *testing.T) {
+	t.Parallel()
+	// registries.registryConfigurePayload's TLSCACertFile, TLSCertFile and
+	// TLSKeyFile are generated client-side as *[]int32 against a JSON
+	// Schema "integer" property (this generator's own []int) — the real,
+	// previously-investigated example (registries.go's own toTLSFileBytes
+	// exists by hand specifically because of this; see
+	// plan/carry-forward.md) of what this check exists to catch. Run
+	// through the real generation path against the real spec, not a
+	// fabricated fixture, so this is a verified refusal of the actual known
+	// case, not merely a plausible one.
+	op, doc, res := realOperation(t, "RegistryConfigure")
+	var nested []structSpec
+	fields, pathOrder, err := assembleOperationFields(op, res, doc, "registryConfigureInput", &nested)
+	if err != nil {
+		t.Fatalf("assembleOperationFields() error = %v", err)
+	}
+	_, err = buildHandlerSpec("registries", op, fields, pathOrder, nested, "registryConfigureInput")
+	if err == nil {
+		t.Fatal("buildHandlerSpec(RegistryConfigure) = nil error, want a refusal: TLSCACertFile/TLSCertFile/TLSKeyFile narrow from []int to the generated client's []int32")
+	}
+	if !strings.Contains(err.Error(), "tlsCACertFile") && !strings.Contains(err.Error(), "tlsCertFile") && !strings.Contains(err.Error(), "tlsKeyFile") {
+		t.Errorf("error = %q, want it to name one of the narrowed TLS certificate fields", err)
+	}
+	if !strings.Contains(err.Error(), "int vs int32") {
+		t.Errorf("error = %q, want it to say which two types disagree (int vs int32)", err)
+	}
+}
+
+// TestUnit_TypeWidthCompatible_DrawsTheBoundaryAtNarrowerConcreteWidth is the
+// standing-warning pair: two cases differing *only* in the generated
+// client's own integer width, so a check that always refuses (or always
+// allows) integers would fail exactly one of the two, not both — the
+// mutation this project's own standing warning calls out passing every
+// prior verification step precisely because the fixture never varied the
+// one thing under test.
+func TestUnit_TypeWidthCompatible_DrawsTheBoundaryAtNarrowerConcreteWidth(t *testing.T) {
+	t.Parallel()
+	type narrow struct {
+		V int32
+	}
+	type wide struct {
+		V int64
+	}
+	narrowField, _ := reflect.TypeOf(narrow{}).FieldByName("V")
+	wideField, _ := reflect.TypeOf(wide{}).FieldByName("V")
+
+	if ok, detail := typeWidthCompatible("int", narrowField.Type, nil); ok {
+		t.Errorf("typeWidthCompatible(\"int\", int32, nil) = true, want false: int32 is narrower than this generator's int and can silently truncate a value it holds")
+	} else if !strings.Contains(detail, "int32") {
+		t.Errorf("detail = %q, want it to mention int32", detail)
+	}
+
+	if ok, _ := typeWidthCompatible("int", wideField.Type, nil); !ok {
+		t.Error("typeWidthCompatible(\"int\", int64, nil) = false, want true: int64 cannot silently narrow anything this generator's int can hold")
+	}
+}
+
+func TestUnit_TypeWidthCompatible_PointerOptionalityIsNotWidth(t *testing.T) {
+	t.Parallel()
+	// *int against "integer" (this generator's own optional-field pointer
+	// convention) must not be confused with the int32-narrowing case above:
+	// pointer-ness is "not provided" vs "provided", not a range restriction,
+	// on both this generator's side (a leading "*" in ourGoType) and the
+	// generated client's (apigenType itself being a Pointer).
+	type withPointerInt struct {
+		V *int
+	}
+	f, _ := reflect.TypeOf(withPointerInt{}).FieldByName("V")
+	if ok, detail := typeWidthCompatible("*int", f.Type, nil); !ok {
+		t.Errorf("typeWidthCompatible(\"*int\", *int, nil) = false (%s), want true: pointer-ness on both sides is optionality, not width", detail)
 	}
 }
 

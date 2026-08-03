@@ -48,22 +48,32 @@ import (
 // name verbatim, so the two tags are not just case-insensitively but
 // literally equal.
 // The one place this invariant does not hold is where the vendored spec's
-// own Go type disagrees in width from its declared JSON Schema type —
-// registries.registryConfigurePayload's TLSCACertFile is `[]int32` in the
-// generated client despite a JSON Schema "integer" (Go `int`) declaration,
-// which is exactly why registries.go hand-converts it. A generated handler
-// hitting this would still compile and mostly work (encoding/json checks
-// integer range on unmarshal into a sized int type), but a domain carrying
-// this shape is better served by the escape hatch below than by trusting it
-// silently.
+// own Go type disagrees in *width*, not just casing, from its declared JSON
+// Schema type — registries.registryConfigurePayload's TLSCACertFile is
+// `[]int32` in the generated client despite a JSON Schema "integer" (this
+// generator's own `[]int`) declaration, which is exactly why registries.go
+// hand-converts it (toTLSFileBytes) rather than assigning it directly. This
+// is not merely a footnote: a generated handler hitting it would compile
+// and mostly work, right up until a caller supplies a value outside int32's
+// range, at which point encoding/json either truncates it or fails — the
+// same class of silently-wrong-rather-than-loudly-refused defect this
+// project has already spent three phases eliminating. checkWireWidth below
+// is what makes this mechanical rather than a note a future domain author
+// has to remember: it compares this generator's own type against the real
+// generated client's, by reflection, for every query and body field (and,
+// recursively, every nested object field), and refuses the operation by
+// name — never guesses — the moment the two disagree in a way the round
+// trip cannot carry faithfully. See its own and typeWidthCompatible's doc
+// comments for exactly where that boundary is drawn.
 //
 // Safety this buys back, since no per-field Go-name introspection means no
 // per-field cross-check either: reflection on the real generated client
-// (pathArgTypesFor, responseInfoFor) verifies path-argument arity and type,
-// and refuses generation the moment fields.go's own path-parameter order or
-// count disagrees with what oapi-codegen actually generated for the same
-// operationId — the collision-free invariant assembleOperationFields
-// enforces on the JSON side, checked from the Go side too.
+// (pathArgTypesFor, responseInfoFor, checkWireWidth) verifies path-argument
+// arity and type, query/body wire width, and response shape, and refuses
+// generation the moment fields.go's own derivation disagrees with what
+// oapi-codegen actually generated for the same operationId — the
+// collision-free invariant assembleOperationFields enforces on the JSON
+// side, checked from the Go side too.
 
 // pathArg is one field routed to the generated client method's positional
 // path arguments, carried in call order (see assembleOperationFields'
@@ -229,11 +239,11 @@ func handlerFuncName(operationID string) string {
 	return string(r)
 }
 
-// buildHandlerSpec assembles one operation's handlerSpec from the fields and
-// pathOrder assembleOperationFields already computed for its Input struct —
-// the single source both the rendered struct and this handler are built
-// from, per this file's package doc.
-func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder []string, inputStruct string) (handlerSpec, error) {
+// buildHandlerSpec assembles one operation's handlerSpec from the fields,
+// pathOrder and nested structs assembleOperationFields already computed for
+// its Input struct — the single source both the rendered struct and this
+// handler are built from, per this file's package doc.
+func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder []string, nested []structSpec, inputStruct string) (handlerSpec, error) {
 	byJSON := make(map[string]fieldSpec, len(fields))
 	for _, f := range fields {
 		byJSON[f.JSONName] = f
@@ -274,6 +284,10 @@ func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder
 		}
 	}
 
+	if err := checkWireWidth(op.OperationID, fields, nested, hasQuery, hasBody, len(pathArgs)); err != nil {
+		return handlerSpec{}, err
+	}
+
 	resp, err := responseInfoFor(op.OperationID)
 	if err != nil {
 		return handlerSpec{}, fmt.Errorf("%s: %w", op.OperationID, err)
@@ -289,6 +303,216 @@ func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder
 		HasBody:     hasBody,
 		Response:    resp,
 	}, nil
+}
+
+// clientArgTypes returns the generated client method's own query-parameters
+// and/or body argument types (nil for whichever this operation does not
+// have), by position, immediately after its pathArgCount positional path
+// arguments — the same positional convention pathArgTypesFor already relies
+// on.
+func clientArgTypes(operationID string, pathArgCount int, hasQuery, hasBody bool) (queryType, bodyType reflect.Type, err error) {
+	m, ok := clientMethodFor(operationID)
+	if !ok {
+		return nil, nil, fmt.Errorf("no generated client method %sWithResponse", operationID)
+	}
+	idx := 2 + pathArgCount // 0: receiver, 1: ctx
+	if hasQuery {
+		if idx >= m.Type.NumIn() {
+			return nil, nil, fmt.Errorf("%sWithResponse has no query-parameters argument at the expected position", operationID)
+		}
+		queryType = m.Type.In(idx)
+		idx++
+	}
+	if hasBody {
+		if idx >= m.Type.NumIn() {
+			return nil, nil, fmt.Errorf("%sWithResponse has no body argument at the expected position", operationID)
+		}
+		bodyType = m.Type.In(idx)
+	}
+	return queryType, bodyType, nil
+}
+
+// findStructFieldByTag returns t's field (after peeling one layer of
+// pointer, since the caller has already decided t is meant to be a struct)
+// whose "json" tag name equals jsonName, folding case when caseInsensitive
+// — the same case-insensitive match a real json.Unmarshal falls back to
+// when no exact tag match exists, which is what makes the JSON round trip
+// this generator's handlers use correct in the first place (see this file's
+// package doc). A field tagged "-" or with no name is never matched, same
+// as encoding/json's own rule.
+func findStructFieldByTag(t reflect.Type, jsonName string, caseInsensitive bool) (reflect.StructField, bool) {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return reflect.StructField{}, false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		if name == jsonName || (caseInsensitive && strings.EqualFold(name, jsonName)) {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
+}
+
+// typeWidthCompatible reports whether ourGoType — this generator's own
+// rendering of a JSON Schema node, from typeOf — can round-trip through
+// encoding/json into apigenType, the real field oapi-codegen generated for
+// the same wire property, without silently narrowing or reshaping the
+// value. structsByName resolves a nested-struct GoType (e.g.
+// "registryCreateInputEcr") to that struct's own fields, so a nested object
+// property is checked recursively, one field at a time, the same way the
+// JSON round trip itself descends into it.
+//
+// Pointer-ness is not width and is peeled from both sides first: an
+// optional field renders as a Go pointer on both sides for unrelated
+// reasons (this generator's own "not provided" vs "provided as the zero
+// value" distinction on one side; the generated client's own convention of
+// pointering optional slices and maps, e.g. `Tags *[]string`, on the
+// other), and neither says anything about whether a value fits.
+//
+// What is refused: any kind mismatch (a string against a non-string, a
+// slice against a non-slice), and — the case this function exists for — a
+// narrower concrete numeric width on the generated client's side: int32,
+// int16, int8, float32 (and their unsigned forms) against this generator's
+// own int/float64. registries.registryConfigurePayload's TLSCACertFile
+// ([]int32 in the generated client against a JSON Schema "integer" i.e. Go
+// `int` property) is the real, previously-investigated example — see
+// plan/carry-forward.md — and is exactly why this project already refuses
+// six other things at generation time rather than emitting output that
+// merely compiles. The boundary drawn here is deliberately about numeric
+// *range*, not implementation exactness: apigenType.Int64/Uint64/Float64
+// are accepted for either an "int" or "float64" ourGoType, since none of
+// those can silently drop a value this generator's own types can hold.
+func typeWidthCompatible(ourGoType string, apigenType reflect.Type, structsByName map[string][]fieldSpec) (bool, string) {
+	ourGoType = strings.TrimPrefix(ourGoType, "*")
+	if apigenType.Kind() == reflect.Pointer {
+		apigenType = apigenType.Elem()
+	}
+
+	switch {
+	case ourGoType == "string":
+		if apigenType.Kind() != reflect.String {
+			return false, fmt.Sprintf("string vs %s", apigenType)
+		}
+		return true, ""
+	case ourGoType == "bool":
+		if apigenType.Kind() != reflect.Bool {
+			return false, fmt.Sprintf("bool vs %s", apigenType)
+		}
+		return true, ""
+	case ourGoType == "int":
+		switch apigenType.Kind() {
+		case reflect.Int, reflect.Int64, reflect.Uint, reflect.Uint64, reflect.Float64:
+			return true, ""
+		default:
+			return false, fmt.Sprintf("int vs %s", apigenType)
+		}
+	case ourGoType == "float64":
+		switch apigenType.Kind() {
+		case reflect.Float64, reflect.Int, reflect.Int64, reflect.Uint, reflect.Uint64:
+			return true, ""
+		default:
+			return false, fmt.Sprintf("float64 vs %s", apigenType)
+		}
+	case strings.HasPrefix(ourGoType, "[]"):
+		if apigenType.Kind() != reflect.Slice {
+			return false, fmt.Sprintf("%s vs %s", ourGoType, apigenType)
+		}
+		return typeWidthCompatible(strings.TrimPrefix(ourGoType, "[]"), apigenType.Elem(), structsByName)
+	case strings.HasPrefix(ourGoType, "map[string]"):
+		if apigenType.Kind() != reflect.Map {
+			return false, fmt.Sprintf("%s vs %s", ourGoType, apigenType)
+		}
+		return typeWidthCompatible(strings.TrimPrefix(ourGoType, "map[string]"), apigenType.Elem(), structsByName)
+	default:
+		// Not a scalar, slice or map spelling this function recognises: the
+		// remaining shape typeOf produces is a nested struct's own name.
+		nestedFields, ok := structsByName[ourGoType]
+		if !ok || apigenType.Kind() != reflect.Struct {
+			return false, fmt.Sprintf("%s vs %s", ourGoType, apigenType)
+		}
+		for _, nf := range nestedFields {
+			apField, found := findStructFieldByTag(apigenType, nf.JSONName, true)
+			if !found {
+				continue // this generator's own field-matching gap, not a width question
+			}
+			if ok, detail := typeWidthCompatible(nf.GoType, apField.Type, structsByName); !ok {
+				return false, nf.JSONName + "." + detail
+			}
+		}
+		return true, ""
+	}
+}
+
+// checkWireWidth refuses an operation whose query and/or body fields cannot
+// faithfully round-trip through JSON into the generated client's own Go
+// types for the same wire properties — see typeWidthCompatible for exactly
+// what counts as a disagreement. Path-origin fields are not checked here:
+// they are never round-tripped through JSON at all (each is read directly
+// off the Input struct and passed as a positional argument), and
+// pathArgTypesFor above already cross-checks their type against the
+// generated client with an even stricter, exact-kind match.
+func checkWireWidth(operationID string, fields []fieldSpec, nested []structSpec, hasQuery, hasBody bool, pathArgCount int) error {
+	if !hasQuery && !hasBody {
+		return nil
+	}
+	queryType, bodyType, err := clientArgTypes(operationID, pathArgCount, hasQuery, hasBody)
+	if err != nil {
+		return fmt.Errorf("%s: %w", operationID, err)
+	}
+	structsByName := make(map[string][]fieldSpec, len(nested))
+	for _, s := range nested {
+		structsByName[s.Name] = s.Fields
+	}
+
+	for _, f := range fields {
+		var target reflect.Type
+		caseInsensitive := false
+		switch f.Origin {
+		case originQuery:
+			target = queryType
+		case originBody:
+			target, caseInsensitive = bodyType, true
+		default:
+			continue
+		}
+		if target == nil {
+			continue
+		}
+
+		depointered := target
+		if depointered.Kind() == reflect.Pointer {
+			depointered = depointered.Elem()
+		}
+		var apigenType reflect.Type
+		if depointered.Kind() == reflect.Struct {
+			apField, found := findStructFieldByTag(depointered, f.JSONName, caseInsensitive)
+			if !found {
+				continue // this generator's own field-matching gap, not a width question
+			}
+			apigenType = apField.Type
+		} else {
+			// The whole query or body argument directly *is* this one
+			// field — the map-typed request body shape
+			// (assembleOperationFields' synthetic "namespace" field) is
+			// the real example, where JSONRequestBody is itself a map
+			// type, not a struct with a "namespace" field inside it.
+			apigenType = target
+		}
+
+		if ok, detail := typeWidthCompatible(f.GoType, apigenType, structsByName); !ok {
+			return fmt.Errorf(
+				"%s: field %q is Go type %s in the generated Input, which cannot round-trip through JSON into the generated client's own type without narrowing or reshaping it (%s); write this handler by hand instead of trusting the generic distribution",
+				operationID, f.JSONName, f.GoType, detail)
+		}
+	}
+	return nil
 }
 
 // renderHandlerFunc writes one handler function to buf.

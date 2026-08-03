@@ -161,7 +161,7 @@ func run(args []string) error {
 				continue
 			}
 
-			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, inputStruct)
+			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, nested, inputStruct)
 			if err != nil {
 				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
 			}
