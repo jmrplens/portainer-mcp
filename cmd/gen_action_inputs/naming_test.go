@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -18,15 +20,6 @@ import (
 // `go test ./cmd/gen_action_inputs/... -run PrintAllGeneratedNames -names -v`
 // once to read the product this rule actually produces.
 var printActionNames = flag.Bool("names", false, "print every action name ActionName would produce for the real spec, to stderr")
-
-// namedOperation is one operation the real vendored specification declares,
-// paired with the domain directory that claims it — everything
-// TestActionName_NoCollisionAcrossTheEntireSpecification and the printing
-// test below need, and nothing from naming.go itself.
-type namedOperation struct {
-	Domain      string
-	OperationID string
-}
 
 // allOperations loads the real vendored EE specification and pairs every one
 // of its 441 operations with the domain directory toolutil.DomainTags says
@@ -193,6 +186,215 @@ func TestActionName_RequiresNonEmptyDomainAndOperationID(t *testing.T) {
 	}
 	if _, err := ActionName("tags", ""); err == nil {
 		t.Error(`ActionName("tags", "") error = nil, want a refusal: operationID is required`)
+	}
+}
+
+// TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput is
+// the two-sided proof the separation between splitActionWords and splitWords
+// actually holds. Asserting only that splitActionWords now produces a good
+// name would pass exactly as well if actionInitialisms' extra entries (GPU,
+// RBAC, CSV, MTLS, CA) had been added to commonInitialisms instead of a
+// table of their own — the coupling this task exists to remove. So every
+// case here checks both functions against the same identifier: the new
+// splitter's improved output, and — unchanged — splitWords' original,
+// pre-existing output, exactly as it was before actionInitialisms existed.
+// If a future edit ever merges the two tables, the second half of each case
+// is what fails.
+func TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		identifier          string
+		wantActionLocalPart string   // splitActionWords, joined the way ActionName joins its local part
+		wantOldSplitWords   []string // splitWords, exactly as goFieldName/bodyJSONTag still consume it
+	}{
+		{"GetKubernetesGPUInfo", "get_kubernetes_gpu_info", []string{"Get", "Kubernetes", "G", "P", "UI", "nfo"}},
+		{"GetKubernetesRBACStatus", "get_kubernetes_rbac_status", []string{"Get", "Kubernetes", "R", "B", "A", "C", "Status"}},
+		{"AuthLogsCSV", "auth_logs_csv", []string{"Auth", "Logs", "C", "S", "V"}},
+		{"MTLSCertificate", "mtls_certificate", []string{"M", "TLS", "Certificate"}},
+		{"ValidateOAuth", "validate_oauth", []string{"Validate", "O", "Auth"}},
+		{"BackupToS3", "backup_to_s3", []string{"Backup", "To", "S", "3"}},
+		{"UpdateK8sPodSecurityRule", "update_k8s_pod_security_rule", []string{"Update", "K", "8s", "Pod", "Security", "Rule"}},
+	} {
+		gotActionParts := splitActionWords(tc.identifier)
+		lowered := make([]string, len(gotActionParts))
+		for i, w := range gotActionParts {
+			lowered[i] = lower(w)
+		}
+		if got := strings.Join(lowered, "_"); got != tc.wantActionLocalPart {
+			t.Errorf("splitActionWords(%q) joined = %q, want %q", tc.identifier, got, tc.wantActionLocalPart)
+		}
+
+		gotOld := splitWords(tc.identifier)
+		if strings.Join(gotOld, "|") != strings.Join(tc.wantOldSplitWords, "|") {
+			t.Errorf("splitWords(%q) = %q, want %q unchanged — actionInitialisms must never affect the function goFieldName and bodyJSONTag call",
+				tc.identifier, gotOld, tc.wantOldSplitWords)
+		}
+	}
+}
+
+// TestUnit_ActionSplitter_WireTagsStayByteIdentical is the strongest form of
+// the same proof: it regenerates registries/inputs.gen.go and
+// tags/inputs.gen.go — the only two domains with any Input struct today, so
+// the only two with any wire tag to check — from the real vendored spec, the
+// same way `make gen-action-inputs` does, and asserts the result is
+// byte-for-byte what is already committed. actionInitialisms carrying five
+// entries commonInitialisms does not (GPU, RBAC, CSV, MTLS, CA) is only safe
+// if nothing renderFile emits ever consults that table; this is what would
+// catch it if it ever did.
+func TestUnit_ActionSplitter_WireTagsStayByteIdentical(t *testing.T) {
+	t.Parallel()
+	for _, domainName := range []string{"registries", "tags"} {
+		committed, err := os.ReadFile("../../internal/tools/" + domainName + "/inputs.gen.go")
+		if err != nil {
+			t.Fatalf("read committed inputs.gen.go for %s: %v", domainName, err)
+		}
+		regenerated := regenerateInputsFile(t, domainName)
+		if !bytes.Equal(committed, regenerated) {
+			t.Errorf("regenerated %s/inputs.gen.go does not match the committed file byte for byte", domainName)
+		}
+	}
+}
+
+// regenerateInputsFile reproduces main.go's run() body for one domain
+// exactly — load the real spec, aggregate that domain's operations, assemble
+// each operation's Input struct fields, render — so
+// TestUnit_ActionSplitter_WireTagsStayByteIdentical is regenerating through
+// the real generator's own code path, not a reimplementation of it that
+// could drift from what `make gen-action-inputs` actually runs.
+func regenerateInputsFile(t *testing.T, domainName string) []byte {
+	t.Helper()
+	// loadPath is where the test process (cwd inside cmd/gen_action_inputs)
+	// actually finds the file; specPath is what `make gen-action-inputs`
+	// passes -spec from the repo root, and therefore what is already
+	// embedded in the committed file's "DO NOT EDIT" header — renderFile
+	// writes specPath verbatim into that header, so passing the load path
+	// there instead would fail this comparison for a reason that has nothing
+	// to do with actionInitialisms.
+	const loadPath = "../../api/specs/ee-2.44.0.json"
+	const specPath = "api/specs/ee-2.44.0.json"
+
+	doc, paths, err := loadDocument(loadPath)
+	if err != nil {
+		t.Fatalf("loadDocument() error = %v", err)
+	}
+	byTag, err := operationsByDomain(paths)
+	if err != nil {
+		t.Fatalf("operationsByDomain() error = %v", err)
+	}
+	ops, err := domainOperations(domainName, toolutil.DomainTags, byTag)
+	if err != nil {
+		t.Fatalf("domainOperations(%q) error = %v", domainName, err)
+	}
+
+	res := &resolver{doc: doc}
+	var allStructs []structSpec
+	for _, op := range ops {
+		structName := inputStructName(op.OperationID)
+		var nested []structSpec
+		fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+		if err != nil {
+			t.Fatalf("assembleOperationFields(%s): %v", op.OperationID, err)
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		allStructs = append(allStructs, structSpec{
+			Name: structName,
+			Doc: fmt.Sprintf("%s is the parameter shape for operation %s (%s %s).",
+				structName, op.OperationID, op.Method, op.Path),
+			Fields: fields,
+		})
+		allStructs = append(allStructs, nested...)
+	}
+
+	source, err := renderFile(domainName, specPath, allStructs)
+	if err != nil {
+		t.Fatalf("renderFile(%q): %v", domainName, err)
+	}
+	return source
+}
+
+// TestUnit_ActionNameOverrides_EveryEntryMatchesARealOperation is
+// actionNameOverrides' own honesty check, the same shape as
+// TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec in main_test.go: an
+// override naming an operationId the real spec does not have (or naming the
+// wrong domain for one it does have) is a name nobody is getting generated
+// for them, indistinguishable from a correct entry until something checks it
+// against the spec directly.
+func TestUnit_ActionNameOverrides_EveryEntryMatchesARealOperation(t *testing.T) {
+	t.Parallel()
+	if err := validateActionNameOverrides(actionNameOverrides, allOperations(t)); err != nil {
+		t.Fatalf("validateActionNameOverrides() error = %v", err)
+	}
+}
+
+// TestValidateActionNameOverrides_StaleEntry_ReturnsError proves the
+// direction that matters most in practice: a future respec that drops or
+// renames one of these four operations must fail loudly, not leave a dead
+// entry silently promising a name generation will never ask for again.
+func TestValidateActionNameOverrides_StaleEntry_ReturnsError(t *testing.T) {
+	t.Parallel()
+	overrides := map[string]actionNameOverride{
+		"NoLongerInTheSpec": {Domain: "motd", Name: "motd.get", Reason: "test fixture"},
+	}
+	ops := []namedOperation{{Domain: "motd", OperationID: "MOTD"}}
+	err := validateActionNameOverrides(overrides, ops)
+	if err == nil {
+		t.Fatal("validateActionNameOverrides() error = nil, want one: the override names an operationId absent from ops")
+	}
+	if !strings.Contains(err.Error(), "NoLongerInTheSpec") {
+		t.Errorf("error = %q, want it to name the stale operationId", err)
+	}
+}
+
+// TestValidateActionNameOverrides_WrongDomain_ReturnsError guards the other
+// mistake this table can make: an override correctly naming a real
+// operationId but the wrong domain for it, which ResolveActionName's own
+// domain check would also catch at call time — this is the same property
+// checked ahead of time, against the whole table at once.
+func TestValidateActionNameOverrides_WrongDomain_ReturnsError(t *testing.T) {
+	t.Parallel()
+	overrides := map[string]actionNameOverride{
+		"MOTD": {Domain: "wrong_domain", Name: "motd.get", Reason: "test fixture"},
+	}
+	ops := []namedOperation{{Domain: "motd", OperationID: "MOTD"}}
+	err := validateActionNameOverrides(overrides, ops)
+	if err == nil {
+		t.Fatal("validateActionNameOverrides() error = nil, want one: the override names the wrong domain")
+	}
+	if !strings.Contains(err.Error(), "MOTD") {
+		t.Errorf("error = %q, want it to name the mismatched operationId", err)
+	}
+}
+
+// TestResolveActionName_PrefersOverrideThenFallsBackToActionName is
+// ResolveActionName's own contract: an operationId actionNameOverrides names
+// gets that override's Name verbatim, regardless of what ActionName would
+// have computed; anything else falls through to ActionName unchanged.
+func TestResolveActionName_PrefersOverrideThenFallsBackToActionName(t *testing.T) {
+	t.Parallel()
+
+	name, err := ResolveActionName("motd", "MOTD")
+	if err != nil {
+		t.Fatalf("ResolveActionName(\"motd\", \"MOTD\") error = %v", err)
+	}
+	if want := actionNameOverrides["MOTD"].Name; name != want {
+		t.Errorf("ResolveActionName(\"motd\", \"MOTD\") = %q, want the override's %q", name, want)
+	}
+
+	if _, err := ResolveActionName("motd", "MOTD"); err != nil {
+		t.Errorf("ResolveActionName(\"motd\", \"MOTD\") error = %v, want nil: the override's own Domain matches", err)
+	}
+	if _, err := ResolveActionName("some_other_domain", "MOTD"); err == nil {
+		t.Error("ResolveActionName(\"some_other_domain\", \"MOTD\") error = nil, want a refusal: the override is declared for domain \"motd\"")
+	}
+
+	name, err = ResolveActionName("tags", "TagList")
+	if err != nil {
+		t.Fatalf("ResolveActionName(\"tags\", \"TagList\") error = %v", err)
+	}
+	if name != "tags.list" {
+		t.Errorf("ResolveActionName(\"tags\", \"TagList\") = %q, want ActionName's own \"tags.list\" (no override names this operationId)", name)
 	}
 }
 

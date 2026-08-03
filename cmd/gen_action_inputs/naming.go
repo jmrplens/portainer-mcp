@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -257,6 +258,17 @@ func inputStructName(operationID string) string {
 // leave nothing after their own domain name is removed, and this is refused
 // below rather than silently emitting "motd.motd": a domain hitting this
 // must declare that one action's name by hand instead of generating it.
+// ResolveActionName (below) is where that hand-declared name is actually
+// supplied for the operations this function itself cannot name — Task 2 and
+// 3's domain packages call that, not this function, for every operation.
+//
+// The remainder is split into words by splitActionWords, not splitWords:
+// the two have different jobs and different correctness requirements — a
+// wire JSON tag must match the vendored API byte for byte, an action name
+// only has to read well to a model — and sharing one splitter between them
+// means neither job can be served without risking the other. See
+// splitActionWords's own doc comment for what that bought and
+// TestUnit_ActionSplitter_WireTagsStayByteIdentical for the proof it holds.
 func ActionName(domain, operationID string) (string, error) {
 	if domain == "" {
 		return "", fmt.Errorf("gen_action_inputs: ActionName: domain must not be empty")
@@ -267,7 +279,7 @@ func ActionName(domain, operationID string) (string, error) {
 
 	remainder := stripDomainPrefix(operationID, domainPrefixCandidates(domain))
 
-	words := splitWords(remainder)
+	words := splitActionWords(remainder)
 	parts := make([]string, 0, len(words))
 	for _, w := range words {
 		parts = append(parts, lower(w))
@@ -347,4 +359,288 @@ func stripDomainPrefix(operationID string, candidates []string) string {
 		}
 	}
 	return operationID
+}
+
+// actionInitialisms is commonInitialisms' counterpart for action names, not
+// wire tags: everything commonInitialisms already recognises, plus the
+// abbreviations that only ever show up in an operationId, never in a wire
+// property name.
+//
+// It is a deliberately separate table, not commonInitialisms with entries
+// added, because commonInitialisms has a second reader: bodyJSONTag renders
+// a recognised initialism's later letters lower-case regardless ("TLS" ->
+// "Tls" mid-tag), so adding, say, "CA" there to fix
+// "SettingsEdgeMTLSCACertificates" would silently turn some future body
+// property's wire tag from "tlsCACertFile" into "tlsCaCertFile" the moment
+// that property happened to contain "CA" — a wire-format change nobody
+// asked for, in a file nobody would think to re-check, discovered only if
+// something downstream still parses the old tag.
+// TestUnit_ActionSplitter_WireTagsStayByteIdentical is what proves adding an
+// entry here can never do that: it regenerates every domain's Input structs
+// with actionInitialisms carrying extra entries commonInitialisms does not
+// have, and asserts the output does not change by one byte.
+//
+//   - GPU, RBAC and CSV are real acronyms the vendored spec's operationIds
+//     use (GetKubernetesGPUInfo, GetKubernetesRBACStatus, AuthLogsCSV) that
+//     commonInitialisms simply never needed for a Go field name.
+//   - MTLS and CA are Portainer's own abbreviations for mutual TLS and
+//     certificate authority (EndpointMTLSCertificate,
+//     SettingsEdgeMTLSCACertificates) — not standard Go-lint initialisms,
+//     but exactly as legitimate as TLS itself for a name a model has to
+//     read.
+var actionInitialisms = func() map[string]bool {
+	out := make(map[string]bool, len(commonInitialisms)+8)
+	for k, v := range commonInitialisms {
+		out[k] = v
+	}
+	for _, k := range []string{"GPU", "RBAC", "CSV", "MTLS", "CA"} {
+		out[k] = true
+	}
+	return out
+}()
+
+// actionSpecialActionWords are whole words splitActionWords recognises by
+// exact, case-sensitive literal match before it ever looks at runs of
+// upper-case letters. They exist for a shape actionInitialisms cannot
+// express at all: a token that is only partly upper-case ("OAuth" is
+// upper-case "OA" then lower-case "uth", not an all-caps acronym), so the
+// upper-case-run scan below only ever sees "OA" of it and — matched or
+// not — has no way to pull "uth" in with it. Checked longest-first so one
+// entry can never shadow a longer one that starts the same way.
+var actionSpecialActionWords = []string{"OAuth"}
+
+// splitActionWords is splitWords' counterpart for action names: same
+// overall shape — scan runs of upper-case letters, hand each to a
+// greedy-longest initialism matcher, merge a trailing single unmatched
+// capital onto the word that follows it — but answering to what an action
+// name needs instead of what a wire tag needs, which turns out to differ in
+// two concrete ways this task's own 441-name read-through found:
+//
+//   - it consults actionInitialisms, not commonInitialisms, so
+//     "GetKubernetesGPUInfo" splits as "Get"+"Kubernetes"+"GPU"+"Info", not
+//     "Get"+"Kubernetes"+"G"+"P"+"UI"+"nfo" (splitWords finds the real
+//     initialism "UI" greedily inside "GPUI" and never gets to reconsider
+//     "GPU" as the better read — actionInitialisms recognising "GPU" first
+//     is what fixes this, not a smarter search);
+//   - a run continues through a digit, not just a lower-case letter, so
+//     "BackupToS3" splits as "Backup"+"To"+"S3" and "UpdateK8sPodSecurityRule"
+//     as "Update"+"K8s"+"Pod"+"Security"+"Rule" — splitWords treats a digit
+//     as ending the current word and starting a new one-character word,
+//     which is exactly right for a Go field name (there is no such thing as
+//     a digit-continued Go identifier segment) and exactly wrong for an
+//     action name a model has to read as one unit.
+//
+// splitWords itself, commonInitialisms and every one of splitWords' other
+// callers (goFieldName, bodyJSONTag, and therefore every wire tag this
+// generator has ever emitted) are untouched by any of this: this is a new,
+// independent function, not a parameterised version of the old one, so nothing
+// about wire-tag rendering can move by adding a word here.
+func splitActionWords(name string) []string {
+	if name == "" {
+		return nil
+	}
+	runes := []rune(name)
+	n := len(runes)
+	var words []string
+	i := 0
+	for i < n {
+		if !unicode.IsUpper(runes[i]) {
+			j := i + 1
+			for j < n && isActionWordContinuation(runes[j]) {
+				j++
+			}
+			words = append(words, string(runes[i:j]))
+			i = j
+			continue
+		}
+
+		if word, ok := matchSpecialActionWord(runes[i:]); ok {
+			words = append(words, word)
+			i += len([]rune(word))
+			continue
+		}
+
+		j := i
+		for j < n && unicode.IsUpper(runes[j]) {
+			j++
+		}
+		run := consumeActionInitialisms(runes[i:j])
+		if j < n && isActionWordContinuation(runes[j]) && len(run) > 0 && len([]rune(run[len(run)-1])) == 1 {
+			k := j
+			for k < n && isActionWordContinuation(runes[k]) {
+				k++
+			}
+			run[len(run)-1] += string(runes[j:k])
+			j = k
+		}
+		words = append(words, run...)
+		i = j
+	}
+	return words
+}
+
+// isActionWordContinuation reports whether r continues a word
+// splitActionWords has already started: a lower-case letter, the same as
+// splitWords, or — the one difference — a digit, so "S3" and "K8s" merge
+// into one token instead of the digit splitting off into its own
+// one-character word.
+func isActionWordContinuation(r rune) bool {
+	return unicode.IsLower(r) || unicode.IsDigit(r)
+}
+
+// matchSpecialActionWord reports whether remaining begins with one of
+// actionSpecialActionWords, returning the literal word matched.
+func matchSpecialActionWord(remaining []rune) (string, bool) {
+	for _, word := range actionSpecialActionWords {
+		wr := []rune(word)
+		if len(remaining) >= len(wr) && string(remaining[:len(wr)]) == word {
+			return word, true
+		}
+	}
+	return "", false
+}
+
+// consumeActionInitialisms is consumeInitialisms' counterpart for
+// actionInitialisms: identical greedy-longest-match algorithm, run against
+// the action-name initialism table instead of commonInitialisms. Kept as a
+// separate function, rather than a shared one both take a table parameter
+// to, so a future edit to either can never accidentally change the other's
+// behaviour by changing a shared helper's signature or default.
+func consumeActionInitialisms(run []rune) []string {
+	var words []string
+	for len(run) > 0 {
+		matched := false
+		for length := len(run); length >= 2; length-- {
+			candidate := string(run[:length])
+			if actionInitialisms[candidate] {
+				words = append(words, candidate)
+				run = run[length:]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			words = append(words, string(run[0]))
+			run = run[1:]
+		}
+	}
+	return words
+}
+
+// namedOperation is one operation the real vendored specification declares,
+// paired with the domain directory that claims it. Declared here rather
+// than in naming_test.go because validateActionNameOverrides below —
+// production code, not a test helper — takes a slice of it; naming_test.go's
+// allOperations, which actually builds that slice from the real spec, only
+// consumes the type.
+type namedOperation struct {
+	Domain      string
+	OperationID string
+}
+
+// actionNameOverride is one operationId ActionName's mechanical rule cannot
+// turn into a usable name at all, paired with the name to use instead and,
+// in Reason, why the rule falls short — so the next person to read this
+// table does not have to re-derive the argument this task already had.
+type actionNameOverride struct {
+	// Domain is the package this operationId belongs to. ResolveActionName
+	// checks it against its own domain argument so a copy-paste mistake
+	// wiring the wrong override to the wrong domain fails loudly instead of
+	// silently handing back a name for an unrelated operation.
+	Domain string
+	Name   string
+	Reason string
+}
+
+// actionNameOverrides holds every operationId this task found ActionName
+// cannot name on its own: three because stripping the operation's own
+// domain prefix leaves nothing at all (ActionName refuses these outright,
+// so there is no mechanical output to prefer over), and one, "Generate",
+// because the mechanical rule succeeds but produces a name with no
+// information in it at all.
+//
+// This table is not exhaustive over the 423 actions still to come — most
+// operationIds will never need an entry — but Task 2 and Task 3 will find
+// more of the first kind (an operationId identical to its own domain's
+// prefix) as they write the remaining domains, and ResolveActionName is the
+// mechanism both should extend rather than reinvent.
+//
+// TestUnit_ActionNameOverrides_EveryEntryMatchesARealOperation is what keeps
+// this table honest against the vendored spec the same way audit_1to1's
+// allow-list is kept honest against it: an entry naming an operationId the
+// real spec does not have, or naming the wrong domain for one it does have,
+// is a name nobody is getting generated for them, and it would silently
+// outlive whatever future respec made it stale.
+var actionNameOverrides = map[string]actionNameOverride{
+	"MOTD": {
+		Domain: "motd",
+		Name:   "motd.get",
+		Reason: "operationId equals domain \"motd\"'s own prefix exactly; ActionName refuses rather than emit \"motd.motd\"",
+	},
+	"Backup": {
+		Domain: "backup",
+		Name:   "backup.create",
+		Reason: "operationId equals domain \"backup\"'s own prefix exactly (POST /backup, downloads a backup archive); ActionName refuses rather than emit \"backup.backup\"",
+	},
+	"TeamMemberships": {
+		Domain: "team_memberships",
+		Name:   "team_memberships.list",
+		Reason: "operationId equals domain \"team_memberships\"'s own prefix exactly (GET /team_memberships, alongside the singular TeamMembership* actions); ActionName refuses rather than emit \"team_memberships.team_memberships\"",
+	},
+	"Generate": {
+		Domain: "cloud",
+		Name:   "cloud.generate_ssh_key",
+		Reason: "operationId is the bare verb \"Generate\" with no object (POST /sshkeygen); ActionName succeeds and returns \"cloud.generate\", which is grammatically valid but names nothing a model could act on without reading the description first",
+	},
+}
+
+// ResolveActionName is what Task 2 and Task 3's domain packages call instead
+// of ActionName directly: actionNameOverrides checked first, ActionName's
+// mechanical rule as the fallback for every operationId the table does not
+// mention. Centralising the check here means no domain author has to
+// remember, while writing the 423rd action, that this one table needs
+// consulting before ActionName does.
+func ResolveActionName(domain, operationID string) (string, error) {
+	if override, ok := actionNameOverrides[operationID]; ok {
+		if override.Domain != domain {
+			return "", fmt.Errorf(
+				"gen_action_inputs: ResolveActionName: operationID %q is overridden for domain %q, called with domain %q",
+				operationID, override.Domain, domain)
+		}
+		return override.Name, nil
+	}
+	return ActionName(domain, operationID)
+}
+
+// validateActionNameOverrides checks actionNameOverrides against ops (every
+// operation the real vendored spec declares, domain-tagged): every
+// override's operationId must actually exist, under the domain the override
+// itself names. The reverse direction — an operation this rule refuses that
+// has no override — is deliberately not checked here: Task 2 and 3 add
+// overrides only for the operations they are actively naming, not for every
+// refusal that exists anywhere in the spec today, so a refusal with no
+// override yet is expected, not a defect this function should report.
+func validateActionNameOverrides(overrides map[string]actionNameOverride, ops []namedOperation) error {
+	exists := make(map[string]string, len(ops)) // operationID -> domain
+	for _, op := range ops {
+		exists[op.OperationID] = op.Domain
+	}
+
+	operationIDs := make([]string, 0, len(overrides))
+	for id := range overrides {
+		operationIDs = append(operationIDs, id)
+	}
+	sort.Strings(operationIDs)
+
+	for _, operationID := range operationIDs {
+		override := overrides[operationID]
+		domain, ok := exists[operationID]
+		if !ok {
+			return fmt.Errorf("gen_action_inputs: actionNameOverrides: operationId %q has no matching operation in the vendored spec; remove this stale entry", operationID)
+		}
+		if domain != override.Domain {
+			return fmt.Errorf("gen_action_inputs: actionNameOverrides: operationId %q belongs to domain %q in the vendored spec, not %q as this entry declares", operationID, domain, override.Domain)
+		}
+	}
+	return nil
 }
