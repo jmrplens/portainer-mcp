@@ -173,7 +173,7 @@ func executeGeneratedHandler(t *testing.T, structs []structSpec, spec handlerSpe
 		}
 	}
 
-	handlerSrc, err := renderActionsFile("main", "test-spec.json", []handlerSpec{spec})
+	handlerSrc, err := renderActionsFile("main", "test-spec.json", []handlerSpec{spec}, nil, false)
 	if err != nil {
 		t.Fatalf("renderActionsFile() error = %v", err)
 	}
@@ -684,7 +684,7 @@ func TestUnit_RenderActionsFile_OmitsAPIGenImportWhenNoHandlerNeedsIt(t *testing
 	// used"), a defect go/format's own parse step cannot catch since an
 	// unused import is a go/types-level error, not a syntax one.
 	spec := handlerSpec{Domain: "tags", OperationID: "TagDelete", FuncName: "tagDelete", InputStruct: "tagDeleteInput", PathArgs: []pathArg{{GoName: "ID", GoType: "int"}}}
-	src, err := renderActionsFile("tags", "test-spec.json", []handlerSpec{spec})
+	src, err := renderActionsFile("tags", "test-spec.json", []handlerSpec{spec}, nil, false)
 	if err != nil {
 		t.Fatalf("renderActionsFile() error = %v", err)
 	}
@@ -706,7 +706,7 @@ func TestUnit_RenderActionsFile_OmitsAPIGenImportWhenNoHandlerNeedsIt(t *testing
 func TestUnit_RenderActionsFile_IncludesAPIGenImportWhenABodyHandlerNeedsIt(t *testing.T) {
 	t.Parallel()
 	spec := handlerSpec{Domain: "tags", OperationID: "TagCreate", FuncName: "tagCreate", HasBody: true, Response: responseInfo{SuccessField: "JSON200"}}
-	src, err := renderActionsFile("tags", "test-spec.json", []handlerSpec{spec})
+	src, err := renderActionsFile("tags", "test-spec.json", []handlerSpec{spec}, nil, false)
 	if err != nil {
 		t.Fatalf("renderActionsFile() error = %v", err)
 	}

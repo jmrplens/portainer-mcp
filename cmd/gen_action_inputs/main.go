@@ -50,6 +50,9 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("gen_action_inputs", flag.ContinueOnError)
 	specPath := fs.String("spec", "api/specs/ee-2.44.0.json", "vendored OpenAPI spec to generate Input structs from")
+	ceSpecPath := fs.String("ce-spec", "",
+		"vendored Community Edition spec, used only to decide which generated actions are CE vs EE-only; "+
+			"defaults to -spec's own filename with its \"ee-\" prefix swapped for \"ce-\"")
 	toolsDir := fs.String("tools-dir", "internal/tools", "directory holding one subdirectory per domain package")
 	skipDirs := fs.String("skip", "actioncatalog,dynamic,individual,meta",
 		"comma-separated subdirectories of tools-dir that are tool surfaces, not domain packages")
@@ -64,6 +67,49 @@ func run(args []string) error {
 	byTag, err := operationsByDomain(paths)
 	if err != nil {
 		return err
+	}
+
+	// ceOperationIDs is the only extra input buildActionSpecFields needs
+	// beyond what Task 1 and Task 2 already carry (see editionOf's own doc
+	// comment): every operationId the vendored Community Edition
+	// specification declares. An operationId absent from *specPath
+	// altogether (system.upgrade is the pilot's own example) never reaches
+	// buildActionSpecFields at all — this generator's domain processing
+	// enumerates operations from *specPath, never from the CE spec — so it
+	// stays exactly what it is today, a hand-written, hand-appended
+	// ActionSpec in its own domain's Specs().
+	if *ceSpecPath == "" {
+		dir, base := filepath.Split(*specPath)
+		*ceSpecPath = filepath.Join(dir, strings.Replace(base, "ee-", "ce-", 1))
+	}
+	_, cePaths, err := loadDocument(*ceSpecPath)
+	if err != nil {
+		return fmt.Errorf("load CE spec %s (used only to classify Edition): %w", *ceSpecPath, err)
+	}
+	ceByTag, err := operationsByDomain(cePaths)
+	if err != nil {
+		return fmt.Errorf("group CE spec %s by domain: %w", *ceSpecPath, err)
+	}
+	ceOperationIDs := ceOperationIDSet(ceByTag)
+
+	// Informational, like the override report below: a reviewer reads these
+	// once per wave and decides which entries need a hand-written override
+	// in their own domain file (system.go's SystemUpgrade already carries
+	// exactly the kind of override dangerMismatchWarnings exists to surface;
+	// see actionspec.go's own doc comment on dangerKeywords).
+	var allOps []operation
+	for _, ops := range byTag {
+		allOps = append(allOps, ops...)
+	}
+	if warnings := dangerMismatchWarnings(allOps); len(warnings) > 0 {
+		fmt.Fprintf(os.Stderr, "%d operation(s) whose verb-derived danger flags may be misleading:\n", len(warnings))
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "  - %s\n", w)
+		}
+	}
+	if empty, restates := descriptionQualityWarnings(allOps); len(empty) > 0 || len(restates) > 0 {
+		fmt.Fprintf(os.Stderr, "%d operation(s) with no description beyond boilerplate, %d whose description merely restates its summary — candidates for a narrative Description override:\n",
+			len(empty), len(restates))
 	}
 
 	// toolutil.DomainTags is the single table both this generator and a
@@ -119,6 +165,7 @@ func run(args []string) error {
 
 		var allStructs []structSpec
 		var handlerSpecs []handlerSpec
+		var specEntries []specEntry
 		var overriddenOps []string
 		for _, op := range ops {
 			structName := inputStructName(op.OperationID)
@@ -166,6 +213,16 @@ func run(args []string) error {
 				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
 			}
 			handlerSpecs = append(handlerSpecs, spec)
+
+			// Built from the exact same op the handler above was just built
+			// from, never re-fetched or re-derived — see specEntry's own doc
+			// comment on why FuncName and InputStruct are carried through
+			// rather than recomputed here.
+			actionFields, err := buildActionSpecFields(domainName, op, ceOperationIDs)
+			if err != nil {
+				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+			}
+			specEntries = append(specEntries, specEntry{Fields: actionFields, HandlerFunc: spec.FuncName, InputStruct: inputStruct})
 		}
 
 		if len(overriddenOps) > 0 {
@@ -196,7 +253,15 @@ func run(args []string) error {
 
 		actionsPath := filepath.Join(domainDir, "actions.gen.go")
 		if len(handlerSpecs) > 0 {
-			source, err := renderActionsFile(domainName, *specPath, handlerSpecs)
+			// hasNarrativeHook: whether this domain's own hand-written file
+			// already declares a function named narrative — the same
+			// funcNames set overrideReason above checks, since a narrative
+			// hook is exactly the kind of hand-declared symbol this
+			// generator must detect and never collide with. See emit.go's
+			// renderGeneratedSpecs for what the generated call site looks
+			// like either way.
+			hasNarrativeHook := overrides.funcNames["narrative"]
+			source, err := renderActionsFile(domainName, *specPath, handlerSpecs, specEntries, hasNarrativeHook)
 			if err != nil {
 				return fmt.Errorf("domain %s: %w", domainName, err)
 			}

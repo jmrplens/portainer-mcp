@@ -467,12 +467,22 @@ func applyNarrative(fields actionSpecFields, hook narrativeHook) generatedAction
 		hook = noNarrative
 	}
 	narrative := hook(fields.OperationID)
-	if narrative.Title != "" {
-		fields.Title = narrative.Title
-	}
-	if narrative.Description != "" {
-		fields.Description = narrative.Description
-	}
+
+	// The merge itself is not reimplemented here: toolutil.WithNarrative is
+	// the single algorithm both this generation-time proof and the runtime
+	// code renderGeneratedSpecs emits are built on, so the two can never
+	// silently disagree about what "override" means for Title/Description —
+	// exactly the "one derivation, two consumers" defect this project has
+	// already paid for once (see P3.0's C1). Only Title and Description
+	// round-trip through a toolutil.ActionSpec value here; the other
+	// narrative fields never needed a mechanical counterpart to merge
+	// against, so they are read directly off narrative below.
+	merged := toolutil.WithNarrative(
+		toolutil.ActionSpec{Title: fields.Title, Description: fields.Description},
+		toolutil.ActionNarrative{Title: narrative.Title, Description: narrative.Description},
+	)
+	fields.Title, fields.Description = merged.Title, merged.Description
+
 	return generatedActionSpec{
 		actionSpecFields:  fields,
 		Usage:             narrative.Usage,

@@ -577,7 +577,16 @@ func renderHandlerFunc(buf *strings.Builder, spec handlerSpec) {
 // handlers are all path-only or bodyless would otherwise get an unused
 // import and fail to compile, which go/format's own parse step would not
 // catch (an unused import is a go/types-level error, not a syntax one).
-func renderActionsFile(packageName, specPath string, specs []handlerSpec) ([]byte, error) {
+//
+// specEntries carries the ActionSpec emitter's own output (see emit.go) —
+// one entry per operation in specs, same order, same length — and is
+// rendered as a trailing generatedSpecs() function; nil specEntries emits
+// none at all, which is what every existing caller that only cares about
+// handler bodies (this file's own tests) already passes. hasNarrativeHook
+// tells renderGeneratedSpecs whether the domain's own hand file declares a
+// function named narrative for it to call; see emit.go's doc comment on
+// exactly what that call site looks like either way.
+func renderActionsFile(packageName, specPath string, specs []handlerSpec, specEntries []specEntry, hasNarrativeHook bool) ([]byte, error) {
 	needsAPIGen := false
 	for _, s := range specs {
 		if s.HasQuery || s.HasBody {
@@ -593,6 +602,9 @@ func renderActionsFile(packageName, specPath string, specs []handlerSpec) ([]byt
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"encoding/json\"\n")
 	buf.WriteString("\t\"fmt\"\n\n")
+	if len(specEntries) > 0 {
+		buf.WriteString("\t\"github.com/jmrplens/portainer-mcp/internal/edition\"\n")
+	}
 	buf.WriteString("\t\"github.com/jmrplens/portainer-mcp/internal/portainer\"\n")
 	if needsAPIGen {
 		buf.WriteString("\tapigen \"github.com/jmrplens/portainer-mcp/internal/portainer/gen\"\n")
@@ -605,6 +617,11 @@ func renderActionsFile(packageName, specPath string, specs []handlerSpec) ([]byt
 			buf.WriteString("\n")
 		}
 		renderHandlerFunc(&buf, s)
+	}
+
+	if len(specEntries) > 0 {
+		buf.WriteString("\n")
+		renderGeneratedSpecs(&buf, specEntries, hasNarrativeHook)
 	}
 
 	formatted, err := format.Source([]byte(buf.String()))
