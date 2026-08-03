@@ -253,9 +253,10 @@ left stranded by a run that crashed before it could release: it attaches the lic
 server and releases it immediately, and is safe to run even when nothing is actually stranded.
 
 **In CI** (`.github/workflows/e2e.yml`), the same is true: a pull request from a fork has no access
-to the `PORTAINER_LICENSE` repository secret, so the workflow writes an empty `.env` and the
-Business Edition legs skip with a named reason — the build does not go red for a secret a
-contributor cannot supply. The key is written to `.env` from the environment, never as a
+to the `PORTAINER_LICENSE` repository secret, so the workflow logs that Community Edition legs only
+will run and creates no `.env` at all — the Business Edition legs then skip with that same named
+reason, and the build does not go red for a secret a contributor cannot supply. When the secret is
+available, the key is written to `.env` from the environment, never as a
 command-line argument or an echoed value, and the file is removed on every exit path, including a
 failed run.
 

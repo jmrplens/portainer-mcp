@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
 )
 
 // customRegistryType is the numeric registry type createRegistry itself uses
@@ -47,7 +49,9 @@ func TestRegistries_CreateUpdateInspectThenDelete_AcrossSurfacesAndEditions(t *t
 				}
 				id := int(idFloat)
 				t.Cleanup(func() {
-					if err := deleteRegistryIfPresent(context.Background(), edition, id); err != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+					defer cancel()
+					if err := deleteRegistryIfPresent(ctx, edition, id); err != nil {
 						t.Errorf("clean up registry %q: %v", name, err)
 					}
 				})

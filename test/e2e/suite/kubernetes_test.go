@@ -10,16 +10,21 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/logging"
 )
 
-// wantKubernetesEdition and wantKubernetesVersion are what k3d-up.sh's own
+// wantKubernetesEdition and wantServerVersion are what k3d-up.sh's own
 // override deploys: `--set enterpriseEdition.image.tag=2.44.0` against a
 // chart whose own app version is five minor versions behind
 // (ee-2.39.5). Asserting both, not just "a Version came back non-empty", is
 // what makes that override's own regression visible: a chart upgrade or a
 // dropped --set flag would silently redeploy the chart's stale default, and a
 // test that only checked "Version is non-empty" would still pass against it.
+//
+// wantServerVersion is shared with system_test.go, which asserts the same
+// Portainer version against the compose legs: it is a package-level
+// constant, not a local one, exactly so a bump of the estate image needs one
+// edit rather than two that can drift apart.
 const (
 	wantKubernetesEdition = "EE"
-	wantKubernetesVersion = "2.44.0"
+	wantServerVersion     = "2.44.0"
 )
 
 // TestKubernetesLeg_ReachableThroughEveryMCPSurface is the one test this
@@ -74,9 +79,9 @@ func TestKubernetesLeg_ReachableThroughEveryMCPSurface(t *testing.T) {
 					surface, serverEdition, wantKubernetesEdition)
 			}
 			serverVersion, _ := out["ServerVersion"].(string)
-			if serverVersion != wantKubernetesVersion {
+			if serverVersion != wantServerVersion {
 				t.Errorf("system.version through the %s surface against the Kubernetes leg: ServerVersion = %q, want %q",
-					surface, serverVersion, wantKubernetesVersion)
+					surface, serverVersion, wantServerVersion)
 			}
 		})
 	}

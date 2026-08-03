@@ -122,7 +122,7 @@ func WriteEdgeEnv(path, edgeID, edgeKey string, endpointID int) error {
 // exists.
 func RemoveEdgeEnv(path string) error {
 	cleaned := filepath.Clean(path)
-	if err := rejectEscapingPath(path, cleaned); err != nil {
+	if err := rejectEscapingPath("edge environment", path, cleaned); err != nil {
 		return err
 	}
 	if err := os.Remove(cleaned); err != nil && !os.IsNotExist(err) {
@@ -155,7 +155,7 @@ func SyncEdgeEnv(e Estate, path string) error {
 // rather than a generic message that could be either.
 func writeOwnerOnlyAtomic(path, label string, data []byte) error {
 	cleaned := filepath.Clean(path)
-	if err := rejectEscapingPath(path, cleaned); err != nil {
+	if err := rejectEscapingPath(label, path, cleaned); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(cleaned), ".portainer-e2e-*")
@@ -190,7 +190,7 @@ func writeOwnerOnlyAtomic(path, label string, data []byte) error {
 // instead of hiding the warning is the fix the linter is asking for.
 func LoadEstate(path string) (Estate, error) {
 	cleaned := filepath.Clean(path)
-	if err := rejectEscapingPath(path, cleaned); err != nil {
+	if err := rejectEscapingPath("estate", path, cleaned); err != nil {
 		return Estate{}, err
 	}
 	raw, err := os.ReadFile(cleaned)
@@ -218,7 +218,7 @@ func LoadEstate(path string) (Estate, error) {
 // missing a Community Edition server.
 func ReadTrustedFile(path string) ([]byte, error) {
 	cleaned := filepath.Clean(path)
-	if err := rejectEscapingPath(path, cleaned); err != nil {
+	if err := rejectEscapingPath("trusted file", path, cleaned); err != nil {
 		return nil, err
 	}
 	raw, err := os.ReadFile(cleaned)
@@ -230,18 +230,22 @@ func ReadTrustedFile(path string) ([]byte, error) {
 
 // rejectEscapingPath rejects the one shape that would let a caller escape an
 // intended directory: a relative path that climbs above its starting point
-// once lexically resolved.
+// once lexically resolved. label names the file being validated (for
+// example "estate", "edge environment", or "trusted file") so the resulting
+// error identifies which of the three files this validator guards actually
+// failed, rather than always naming the estate regardless of which one an
+// operator misconfigured.
 //
 // An absolute path is trusted as given: every caller in this codebase (the
 // provisioner, its tests, and Task 6's TestMain reading EstateFileEnv) passes
 // either an absolute path or one rooted at the current directory, never one
 // meant to be sandboxed beneath it.
-func rejectEscapingPath(original, cleaned string) error {
+func rejectEscapingPath(label, original, cleaned string) error {
 	if original == "" {
-		return fmt.Errorf("estate path is empty")
+		return fmt.Errorf("%s path is empty", label)
 	}
 	if !filepath.IsAbs(cleaned) && strings.HasPrefix(cleaned, "..") {
-		return fmt.Errorf("estate path %q escapes its starting directory", original)
+		return fmt.Errorf("%s path %q escapes its starting directory", label, original)
 	}
 	return nil
 }

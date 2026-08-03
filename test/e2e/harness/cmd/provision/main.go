@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -134,10 +135,26 @@ func run(kubernetes, releaseLicence, recoverLicence bool) error {
 		fmt.Fprintln(os.Stderr, "no licence supplied: skipping Business Edition provisioning")
 	} else {
 		ee, licErr := provisionBusinessEdition(context.Background(), client, eeURL, licence)
+		estate.EE = ee
+
+		// Persisted immediately, before provisionEdge or anything else in
+		// this branch runs: once ApplyLicence has succeeded (whether or not
+		// provisionBusinessEdition went on to fail), the estate must already
+		// name this server and its API key. Without this, an intervening
+		// failure here would leave the estate never mentioning EE at all, so
+		// the matching -release-licence call would report "nothing to
+		// release" and return nil while the activation stayed registered
+		// against the real account down.sh's teardown is about to make
+		// unreachable.
+		if err := estate.SaveTo(estatePath); err != nil {
+			if licErr != nil {
+				return fmt.Errorf("provision Business Edition: %w (estate also failed to save: %w)", licErr, err)
+			}
+			return fmt.Errorf("save estate after licensing business edition: %w", err)
+		}
 		if licErr != nil {
 			return fmt.Errorf("provision Business Edition: %w", licErr)
 		}
-		estate.EE = ee
 
 		// The edge domains (edge_stacks, edge_jobs, edge_configs, edge_update_
 		// schedules) are Business Edition only, so the edge environment is
@@ -235,7 +252,13 @@ func provisionBusinessEdition(ctx context.Context, client *http.Client, baseURL,
 
 	nodes, err := harness.LicenceNodes(ctx, client, baseURL, server.Creds.JWT)
 	if err != nil {
-		return harness.Server{}, fmt.Errorf("read applied licence: %w", err)
+		// The licence attach above already succeeded: this server now
+		// carries a real activation against the vendor's account. Returning
+		// a zero Server here, as this used to, would discard the one thing
+		// (BaseURL + APIKey) that lets run's caller persist enough of the
+		// estate for a later -release-licence call to find and release it —
+		// so server is returned alongside the error, not discarded.
+		return server, fmt.Errorf("read applied licence: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "EE: licence applied, %d node(s) allowed\n", nodes)
 
@@ -365,15 +388,33 @@ func runKubernetes(estatePath string) error {
 	}
 
 	var conflicting []string
-	if licence == "" {
-		fmt.Fprintln(os.Stderr, "no licence supplied: Kubernetes leg provisioned without Business Edition")
-	} else {
+	if licence != "" {
 		var applyErr error
 		conflicting, applyErr = harness.ApplyLicence(ctx, client, baseURL, creds.JWT, licence)
 		if applyErr != nil {
 			return fmt.Errorf("apply business edition licence: %w", applyErr)
 		}
 		logConflictingKeys("Kubernetes", conflicting)
+	} else {
+		fmt.Fprintln(os.Stderr, "no licence supplied: Kubernetes leg provisioned without Business Edition")
+	}
+
+	// Persisted immediately once the licence attach above has succeeded (or
+	// been skipped for an unlicensed run), before LicenceNodes or
+	// CreateEndpoint can fail. This leg is the more severe of the two:
+	// k3d-down.sh deletes the whole cluster on teardown, so once that
+	// happens the server, and any hope of releasing a licence attached to
+	// it, is gone for good — unlike the compose leg, there is no second
+	// chance. See run's identical rationale for the compose leg above.
+	estate = estate.MergeKubernetes(harness.Server{
+		Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds,
+		ConflictingLicenceKeys: conflicting,
+	})
+	if err := estate.SaveTo(estatePath); err != nil {
+		return fmt.Errorf("save estate: %w", err)
+	}
+
+	if licence != "" {
 		nodes, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT)
 		if err != nil {
 			return fmt.Errorf("read applied licence: %w", err)
@@ -390,13 +431,6 @@ func runKubernetes(estatePath string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Kubernetes: registered endpoint %d\n", endpointID)
 
-	estate = estate.MergeKubernetes(harness.Server{
-		Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds,
-		ConflictingLicenceKeys: conflicting,
-	})
-	if err := estate.SaveTo(estatePath); err != nil {
-		return fmt.Errorf("save estate: %w", err)
-	}
 	fmt.Fprintf(os.Stderr, "provisioned kubernetes leg into %s\n", estatePath)
 	return nil
 }
@@ -534,10 +568,17 @@ func recoverStrandedLicence() error {
 	}
 
 	// A licence still readable after release would mean the recovery did not
-	// actually work, silently. LicenceNodes returning its "none installed"
-	// error is the confirmation that GET /licenses is now empty.
-	if _, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT); err == nil {
+	// actually work, silently. LicenceNodes returning harness.ErrNoLicenceInstalled
+	// is the confirmation that GET /licenses answered and is now empty — the
+	// only outcome this check accepts as proof. Any other error (a timeout, a
+	// 500, a decode failure, a 401) means the check itself could not run, and
+	// must be reported as a failure to confirm, not treated as confirmation:
+	// this is the only verification guarding a licence-safety operation.
+	switch _, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT); {
+	case err == nil:
 		return fmt.Errorf("licence still reads as installed on the recovery server after release")
+	case !errors.Is(err, harness.ErrNoLicenceInstalled):
+		return fmt.Errorf("could not confirm the licence was released: %w", err)
 	}
 
 	fmt.Fprintln(os.Stderr, "stranded licence released: safe to reuse")

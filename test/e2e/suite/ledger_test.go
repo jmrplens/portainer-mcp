@@ -9,7 +9,16 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
 )
+
+// ledgerCleanupTimeout bounds CleanupAll's teardown calls, exactly like the
+// create path's portainer.DefaultCallTimeout bounds fixture creation. Without
+// it, an estate that stops responding during teardown blocks the whole test
+// binary until go test's own timeout, and the resulting panic dump hides the
+// real cause behind a wall of goroutine stacks.
+const ledgerCleanupTimeout = portainer.DefaultCallTimeout
 
 // ledgerEntry is one resource a ResourceLedger has been told to clean up.
 type ledgerEntry struct {
@@ -91,7 +100,9 @@ func newLedger(t *testing.T) *ResourceLedger {
 		delete(testLedgers, t)
 		testLedgersMu.Unlock()
 
-		for _, err := range l.CleanupAll(context.Background()) {
+		ctx, cancel := context.WithTimeout(context.Background(), ledgerCleanupTimeout)
+		defer cancel()
+		for _, err := range l.CleanupAll(ctx) {
 			t.Errorf("fixture cleanup: %v", err)
 		}
 	})

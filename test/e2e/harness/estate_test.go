@@ -186,6 +186,43 @@ func TestSyncEdgeEnv_NoEdge_RemovesStaleFile(t *testing.T) {
 	}
 }
 
+func TestSyncEdgeEnv_PartialEdgeCredentials_RemovesStaleFile(t *testing.T) {
+	t.Parallel()
+	// An interrupted run that recorded an agent id but never a key (or vice
+	// versa) cannot enrol anything. The file must not survive, exactly as
+	// for no edge at all. This is the one branch TestSyncEdgeEnv_
+	// EdgeProvisioned_WritesFile and TestSyncEdgeEnv_NoEdge_RemovesStaleFile
+	// do not cover between them: a change of SyncEdgeEnv's "&&" to "||"
+	// passes both of those unchanged.
+	for _, tt := range []struct {
+		name    string
+		agentID string
+		key     string
+	}{
+		{name: "agent id only", agentID: "edge-uuid"},
+		{name: "key only", key: "the-key"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), ".edge.env")
+			if err := WriteEdgeEnv(path, "stale-uuid", "stale-key", 3); err != nil {
+				t.Fatalf("WriteEdgeEnv() error = %v", err)
+			}
+			e := Estate{
+				CE:          Server{Edition: "CE", BaseURL: "http://ce"},
+				EdgeAgentID: tt.agentID,
+				EdgeKey:     tt.key,
+			}
+			if err := SyncEdgeEnv(e, path); err != nil {
+				t.Fatalf("SyncEdgeEnv() error = %v", err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("stale edge environment file survived a partial edge state: err = %v", err)
+			}
+		})
+	}
+}
+
 func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
 	t.Parallel()
 	existing := Estate{

@@ -379,7 +379,18 @@ func redactSecret(err error, secret string) error {
 	return errors.New(redactString(err.Error(), secret))
 }
 
-// LicenceNodes reports the node allowance of the installed licence.
+// ErrNoLicenceInstalled reports that GET /licenses answered successfully with
+// an empty list. It is a distinct sentinel, not a message a caller matches by
+// substring, so a caller verifying a licence release (recoverStrandedLicence)
+// can tell "the licence is confirmed gone" apart from "the request itself
+// failed" — a timeout, a 500, a decode failure, or a 401 all reach
+// LicenceNodes' other error path and must never be mistaken for this one.
+var ErrNoLicenceInstalled = errors.New("read licences: none installed")
+
+// LicenceNodes reports the node allowance of the installed licence. It
+// returns ErrNoLicenceInstalled, matchable with errors.Is, specifically when
+// the server answered but reported no licence at all; every other failure
+// (transport, HTTP status, decode) is wrapped and returned as-is.
 func LicenceNodes(ctx context.Context, c *http.Client, baseURL, jwt string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/licenses", nil)
 	if err != nil {
@@ -394,7 +405,7 @@ func LicenceNodes(ctx context.Context, c *http.Client, baseURL, jwt string) (int
 		return 0, fmt.Errorf("read licences: %w", err)
 	}
 	if len(licences) == 0 {
-		return 0, fmt.Errorf("read licences: none installed")
+		return 0, ErrNoLicenceInstalled
 	}
 	return licences[0].Nodes, nil
 }

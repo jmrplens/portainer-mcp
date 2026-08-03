@@ -52,8 +52,19 @@ if [[ -z "$token" ]]; then
     exit 1
 fi
 
+# Selected by name, not position: .spec.ports[0] depends on the Service
+# template's own field order, which --set tls.force=true does not pin down.
+# If the rendered Service ever carries both an http and an https port,
+# indexing by position risks picking the http NodePort and building an https
+# URL that targets the wrong port. Falling back to the sole port only when no
+# port is named "https" keeps this working against a Service that exposes
+# only one.
 nodeport=$(kubectl --context "k3d-$cluster" -n "$namespace" \
-           get svc portainer -o jsonpath='{.spec.ports[0].nodePort}')
+           get svc portainer -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
+if [[ -z "$nodeport" ]]; then
+    nodeport=$(kubectl --context "k3d-$cluster" -n "$namespace" \
+               get svc portainer -o jsonpath='{.spec.ports[0].nodePort}')
+fi
 
 # k3d publishes only the API server port to the host (via the load balancer,
 # on 127.0.0.1); a NodePort service is not published anywhere unless the

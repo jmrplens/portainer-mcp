@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -319,12 +320,61 @@ func isHarnessProvisioned(srv harness.Server) bool {
 // every name uniqueName produces, regardless of prefix or run.
 const orphanPrefix = "e2e-"
 
+// orphanNamePattern extracts the process id and unix-nanosecond timestamp
+// uniqueName embeds in every name it mints: e2e-<prefix>-<pid>-<unixnano>-
+// <counter> (see names_test.go's runID). cleanupOrphans uses the timestamp
+// to tell a genuinely orphaned fixture — left behind by a run that crashed
+// some time ago — apart from one a concurrently running invocation created
+// moments ago and has not gotten around to cleaning up yet. "starts with
+// e2e-" alone cannot make that distinction, and names_test.go's own runID
+// doc states that two concurrent `go test -tags e2e` invocations are
+// expected to coexist: a sweep that ignores age would delete a live sibling
+// run's in-flight fixtures out from under it.
+//
+// The prefix between "e2e-" and the trailing pid/timestamp/counter (for
+// example "tag", or "registry-renamed" once TestRegistries_* has renamed
+// one) can itself contain dashes, so the pattern anchors the three numeric
+// groups from the end of the string via "$" rather than assuming a fixed
+// number of leading segments.
+var orphanNamePattern = regexp.MustCompile(`^e2e-.+-([0-9]+)-([0-9]+)-([0-9]+)$`)
+
+// orphanMinAge is how long a name must have existed, by its own embedded
+// timestamp, before cleanupOrphans is willing to delete it. A concurrent
+// run's own fixtures are always younger than this at the moment the sweep
+// runs — TestMain calls cleanupOrphans once, before that run's own tests
+// have had a chance to create anything, and the whole matrix in this
+// package finishes in well under this threshold. A run dead long enough to
+// leave real orphans behind is dead by an order of magnitude more.
+const orphanMinAge = 30 * time.Minute
+
+// isOrphanEligible reports whether name is old enough, by its own embedded
+// timestamp, for cleanupOrphans to delete it. A name cleanupOrphans cannot
+// parse the standard shape from is treated as eligible rather than
+// permanently protected: uniqueName is the only thing that mints e2e--
+// prefixed names in this suite, so one that does not match its shape is
+// unlikely, and refusing to ever sweep it would leave a permanent orphan
+// nothing can reach.
+func isOrphanEligible(name string, now time.Time) bool {
+	m := orphanNamePattern.FindStringSubmatch(name)
+	if m == nil {
+		return true
+	}
+	nanos, err := strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return true
+	}
+	return now.Sub(time.Unix(0, nanos)) >= orphanMinAge
+}
+
 // cleanupOrphans deletes every tag and registry, on every provisioned leg of
-// e, whose name starts with orphanPrefix. It is the net for a run that died
-// between creating a resource and its own cleanup running: nothing else
-// distinguishes one test's tag from another's on a server every session in
-// the matrix shares, so a run that dies mid-test leaves its fixtures behind
-// for the next run to trip over unless something like this sweeps first.
+// e, whose name starts with orphanPrefix and is old enough per
+// isOrphanEligible. It is the net for a run that died between creating a
+// resource and its own cleanup running: nothing else distinguishes one
+// test's tag from another's on a server every session in the matrix shares,
+// so a run that dies mid-test leaves its fixtures behind for the next run to
+// trip over unless something like this sweeps first — and the age check is
+// what keeps that same sweep from also devouring a concurrently running
+// sibling's fixtures.
 //
 // It refuses to touch a leg that does not pass isHarnessProvisioned,
 // returning an error instead of silently skipping it: skipping would look
@@ -336,6 +386,7 @@ func cleanupOrphans(ctx context.Context, e harness.Estate) error {
 		legs["EE"] = e.EE
 	}
 
+	now := time.Now()
 	for name, srv := range legs {
 		if !isHarnessProvisioned(srv) {
 			return fmt.Errorf("cleanupOrphans: %s server %s does not carry this harness's fixed "+
@@ -347,17 +398,17 @@ func cleanupOrphans(ctx context.Context, e harness.Estate) error {
 		if err != nil {
 			return fmt.Errorf("cleanupOrphans: build %s client: %w", name, err)
 		}
-		if err := deleteOrphanTags(ctx, client); err != nil {
+		if err := deleteOrphanTags(ctx, client, now); err != nil {
 			return fmt.Errorf("cleanupOrphans: %s: %w", name, err)
 		}
-		if err := deleteOrphanRegistries(ctx, client); err != nil {
+		if err := deleteOrphanRegistries(ctx, client, now); err != nil {
 			return fmt.Errorf("cleanupOrphans: %s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-func deleteOrphanTags(ctx context.Context, client *portainer.Client) error {
+func deleteOrphanTags(ctx context.Context, client *portainer.Client, now time.Time) error {
 	resp, err := client.API.TagListWithResponse(ctx)
 	if err != nil {
 		return fmt.Errorf("list tags: %w", err)
@@ -374,6 +425,9 @@ func deleteOrphanTags(ctx context.Context, client *portainer.Client) error {
 		if tag.Name == nil || tag.ID == nil || !strings.HasPrefix(*tag.Name, orphanPrefix) {
 			continue
 		}
+		if !isOrphanEligible(*tag.Name, now) {
+			continue
+		}
 		delResp, err := client.API.TagDeleteWithResponse(ctx, *tag.ID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("delete orphan tag %q: %w", *tag.Name, err))
@@ -386,7 +440,7 @@ func deleteOrphanTags(ctx context.Context, client *portainer.Client) error {
 	return errors.Join(errs...)
 }
 
-func deleteOrphanRegistries(ctx context.Context, client *portainer.Client) error {
+func deleteOrphanRegistries(ctx context.Context, client *portainer.Client, now time.Time) error {
 	resp, err := client.API.RegistryListWithResponse(ctx)
 	if err != nil {
 		return fmt.Errorf("list registries: %w", err)
@@ -401,6 +455,9 @@ func deleteOrphanRegistries(ctx context.Context, client *portainer.Client) error
 	var errs []error
 	for _, reg := range *resp.JSON200 {
 		if reg.Name == nil || reg.Id == nil || !strings.HasPrefix(*reg.Name, orphanPrefix) {
+			continue
+		}
+		if !isOrphanEligible(*reg.Name, now) {
 			continue
 		}
 		delResp, err := client.API.RegistryDeleteWithResponse(ctx, *reg.Id)
@@ -464,6 +521,56 @@ func TestIsHarnessProvisioned_RequiresExactAdminCredentials(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isHarnessProvisioned(tt.srv); got != tt.want {
 				t.Errorf("isHarnessProvisioned() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsOrphanEligible_OnlySweepsNamesOlderThanTheThreshold proves the fix
+// for cleanupOrphans' concurrency hazard: names_test.go's runID exists
+// specifically so two concurrent `go test -tags e2e` invocations coexist,
+// but a sweep keyed only on the "e2e-" prefix would delete a live sibling
+// run's in-flight fixtures the moment this run's own TestMain started.
+// uniqueName's embedded unix-nanosecond timestamp is what lets cleanupOrphans
+// tell the two apart; this test exercises that decision directly, without
+// a live estate.
+func TestIsOrphanEligible_OnlySweepsNamesOlderThanTheThreshold(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	freshRunID := fmt.Sprintf("12345-%d", now.Add(-time.Minute).UnixNano())
+	staleRunID := fmt.Sprintf("12345-%d", now.Add(-2*orphanMinAge).UnixNano())
+
+	tests := []struct {
+		name      string
+		fixture   string
+		wantSwept bool
+	}{
+		{
+			name:      "fresh: a concurrently running sibling's own fixture",
+			fixture:   fmt.Sprintf("e2e-tag-%s-1", freshRunID),
+			wantSwept: false,
+		},
+		{
+			name:      "stale: left behind by a run that died long ago",
+			fixture:   fmt.Sprintf("e2e-tag-%s-1", staleRunID),
+			wantSwept: true,
+		},
+		{
+			name:      "dashes in the fixture's own prefix do not confuse the timestamp extraction",
+			fixture:   fmt.Sprintf("e2e-registry-renamed-%s-7", staleRunID),
+			wantSwept: true,
+		},
+		{
+			name:      "unparseable shape is swept rather than permanently protected",
+			fixture:   "e2e-not-shaped-like-uniqueName-produces",
+			wantSwept: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isOrphanEligible(tt.fixture, now); got != tt.wantSwept {
+				t.Errorf("isOrphanEligible(%q) = %v, want %v", tt.fixture, got, tt.wantSwept)
 			}
 		})
 	}

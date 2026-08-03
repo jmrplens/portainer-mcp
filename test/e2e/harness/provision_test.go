@@ -521,3 +521,49 @@ func TestLicenceNodes_ReadsTheNodeAllowance(t *testing.T) {
 		t.Errorf("nodes = %d, want 3", nodes)
 	}
 }
+
+// TestLicenceNodes_NoneInstalled_ReturnsErrNoLicenceInstalled proves the
+// sentinel a caller verifying a licence release (recoverStrandedLicence in
+// cmd/provision/main.go) matches with errors.Is: an empty, successfully
+// decoded list is the one outcome that confirms a release actually worked.
+func TestLicenceNodes_NoneInstalled_ReturnsErrNoLicenceInstalled(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := LicenceNodes(context.Background(), server.Client(), server.URL, "jwt")
+	if !errors.Is(err, ErrNoLicenceInstalled) {
+		t.Fatalf("LicenceNodes() error = %v, want errors.Is(err, ErrNoLicenceInstalled)", err)
+	}
+}
+
+// TestLicenceNodes_TransportFailure_DoesNotMatchErrNoLicenceInstalled is the
+// mutation-tested proof for the MAJOR fix at cmd/provision/main.go's licence
+// recovery check: a request that never got a clean, decodable "empty list"
+// answer — a 500 here, a timeout or a 401 against a real server — must not
+// satisfy errors.Is(err, ErrNoLicenceInstalled). The old code matched on
+// `err == nil` alone, which treated this exact failure as if it were
+// confirmation the licence was released. Reverting recoverStrandedLicence's
+// switch to that shape (or reverting this sentinel to a plain
+// fmt.Errorf("...none installed") matched by message) makes this assertion's
+// sibling in cmd/provision/main_test.go moot: there would be nothing
+// distinct to match against. Verified by hand while writing this fix: before
+// LicenceNodes returned a sentinel, `err == nil` was the only check
+// available, and it could not tell this case apart from the one above.
+func TestLicenceNodes_TransportFailure_DoesNotMatchErrNoLicenceInstalled(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := LicenceNodes(context.Background(), server.Client(), server.URL, "jwt")
+	if err == nil {
+		t.Fatal("LicenceNodes() error = nil, want an error for a failing request")
+	}
+	if errors.Is(err, ErrNoLicenceInstalled) {
+		t.Errorf("LicenceNodes() error %v matches ErrNoLicenceInstalled, want a distinct error for a transport/HTTP failure", err)
+	}
+}

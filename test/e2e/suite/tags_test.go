@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/jmrplens/portainer-mcp/internal/portainer"
 )
 
 // TestTags_CreateThenListThenDelete_AcrossSurfacesAndEditions is the mutation
@@ -47,7 +49,9 @@ func TestTags_CreateThenListThenDelete_AcrossSurfacesAndEditions(t *testing.T) {
 				}
 				id := int(idFloat)
 				t.Cleanup(func() {
-					if err := deleteTagIfPresent(context.Background(), edition, id); err != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+					defer cancel()
+					if err := deleteTagIfPresent(ctx, edition, id); err != nil {
 						t.Errorf("clean up tag %q: %v", name, err)
 					}
 				})

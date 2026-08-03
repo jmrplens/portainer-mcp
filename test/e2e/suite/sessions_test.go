@@ -490,10 +490,18 @@ func TestReadOnly_TagsCreate_IsHiddenRefusedAndNeverExecutes(t *testing.T) {
 				if err != nil {
 					t.Fatalf("ListTools: %v", err)
 				}
+				found := false
 				for _, tool := range res.Tools {
-					if tool.Name == "portainer_tags" && strings.Contains(tool.Description, "tags.create") {
+					if tool.Name != "portainer_tags" {
+						continue
+					}
+					found = true
+					if strings.Contains(tool.Description, "tags.create") {
 						t.Errorf("read-only portainer_tags description still advertises tags.create: %q", tool.Description)
 					}
+				}
+				if !found {
+					t.Fatal("read-only meta surface published no portainer_tags tool: this check would pass vacuously")
 				}
 			case "dynamic":
 				res, err := ro.CallTool(t.Context(), &mcp.CallToolParams{
@@ -501,6 +509,9 @@ func TestReadOnly_TagsCreate_IsHiddenRefusedAndNeverExecutes(t *testing.T) {
 				})
 				if err != nil {
 					t.Fatalf("CallTool(portainer_find_action): %v", err)
+				}
+				if res.IsError {
+					t.Fatalf("portainer_find_action returned an error result: %s", toolResultText(res))
 				}
 				if text := toolResultText(res); strings.Contains(text, "tags.create") {
 					t.Errorf("read-only dynamic surface's find_action for %q still surfaced tags.create: %s", "tags", text)

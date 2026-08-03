@@ -59,8 +59,8 @@ func TestSystemStatusVersionNodes_AcrossSurfacesAndEditions(t *testing.T) {
 				session := sessions.For(t, surface, edition)
 
 				status := callAction[map[string]any](t, session, surface, "system.status", nil)
-				if status["Version"] != "2.44.0" {
-					t.Errorf("system.status Version = %v, want 2.44.0", status["Version"])
+				if status["Version"] != wantServerVersion {
+					t.Errorf("system.status Version = %v, want %s", status["Version"], wantServerVersion)
 				}
 
 				version := callAction[map[string]any](t, session, surface, "system.version", nil)
