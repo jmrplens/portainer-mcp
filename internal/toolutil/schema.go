@@ -1,6 +1,7 @@
 package toolutil
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -127,6 +128,99 @@ func applyEnumParams(schema map[string]any, enums map[string][]any) error {
 			return fmt.Errorf("EnumParams declares %q, which is not a property of this schema", name)
 		}
 		propSchema["enum"] = values
+	}
+	return nil
+}
+
+// resolvedSchemaCache holds the *jsonschema.Resolved used to validate raw call
+// arguments, keyed the same way as schemaCache. It is a separate cache because
+// the two serve different consumers: schemaCache hands callers a decoded map
+// they own and may mutate (surfaces publish it as-is), while validation needs
+// the library's own resolved *jsonschema.Schema, which a map cannot represent.
+//
+// The zero reflect.Type (Input == nil) is a valid map key here: every
+// nil-Input action shares the identical empty-object schema, so they share one
+// cache entry rather than each resolving it again.
+var (
+	resolvedSchemaCacheMu sync.Mutex
+	resolvedSchemaCache   = map[reflect.Type]*jsonschema.Resolved{}
+)
+
+// resolvedInputSchema returns the resolved schema ValidateInput checks raw
+// arguments against, built from the same map InputSchema publishes so the two
+// can never describe different shapes.
+func (s ActionSpec) resolvedInputSchema() (*jsonschema.Resolved, error) {
+	var key reflect.Type
+	if s.Input != nil {
+		key = reflect.TypeOf(s.Input)
+		for key.Kind() == reflect.Pointer {
+			key = key.Elem()
+		}
+	}
+
+	resolvedSchemaCacheMu.Lock()
+	cached, ok := resolvedSchemaCache[key]
+	resolvedSchemaCacheMu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
+	schemaMap, err := s.InputSchema()
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(schemaMap)
+	if err != nil {
+		return nil, fmt.Errorf("encode schema for validation: %w", err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		return nil, fmt.Errorf("decode schema for validation: %w", err)
+	}
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
+	if err != nil {
+		return nil, fmt.Errorf("resolve schema for validation: %w", err)
+	}
+
+	resolvedSchemaCacheMu.Lock()
+	resolvedSchemaCache[key] = resolved
+	resolvedSchemaCacheMu.Unlock()
+
+	return resolved, nil
+}
+
+// ValidateInput checks raw JSON call arguments against this action's
+// published schema — the same check the MCP SDK performs automatically for a
+// typed tool's arguments (see google/jsonschema-go's Resolved.Validate, which
+// the SDK's applySchema calls before a typed handler ever runs).
+//
+// Every tool surface routes through tools.Execute, and Execute calls this
+// once, so a missing required field or an out-of-enum value is refused
+// identically regardless of which surface accepted the call — rather than
+// being caught only where the SDK happens to validate a surface's own typed
+// wrapper automatically, and silently passed through everywhere else.
+//
+// raw should already be a normalized JSON object (tools.Execute normalizes a
+// caller-omitted or null input to "{}" before calling this); a raw value that
+// still is not valid JSON is refused as such rather than silently treated as
+// {}, since a wire-level parse failure is not the same defect as a schema
+// mismatch.
+func (s ActionSpec) ValidateInput(raw json.RawMessage) error {
+	resolved, err := s.resolvedInputSchema()
+	if err != nil {
+		return fmt.Errorf("input schema for %s: %w", describeAction(s), err)
+	}
+
+	decoded := map[string]any{}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return fmt.Errorf("%s: arguments are not a valid JSON object: %w", describeAction(s), err)
+		}
+	}
+
+	var instance any = decoded
+	if err := resolved.Validate(&instance); err != nil {
+		return fmt.Errorf("%s: %w", describeAction(s), err)
 	}
 	return nil
 }

@@ -45,6 +45,24 @@ func (Surface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, deps
 		if err != nil {
 			return fmt.Errorf("%s: input schema: %w", spec.Name, err)
 		}
+		// This surface deliberately keeps the generic mcp.AddTool, rather
+		// than the server's low-level, non-validating form: the generic form
+		// makes the SDK itself validate a typed tool's arguments against
+		// InputSchema before the handler ever runs (see google/jsonschema-go's
+		// Resolved.Validate, called from the SDK's applySchema). That check is
+		// independent of tools.Execute's own spec.ValidateInput call below —
+		// on this surface a rejected call never reaches Execute at all — which
+		// is exactly what keeps this surface protected even if Execute's
+		// validation is ever accidentally removed: meta and dynamic have no
+		// schema check of their own to fall back on, so only they would start
+		// silently executing invalid input; this surface would not. The two
+		// paths do report a rejection in different words (the SDK's own
+		// "validating \"arguments\": ..." here, spec.ValidateInput's message
+		// through Execute on meta and dynamic) — accepted here rather than
+		// suppressed, because on this surface the tool a model called already
+		// names the action (there is exactly one tool per action), which
+		// meta's and dynamic's generic {action, input} wrapper cannot say for
+		// itself and so must state in the message.
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        ToolName(spec.Name),
 			Title:       spec.Title,

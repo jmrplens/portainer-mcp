@@ -42,6 +42,14 @@ func TestRegistries_CreateUpdateInspectThenDelete_AcrossSurfacesAndEditions(t *t
 				// invoking it through a tool.
 				created := callAction[map[string]any](t, session, surface, "registries.create", map[string]any{
 					"name": name, "url": fmt.Sprintf("%s.example.invalid", name), "type": customRegistryType,
+					// authentication is required by both the vendored
+					// specification and the independently generated wire
+					// client (see registryCreateInput in
+					// internal/tools/registries/inputs.gen.go): a registry
+					// with no credentials sends false, which is what this
+					// fixture means, rather than omitting a field the
+					// published schema does not allow to be absent.
+					"authentication": false,
 				})
 				idFloat, ok := created["Id"].(float64)
 				if !ok {
@@ -64,6 +72,10 @@ func TestRegistries_CreateUpdateInspectThenDelete_AcrossSurfacesAndEditions(t *t
 				renamed := uniqueName("registry-renamed")
 				callAction[map[string]any](t, session, surface, "registries.update", map[string]any{
 					"id": id, "name": renamed, "url": fmt.Sprintf("%s.example.invalid", renamed),
+					// authentication is required for the same reason noted
+					// on registries.create above (registryUpdateInput
+					// carries it without omitempty too).
+					"authentication": false,
 				})
 
 				// Read back through inspect, not through update's own

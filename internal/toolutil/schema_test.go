@@ -141,6 +141,93 @@ func TestInputSchema_IsCachedPerType(t *testing.T) {
 	}
 }
 
+// TestValidateInput_MissingRequiredField_IsRefused pins the mechanism
+// tools.Execute relies on to close the divergence between surfaces: before
+// this method existed, only the individual surface's typed MCP tool caused
+// the SDK to check a call's arguments against InputSchema, so a required
+// field could be omitted through meta or dynamic and reach the handler
+// anyway. ValidateInput must catch that on its own, without any surface's
+// help, since Execute calls it for every surface identically.
+func TestValidateInput_MissingRequiredField_IsRefused(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{Name: "tags.create", Domain: "tags", Input: sampleInput{}}
+
+	err := spec.ValidateInput(json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("ValidateInput() error = nil, want a refusal for a call missing the required \"id\" field")
+	}
+	// The action name and the missing field's name are both load-bearing:
+	// tools.Execute's caller-facing message is built directly from this
+	// error, and a model reading it needs to know which action was rejected
+	// and which field was the problem, not merely that something failed.
+	if !strings.Contains(err.Error(), "tags.create") {
+		t.Errorf("ValidateInput() error = %q, want it to name the action \"tags.create\"", err)
+	}
+	if !strings.Contains(err.Error(), "id") {
+		t.Errorf("ValidateInput() error = %q, want it to name the missing field \"id\"", err)
+	}
+}
+
+// TestValidateInput_SatisfiesAllRequiredFields_Passes is the positive
+// counterpart: a call that does carry every required field must not be
+// refused, even though optional fields (Name here) are absent.
+func TestValidateInput_SatisfiesAllRequiredFields_Passes(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{Name: "tags.create", Domain: "tags", Input: sampleInput{}}
+
+	if err := spec.ValidateInput(json.RawMessage(`{"id":3}`)); err != nil {
+		t.Errorf("ValidateInput() error = %v, want nil for input satisfying every required field", err)
+	}
+}
+
+// TestValidateInput_UnknownProperty_IsRefused checks the other half of what a
+// reflected schema enforces: additionalProperties is false (see
+// emptyObjectSchema and TestInputSchema_ReflectsFieldsDescriptionsAndRequiredness),
+// so a field the action's Input type does not declare must be refused, not
+// silently ignored.
+func TestValidateInput_UnknownProperty_IsRefused(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{Name: "tags.create", Domain: "tags", Input: sampleInput{}}
+
+	if err := spec.ValidateInput(json.RawMessage(`{"id":3,"bogus":true}`)); err == nil {
+		t.Error("ValidateInput() error = nil, want a refusal for an undeclared \"bogus\" property")
+	}
+}
+
+// TestValidateInput_NilInputAction_OnlyAcceptsAnEmptyObject exercises the
+// nil-Input path (the zero reflect.Type cache key in resolvedInputSchema):
+// an action with no Input type still has a real schema — the closed empty
+// object emptyObjectSchema publishes — so it must accept {} and refuse a
+// call carrying any property at all.
+func TestValidateInput_NilInputAction_OnlyAcceptsAnEmptyObject(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{Name: "system.info", Domain: "system"}
+
+	if err := spec.ValidateInput(json.RawMessage(`{}`)); err != nil {
+		t.Errorf("ValidateInput() error = %v, want nil for {} against a nil-Input action", err)
+	}
+	if err := spec.ValidateInput(json.RawMessage(`{"anything":1}`)); err == nil {
+		t.Error("ValidateInput() error = nil, want a refusal: a nil-Input action's schema accepts no properties")
+	}
+}
+
+// TestValidateInput_MalformedJSON_IsRefusedDistinctly guards a subtle
+// mis-signal: a caller whose input is not even valid JSON must not be told
+// its schema is wrong (which would send it chasing missing or misnamed
+// fields) when the real defect is more basic than that.
+func TestValidateInput_MalformedJSON_IsRefusedDistinctly(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{Name: "tags.create", Domain: "tags", Input: sampleInput{}}
+
+	err := spec.ValidateInput(json.RawMessage(`{not json`))
+	if err == nil {
+		t.Fatal("ValidateInput() error = nil, want a refusal for malformed JSON")
+	}
+	if !strings.Contains(err.Error(), "valid JSON") {
+		t.Errorf("ValidateInput() error = %q, want it to say the input is not valid JSON, not just that the schema mismatches", err)
+	}
+}
+
 // A top-level-only copy (e.g. maps.Clone on the outer map) satisfies
 // IsCachedPerType above without protecting anything reachable through it: the
 // nested "properties" map and the "required" slice would still be the very

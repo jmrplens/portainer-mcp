@@ -257,6 +257,13 @@ func TestExecute_ForwardsContextClientAndInputToTheHandler(t *testing.T) {
 	var gotInput json.RawMessage
 
 	spec := readOnlySpec()
+	// readOnlySpec declares no Input, which schema-validates as an empty
+	// object — {"id":7} below would be an unexpected additional property and
+	// never reach the handler. This test is about forwarding, not schema
+	// shape, so it declares one that accepts "id".
+	spec.Input = struct {
+		ID int `json:"id"`
+	}{}
 	spec.Handler = func(ctx context.Context, c *portainer.Client, in json.RawMessage) (any, error) {
 		gotCtx, gotClient, gotInput = ctx, c, in
 		return map[string]any{"ok": true}, nil
