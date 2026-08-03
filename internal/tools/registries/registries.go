@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
@@ -117,6 +118,153 @@ func Specs() []toolutil.ActionSpec {
 	}
 }
 
+// The functions below convert the nested objects declared on the generated
+// input structs (registryCreateInput, registryUpdateInput,
+// registryConfigureInput) into the corresponding apigen wire types. Every
+// field named in the task-4 finding — Ecr, Github, Gitlab, Quay,
+// RegistryAccesses, and the TLS certificate file fields — has a matching
+// parameter on the generated client's request body, so each is forwarded
+// whole rather than picked apart: a caller who sends "ecr": {"region": "x"}
+// gets exactly that structure on the wire, not a hand-picked subset of it.
+//
+// registryCreateInputEcr and registryUpdateInputEcr (and their Github/Quay
+// counterparts) are field-for-field identical, but the generator emits a
+// distinct named type per operation, so each operation gets its own
+// converter rather than one shared by structural coincidence.
+
+// createEcrToAPI converts registryCreate's Ecr input to the wire type.
+func createEcrToAPI(in *registryCreateInputEcr) *apigen.PortainerEcrData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerEcrData{Region: in.Region}
+}
+
+// updateEcrToAPI converts registryUpdate's Ecr input to the wire type.
+func updateEcrToAPI(in *registryUpdateInputEcr) *apigen.PortainerEcrData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerEcrData{Region: in.Region}
+}
+
+// createGithubToAPI converts registryCreate's Github input to the wire type.
+func createGithubToAPI(in *registryCreateInputGithub) *apigen.PortainerGithubRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGithubRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// updateGithubToAPI converts registryUpdate's Github input to the wire type.
+func updateGithubToAPI(in *registryUpdateInputGithub) *apigen.PortainerGithubRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGithubRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// createGitlabToAPI converts registryCreate's Gitlab input to the wire type.
+// Update has no Gitlab field — neither registryUpdateInput nor
+// registries.registryUpdatePayload declares one, so there is nothing to
+// forward there and no counterpart function.
+func createGitlabToAPI(in *registryCreateInputGitlab) *apigen.PortainerGitlabRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGitlabRegistryData{InstanceURL: in.InstanceURL, ProjectId: in.ProjectID, ProjectPath: in.ProjectPath}
+}
+
+// createQuayToAPI converts registryCreate's Quay input to the wire type.
+func createQuayToAPI(in *registryCreateInputQuay) *apigen.PortainerQuayRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerQuayRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// updateQuayToAPI converts registryUpdate's Quay input to the wire type.
+func updateQuayToAPI(in *registryUpdateInputQuay) *apigen.PortainerQuayRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerQuayRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// toRegistryAccesses converts registryUpdate's RegistryAccesses input —
+// keyed by registry ID, each value carrying Namespaces plus per-team and
+// per-user access policies — into the wire type. It nests through
+// PortainerRegistryAccessPolicies -> PortainerTeamAccessPolicies /
+// PortainerUserAccessPolicies -> PortainerAccessPolicy, converting one level
+// at a time rather than re-marshaling, since the input and wire shapes carry
+// the same fields under different (and, for the map value, differently
+// pointered) named types.
+func toRegistryAccesses(in map[string]registryUpdateInputRegistryAccessesValue) *apigen.PortainerRegistryAccesses {
+	if in == nil {
+		return nil
+	}
+	out := make(apigen.PortainerRegistryAccesses, len(in))
+	for registryID, access := range in {
+		policies := apigen.PortainerRegistryAccessPolicies{}
+		if access.Namespaces != nil {
+			namespaces := access.Namespaces
+			policies.Namespaces = &namespaces
+		}
+		if access.TeamAccessPolicies != nil {
+			team := make(apigen.PortainerTeamAccessPolicies, len(access.TeamAccessPolicies))
+			for teamID, policy := range access.TeamAccessPolicies {
+				team[teamID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
+			}
+			policies.TeamAccessPolicies = &team
+		}
+		if access.UserAccessPolicies != nil {
+			user := make(apigen.PortainerUserAccessPolicies, len(access.UserAccessPolicies))
+			for userID, policy := range access.UserAccessPolicies {
+				user[userID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
+			}
+			policies.UserAccessPolicies = &user
+		}
+		out[registryID] = policies
+	}
+	return &out
+}
+
+// toAccessPolicy converts one team- or user-access-policy entry into the
+// wire type; registryUpdateInputRegistryAccessesValueTeamAccessPoliciesValue
+// and its User counterpart declare identical fields, so both callers pass
+// the same two values in rather than needing their own converter.
+func toAccessPolicy(namespaces []string, roleID int) apigen.PortainerAccessPolicy {
+	policy := apigen.PortainerAccessPolicy{RoleId: roleID}
+	if namespaces != nil {
+		ns := namespaces
+		policy.Namespaces = &ns
+	}
+	return policy
+}
+
+// toTLSFileBytes converts registryConfigure's TLS certificate file inputs to
+// the wire type. Per registries.registryConfigurePayload, TLSCACertFile,
+// TLSCertFile and TLSKeyFile are declared as arrays of int32-formatted
+// integers, not — despite the "File" in their names — a multipart upload;
+// RegistryConfigureJSONRequestBody has no other way to carry them, so this
+// is the complete and correct forwarding, not a placeholder pending a real
+// upload path. It errors rather than truncating if a value does not fit in
+// an int32, since silently corrupting certificate bytes is worse than
+// refusing the call.
+func toTLSFileBytes(in []int) (*[]int32, error) {
+	if in == nil {
+		return nil, nil
+	}
+	out := make([]int32, len(in))
+	for i, v := range in {
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return nil, fmt.Errorf("byte at index %d (%d) does not fit in int32", i, v)
+		}
+		out[i] = int32(v)
+	}
+	return &out, nil
+}
+
 func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
 	resp, err := c.API.RegistryListWithResponse(ctx)
 	if err != nil {
@@ -128,16 +276,6 @@ func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (
 	return redactList(resp.JSON200), nil
 }
 
-// registryCreate's Ecr/Github/Gitlab/Quay/RegistryAccesses fields (all
-// optional, per registries.registryCreatePayload) are declared on the
-// generated registryCreateInput because the spec declares them, but are
-// deliberately not forwarded below: they are provider-specific nested
-// configuration this handler has never populated (the hand-written Input
-// this generator replaced omitted them entirely), and wiring them into
-// apigen's distinct nested types is business logic beyond what a struct
-// generator should decide silently. A caller that sends them today gets no
-// error and no effect — flagged in task-4-report.md as a real gap the
-// generated schema now surfaces that it did not before.
 func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryCreateInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -158,6 +296,10 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 		Username:       params.Username,
 		Password:       params.Password,
 		BaseURL:        params.BaseURL,
+		Ecr:            createEcrToAPI(params.Ecr),
+		Github:         createGithubToAPI(params.Github),
+		Gitlab:         createGitlabToAPI(params.Gitlab),
+		Quay:           createQuayToAPI(params.Quay),
 	}
 	body.TLS = params.TLS
 
@@ -222,11 +364,6 @@ func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMes
 	return redact(resp.JSON200), nil
 }
 
-// registryUpdate's BaseURL/Ecr/Github/Quay/RegistryAccesses fields (all
-// optional, per registries.registryUpdatePayload) are declared on the
-// generated registryUpdateInput because the spec declares them, but — like
-// registryCreate's identical nested fields above — are deliberately not
-// forwarded below; see that function's comment for why.
 func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryUpdateInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -243,11 +380,16 @@ func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMess
 	}
 
 	body := apigen.RegistryUpdateJSONRequestBody{
-		Name:           params.Name,
-		URL:            params.URL,
-		Authentication: params.Authentication,
-		Username:       params.Username,
-		Password:       params.Password,
+		Name:             params.Name,
+		URL:              params.URL,
+		Authentication:   params.Authentication,
+		Username:         params.Username,
+		Password:         params.Password,
+		BaseURL:          params.BaseURL,
+		Ecr:              updateEcrToAPI(params.Ecr),
+		Github:           updateGithubToAPI(params.Github),
+		Quay:             updateQuayToAPI(params.Quay),
+		RegistryAccesses: toRegistryAccesses(params.RegistryAccesses),
 	}
 
 	resp, err := c.API.RegistryUpdateWithResponse(ctx, params.ID, body)
@@ -305,13 +447,6 @@ func redactList(rs *[]apigen.PortainereeRegistry) *[]apigen.PortainereeRegistry 
 	return &out
 }
 
-// registryConfigure's TLSCACertFile/TLSCertFile/TLSKeyFile fields (all
-// optional, per registries.registryConfigurePayload) are declared on the
-// generated registryConfigureInput because the spec declares them, but are
-// deliberately not forwarded below, for the same reason as
-// registryCreate's nested fields: this handler never populated them before,
-// and wiring raw certificate bytes through is business logic beyond a
-// struct generator's remit.
 func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryConfigureInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -321,11 +456,27 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 		return nil, fmt.Errorf("registries configure: id must be a positive integer, got %d", params.ID)
 	}
 
+	tlsCACertFile, err := toTLSFileBytes(params.TLSCACertFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsCACertFile: %w", err)
+	}
+	tlsCertFile, err := toTLSFileBytes(params.TLSCertFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsCertFile: %w", err)
+	}
+	tlsKeyFile, err := toTLSFileBytes(params.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsKeyFile: %w", err)
+	}
+
 	body := apigen.RegistryConfigureJSONRequestBody{
 		Authentication: params.Authentication,
 		Username:       params.Username,
 		Password:       params.Password,
 		Region:         params.Region,
+		TLSCACertFile:  tlsCACertFile,
+		TLSCertFile:    tlsCertFile,
+		TLSKeyFile:     tlsKeyFile,
 	}
 	body.TLS = params.TLS
 	body.TLSSkipVerify = params.TLSSkipVerify
