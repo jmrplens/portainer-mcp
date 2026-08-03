@@ -119,6 +119,76 @@ func operationsByDomain(paths map[string]map[string]json.RawMessage) (map[string
 	return byDomain, nil
 }
 
+// domainOperations returns every operation belonging to domainName, per
+// domainTags's curated mapping (see internal/toolutil.DomainTags),
+// aggregated across every tag domainName covers and re-sorted by
+// OperationID so the result is deterministic regardless of map iteration
+// order.
+//
+// A domain directory absent from domainTags is a hard error, never a
+// silent empty result: before this, a directory name that did not literally
+// match an OpenAPI tag (12 of the vendored spec's 46 tags name a directory
+// differently than their operations' own first path segment would suggest —
+// see toolutil.DomainTags's doc comment) produced zero operations and this
+// generator moved on to the next domain having written nothing, with no
+// error anywhere and nothing for CI's freshness check to catch, because
+// there was no file to be stale.
+func domainOperations(domainName string, domainTags map[string][]string, byTag map[string][]operation) ([]operation, error) {
+	tags, ok := domainTags[domainName]
+	if !ok {
+		return nil, fmt.Errorf("domain directory %q has no entry in toolutil.DomainTags; add one (naming the OpenAPI tag(s) it covers) before generating for it", domainName)
+	}
+	var ops []operation
+	for _, tag := range tags {
+		ops = append(ops, byTag[tag]...)
+	}
+	sort.Slice(ops, func(i, j int) bool { return ops[i].OperationID < ops[j].OperationID })
+	return ops, nil
+}
+
+// checkDomainTagsCoverSpec cross-checks domainTags against byTag (every
+// operation the vendored spec actually declares, grouped by its own first
+// tag) in both directions:
+//
+//   - every tag domainTags names must have at least one operation in the
+//     spec, catching a typo in the table itself — the same silent-empty-
+//     generation defect domainOperations guards against, reintroduced one
+//     level up;
+//   - every tag with at least one operation in the spec must be named by
+//     some domain in domainTags, catching a tag the table has simply never
+//     been told about, which is how 127 operations across 12 tags were
+//     found silently unreachable before this table existed.
+//
+// This runs once, independent of which domain directories currently exist
+// under -tools-dir: it is a property of the table against the vendored spec,
+// not of how much of P3's domain wave has been written yet.
+func checkDomainTagsCoverSpec(domainTags map[string][]string, byTag map[string][]operation) error {
+	coveredBy := map[string]string{}
+	for domain, tags := range domainTags {
+		for _, tag := range tags {
+			coveredBy[tag] = domain
+			if len(byTag[tag]) == 0 {
+				return fmt.Errorf("domain %q names tag %q, which has no operations in the vendored spec (check for a typo)", domain, tag)
+			}
+		}
+	}
+
+	var missing []string
+	for tag, ops := range byTag {
+		if len(ops) == 0 {
+			continue
+		}
+		if _, ok := coveredBy[tag]; !ok {
+			missing = append(missing, fmt.Sprintf("%s (%d operation(s))", tag, len(ops)))
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("tag(s) with operations but no domain in toolutil.DomainTags: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // requestBodySchema returns the single application/json schema node of an
 // operation's request body, resolving one components.requestBodies $ref
 // first if the body itself is declared that way.

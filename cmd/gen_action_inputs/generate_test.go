@@ -210,6 +210,250 @@ func TestUnit_BodyObjectProperty_GeneratesNestedStruct(t *testing.T) {
 	}
 }
 
+// TestUnit_MapTypedRequestBody_GeneratesMapField guards C2: a request body
+// that resolves to an object with a typed additionalProperties and no named
+// properties — the seven Kubernetes bulk-delete operations' real shape, "a
+// map where the key is the namespace and the value is an array of X to
+// delete" — must become a real map field, not silently contribute zero
+// fields. Before the fix, assembleOperationFields called assembleFields
+// directly on node.Properties (empty here) and never looked at
+// node.MapValue at all, so this exact shape produced only the "id" path
+// parameter and nothing for the body.
+func TestUnit_MapTypedRequestBody_GeneratesMapField(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "DeleteServiceAccounts",
+		Method:      "POST",
+		Path:        "/kubernetes/{id}/service_accounts/delete",
+		Parameters: []map[string]any{
+			{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "integer"}, "description": "Environment identifier"},
+		},
+		RequestBody: map[string]any{
+			"description": "A map where the key is the namespace and the value is an array of service accounts to delete",
+			"required":    true,
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]any{
+						"type":                 "object",
+						"additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					},
+				},
+			},
+		},
+	}
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+	var nested []structSpec
+	fields, err := assembleOperationFields(op, res, doc, "deleteServiceAccountsInput", &nested)
+	if err != nil {
+		t.Fatalf("assembleOperationFields() error = %v", err)
+	}
+
+	var namespaceField *fieldSpec
+	for i := range fields {
+		if fields[i].JSONName == "namespace" {
+			namespaceField = &fields[i]
+		}
+	}
+	if namespaceField == nil {
+		t.Fatalf("no namespace field in %+v; the map-typed body was silently discarded", fields)
+	}
+	if namespaceField.GoType != "map[string][]string" {
+		t.Errorf("namespace field GoType = %q, want map[string][]string", namespaceField.GoType)
+	}
+	if !namespaceField.Required {
+		t.Error("namespace field Required = false, want true: requestBody.required is true")
+	}
+	if namespaceField.Description == "" {
+		t.Error("namespace field carries no description, want the requestBody's own description carried through")
+	}
+
+	src, err := renderFile("kubernetes", "test-spec.json", []structSpec{{Name: "deleteServiceAccountsInput", Fields: fields}})
+	if err != nil {
+		t.Fatalf("renderFile() error = %v", err)
+	}
+	mustCompile(t, src)
+	if !strings.Contains(string(src), `Namespace map[string][]string `+"`"+`json:"namespace"`+"`") {
+		t.Errorf("generated source does not declare the required Namespace map field:\n%s", src)
+	}
+}
+
+// TestUnit_FreeFormRequestBody_RefusedThroughAssembleOperationFields is C2's
+// other half: a request body that resolves to an object with neither
+// properties nor a typed additionalProperties (PolicyCreate's and
+// PolicyConflicts's real shape, `{"type": "object"}` with nothing else) must
+// abort generation, not silently contribute zero fields. The existing
+// free-form refusal test in TestUnit_Refusals calls typeOf directly, which
+// is exactly why this defect went unnoticed: assembleOperationFields never
+// called typeOf on the body node at all, so the refusal was unreachable from
+// the only path a real operation takes. This test goes through
+// assembleOperationFields, the real path, instead.
+func TestUnit_FreeFormRequestBody_RefusedThroughAssembleOperationFields(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "PolicyCreate",
+		Method:      "POST",
+		Path:        "/policies",
+		RequestBody: map[string]any{
+			"description": "Policy details",
+			"required":    true,
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]any{"type": "object"},
+				},
+			},
+		},
+	}
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+	var nested []structSpec
+	_, err := assembleOperationFields(op, res, doc, "policyCreateInput", &nested)
+	if err == nil {
+		t.Fatal("assembleOperationFields() = nil error, want a refusal: a genuinely free-form required body must not silently contribute zero fields")
+	}
+	if !strings.Contains(err.Error(), "free-form") {
+		t.Errorf("error = %q, want it to mention the free-form-object refusal", err)
+	}
+}
+
+// TestUnit_NestedStructNameCollidesWithSiblingProperty guards I3: a body
+// property "foo" (an object whose own property "bar" is itself an object)
+// and a sibling property "fooBar" (also an object) both produce a nested
+// struct literally named "...FooBar" — bare concatenation has no notion of
+// this collision. duplicateStructName must catch it before rendering.
+func TestUnit_NestedStructNameCollidesWithSiblingProperty(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "WidgetCreate",
+		Method:      "POST",
+		Path:        "/widgets",
+		RequestBody: map[string]any{
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"foo": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"bar": map[string]any{
+										"type":       "object",
+										"properties": map[string]any{"x": map[string]any{"type": "string"}},
+									},
+								},
+							},
+							"fooBar": map[string]any{
+								"type":       "object",
+								"properties": map[string]any{"y": map[string]any{"type": "string"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+	var nested []structSpec
+	fields, err := assembleOperationFields(op, res, doc, "widgetCreateInput", &nested)
+	if err != nil {
+		t.Fatalf("assembleOperationFields() error = %v", err)
+	}
+	all := append([]structSpec{{Name: "widgetCreateInput", Fields: fields}}, nested...)
+
+	name, dup := duplicateStructName(all)
+	if !dup {
+		t.Fatal("duplicateStructName() = false, want true: widgetCreateInputFooBar is declared by both foo.bar and the sibling fooBar")
+	}
+	if name != "widgetCreateInputFooBar" {
+		t.Errorf("duplicateStructName() name = %q, want widgetCreateInputFooBar", name)
+	}
+
+	// Demonstrate why the check must run before rendering: go/format only
+	// parses and reformats, so the two colliding (and differently shaped)
+	// struct declarations format without error, and only go/types — the
+	// same type-checking mustCompile does — rejects it as a redeclaration.
+	src, err := renderFile("widgets", "test-spec.json", all)
+	if err != nil {
+		t.Fatalf("renderFile() error = %v, want go/format to succeed despite the collision", err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", src, parser.AllErrors)
+	if err != nil {
+		t.Fatalf("generated source does not even parse: %v", err)
+	}
+	conf := types.Config{Importer: importer.Default()}
+	if _, err := conf.Check("generated", fset, []*ast.File{file}, nil); err == nil {
+		t.Fatal("type-check succeeded despite two identical struct declarations; expected a redeclaration error, proving go/format alone cannot catch this")
+	}
+}
+
+// TestUnit_WholeDomainFile_MultipleOperationsCompileTogether builds and
+// compiles a whole rendered domain file assembled from two independent
+// operations, the way main.go's per-domain loop actually does (concatenating
+// each operation's top-level struct and nested structs into one file) —
+// rather than the 1-4 hand-built structs every other test in this file
+// renders. Cross-operation struct redeclaration can only be in reach at this
+// altitude.
+func TestUnit_WholeDomainFile_MultipleOperationsCompileTogether(t *testing.T) {
+	t.Parallel()
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+
+	ops := []operation{
+		{
+			OperationID: "TagCreate",
+			Method:      "POST",
+			Path:        "/tags",
+			RequestBody: map[string]any{
+				"content": map[string]any{
+					"application/json": map[string]any{
+						"schema": map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"name": map[string]any{"type": "string"}},
+							"required":   []any{"name"},
+						},
+					},
+				},
+			},
+		},
+		{
+			OperationID: "TagDelete",
+			Method:      "DELETE",
+			Path:        "/tags/{id}",
+			Parameters: []map[string]any{
+				{"name": "id", "in": "path", "required": true, "schema": map[string]any{"type": "integer"}},
+			},
+		},
+	}
+
+	var allStructs []structSpec
+	for _, op := range ops {
+		structName := inputStructName(op.OperationID)
+		var nested []structSpec
+		fields, err := assembleOperationFields(op, res, doc, structName, &nested)
+		if err != nil {
+			t.Fatalf("assembleOperationFields(%s) error = %v", op.OperationID, err)
+		}
+		allStructs = append(allStructs, structSpec{Name: structName, Fields: fields})
+		allStructs = append(allStructs, nested...)
+	}
+
+	if name, dup := duplicateStructName(allStructs); dup {
+		t.Fatalf("unexpected duplicate struct name %q across independent operations", name)
+	}
+
+	src, err := renderFile("tags", "test-spec.json", allStructs)
+	if err != nil {
+		t.Fatalf("renderFile() error = %v", err)
+	}
+	mustCompile(t, src)
+	text := string(src)
+	if !strings.Contains(text, "type tagCreateInput struct {") || !strings.Contains(text, "type tagDeleteInput struct {") {
+		t.Errorf("whole-file render is missing one of the two operations' structs:\n%s", text)
+	}
+}
+
 // --- refusal cases ---
 
 func TestUnit_Refusals(t *testing.T) {

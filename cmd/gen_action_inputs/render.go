@@ -31,6 +31,31 @@ func renderFile(packageName, specPath string, structs []structSpec) ([]byte, err
 	return formatted, nil
 }
 
+// duplicateStructName returns the first struct name that appears more than
+// once in structs, and whether one was found.
+//
+// Nested struct names are bare concatenation of their parent's name and the
+// property's Go field name (see typeOf), with nothing that detects two
+// different properties concatenating to the same name — a body with a
+// property "foo" (an object with its own object property "bar") and a
+// sibling property "fooBar" (also an object) both produce a struct named
+// "...FooBar". go/format only parses and re-indents; it has no notion of
+// package-level redeclaration, so it formats such a file successfully and
+// this generator would exit 0 having written source that does not compile.
+// No such collision exists in the vendored spec today, which is exactly why
+// this must be checked rather than left to be noticed: it is latent until
+// whichever future spec bump introduces one.
+func duplicateStructName(structs []structSpec) (string, bool) {
+	seen := make(map[string]bool, len(structs))
+	for _, s := range structs {
+		if seen[s.Name] {
+			return s.Name, true
+		}
+		seen[s.Name] = true
+	}
+	return "", false
+}
+
 func renderStruct(buf *strings.Builder, s structSpec) {
 	if s.Doc != "" {
 		writeComment(buf, s.Doc)

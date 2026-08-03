@@ -314,20 +314,29 @@ func TestAccessors_ReturnCopies_SoCallersCannotCorruptTheCatalog(t *testing.T) {
 
 // specWithDiscoveryMetadata is the fixture TestCatalogAccessors_* needs and
 // spec() alone cannot provide: every pilot domain (system, tags, registries)
-// declares its specs with Aliases and ParameterGuidance left unset, so a
-// spec built from spec() alone has a nil slice and a nil map. Asserting that
-// mutating a returned Aliases or ParameterGuidance does not reach the
-// catalog is meaningless against those zero values — append(nil-slice,
-// "x") never aliases the original nil, and indexing into a nil map is a
-// read, not a write a clone could fail to isolate. This fixture gives both
-// fields real, non-empty content so the mutation below actually exercises
-// cloneActionSpec's slice- and map-copying, not merely its handling of zero
-// values.
+// declares its specs with Aliases, Tags, RelatedActions and ParameterGuidance
+// left unset, so a spec built from spec() alone has nil slices and a nil map.
+// Asserting that mutating a returned Aliases, Tags, RelatedActions or
+// ParameterGuidance (including its CommonConfusions) does not reach the
+// catalog is meaningless against those zero values — append(nil-slice, "x")
+// never aliases the original nil, and indexing into a nil map is a read, not
+// a write a clone could fail to isolate. This fixture gives every one of
+// those fields real, non-empty content so the mutations below actually
+// exercise cloneActionSpec's slice- and map-copying for each field
+// individually, rather than only the two (Aliases, ParameterGuidance's own
+// map) the original fixture happened to populate — which is exactly why
+// removing the deep-copy of Tags, RelatedActions or CommonConfusions alone
+// used to survive every test here unnoticed.
 func specWithDiscoveryMetadata(name, domain, operationID string, ed edition.Edition) toolutil.ActionSpec {
 	s := spec(name, domain, operationID, ed)
 	s.Aliases = []string{"original-alias"}
+	s.Tags = []string{"original-tag"}
+	s.RelatedActions = []string{"original-related"}
 	s.ParameterGuidance = map[string]toolutil.ParameterGuidance{
-		"id": {SemanticRole: "original"},
+		"id": {
+			SemanticRole:     "original",
+			CommonConfusions: []string{"original-confusion"},
+		},
 	}
 	return s
 }
@@ -348,26 +357,48 @@ func TestCatalogAccessors_DoNotShareSliceOrMapMemory(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	// Sanity guard: if the fixture ever regresses to an empty Aliases or a nil
-	// ParameterGuidance, the mutations below would silently exercise nothing,
+	// Sanity guard: if the fixture ever regresses to an empty Aliases, Tags,
+	// RelatedActions, a nil ParameterGuidance or an empty CommonConfusions,
+	// the corresponding mutation below would silently exercise nothing,
 	// exactly the non-discriminating-test trap this task is warned about.
 	actions := c.Actions()
 	if len(actions[0].Aliases) == 0 {
 		t.Fatal("fixture has no Aliases; the mutation below would prove nothing")
 	}
+	if len(actions[0].Tags) == 0 {
+		t.Fatal("fixture has no Tags; the mutation below would prove nothing")
+	}
+	if len(actions[0].RelatedActions) == 0 {
+		t.Fatal("fixture has no RelatedActions; the mutation below would prove nothing")
+	}
 	if actions[0].ParameterGuidance == nil {
 		t.Fatal("fixture has no ParameterGuidance; the mutation below would prove nothing")
 	}
+	if len(actions[0].ParameterGuidance["id"].CommonConfusions) == 0 {
+		t.Fatal("fixture's ParameterGuidance has no CommonConfusions; the mutation below would prove nothing")
+	}
 
 	actions[0].Aliases[0] = "corrupted"
+	actions[0].Tags[0] = "corrupted"
+	actions[0].RelatedActions[0] = "corrupted"
 	actions[0].ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+	actions[0].ParameterGuidance["id"].CommonConfusions[0] = "corrupted"
 
 	again := c.Actions()
 	if again[0].Aliases[0] == "corrupted" {
 		t.Error("Actions() shares Aliases slice memory with the catalog")
 	}
+	if again[0].Tags[0] == "corrupted" {
+		t.Error("Actions() shares Tags slice memory with the catalog")
+	}
+	if again[0].RelatedActions[0] == "corrupted" {
+		t.Error("Actions() shares RelatedActions slice memory with the catalog")
+	}
 	if _, leaked := again[0].ParameterGuidance["injected"]; leaked {
 		t.Error("Actions() shares ParameterGuidance map memory with the catalog")
+	}
+	if again[0].ParameterGuidance["id"].CommonConfusions[0] == "corrupted" {
+		t.Error("Actions() shares ParameterGuidance's CommonConfusions slice memory with the catalog")
 	}
 }
 
@@ -386,19 +417,32 @@ func TestByDomainAccessor_DoesNotShareSliceOrMapMemory(t *testing.T) {
 	}
 
 	byDomain := c.ByDomain("tags")
-	if len(byDomain[0].Aliases) == 0 || byDomain[0].ParameterGuidance == nil {
-		t.Fatal("fixture lost its Aliases or ParameterGuidance; the mutation below would prove nothing")
+	if len(byDomain[0].Aliases) == 0 || len(byDomain[0].Tags) == 0 || len(byDomain[0].RelatedActions) == 0 ||
+		byDomain[0].ParameterGuidance == nil || len(byDomain[0].ParameterGuidance["id"].CommonConfusions) == 0 {
+		t.Fatal("fixture lost its Aliases, Tags, RelatedActions or ParameterGuidance; the mutation below would prove nothing")
 	}
 
 	byDomain[0].Aliases[0] = "corrupted"
+	byDomain[0].Tags[0] = "corrupted"
+	byDomain[0].RelatedActions[0] = "corrupted"
 	byDomain[0].ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+	byDomain[0].ParameterGuidance["id"].CommonConfusions[0] = "corrupted"
 
 	again := c.ByDomain("tags")
 	if again[0].Aliases[0] == "corrupted" {
 		t.Error("ByDomain() shares Aliases slice memory with the catalog")
 	}
+	if again[0].Tags[0] == "corrupted" {
+		t.Error("ByDomain() shares Tags slice memory with the catalog")
+	}
+	if again[0].RelatedActions[0] == "corrupted" {
+		t.Error("ByDomain() shares RelatedActions slice memory with the catalog")
+	}
 	if _, leaked := again[0].ParameterGuidance["injected"]; leaked {
 		t.Error("ByDomain() shares ParameterGuidance map memory with the catalog")
+	}
+	if again[0].ParameterGuidance["id"].CommonConfusions[0] == "corrupted" {
+		t.Error("ByDomain() shares ParameterGuidance's CommonConfusions slice memory with the catalog")
 	}
 }
 
@@ -418,12 +462,16 @@ func TestLookupAccessor_DoesNotShareSliceOrMapMemory(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup(tags.list) = false, want the action present")
 	}
-	if len(found.Aliases) == 0 || found.ParameterGuidance == nil {
-		t.Fatal("fixture lost its Aliases or ParameterGuidance; the mutation below would prove nothing")
+	if len(found.Aliases) == 0 || len(found.Tags) == 0 || len(found.RelatedActions) == 0 ||
+		found.ParameterGuidance == nil || len(found.ParameterGuidance["id"].CommonConfusions) == 0 {
+		t.Fatal("fixture lost its Aliases, Tags, RelatedActions or ParameterGuidance; the mutation below would prove nothing")
 	}
 
 	found.Aliases[0] = "corrupted"
+	found.Tags[0] = "corrupted"
+	found.RelatedActions[0] = "corrupted"
 	found.ParameterGuidance["injected"] = toolutil.ParameterGuidance{}
+	found.ParameterGuidance["id"].CommonConfusions[0] = "corrupted"
 
 	again, ok := c.Lookup("tags.list")
 	if !ok {
@@ -432,8 +480,17 @@ func TestLookupAccessor_DoesNotShareSliceOrMapMemory(t *testing.T) {
 	if again.Aliases[0] == "corrupted" {
 		t.Error("Lookup() shares Aliases slice memory with the catalog")
 	}
+	if again.Tags[0] == "corrupted" {
+		t.Error("Lookup() shares Tags slice memory with the catalog")
+	}
+	if again.RelatedActions[0] == "corrupted" {
+		t.Error("Lookup() shares RelatedActions slice memory with the catalog")
+	}
 	if _, leaked := again.ParameterGuidance["injected"]; leaked {
 		t.Error("Lookup() shares ParameterGuidance map memory with the catalog")
+	}
+	if again.ParameterGuidance["id"].CommonConfusions[0] == "corrupted" {
+		t.Error("Lookup() shares ParameterGuidance's CommonConfusions slice memory with the catalog")
 	}
 }
 

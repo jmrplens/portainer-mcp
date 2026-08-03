@@ -36,6 +36,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
 func main() {
@@ -59,9 +61,24 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	byDomain, err := operationsByDomain(paths)
+	byTag, err := operationsByDomain(paths)
 	if err != nil {
 		return err
+	}
+
+	// toolutil.DomainTags is the single table both this generator and a
+	// domain author read to know which OpenAPI tag(s) a domain directory
+	// covers. Checked in both directions before anything is written: a
+	// domain directory this table has no entry for used to fall through to
+	// a silent no-op (see below); a tag with real operations that no domain
+	// here claims is the same defect from the other side, and a table entry
+	// naming a tag the vendored spec does not actually have is the same
+	// defect again, reintroduced by a typo in the table itself.
+	if err := toolutil.ValidateDomainTags(toolutil.DomainTags); err != nil {
+		return fmt.Errorf("domain tag table: %w", err)
+	}
+	if err := checkDomainTagsCoverSpec(toolutil.DomainTags, byTag); err != nil {
+		return fmt.Errorf("domain tag table vs %s: %w", *specPath, err)
 	}
 
 	skip := map[string]bool{}
@@ -86,7 +103,10 @@ func run(args []string) error {
 	res := &resolver{doc: doc}
 	written := 0
 	for _, domainName := range domains {
-		ops := byDomain[domainName]
+		ops, err := domainOperations(domainName, toolutil.DomainTags, byTag)
+		if err != nil {
+			return err
+		}
 		if len(ops) == 0 {
 			continue
 		}
@@ -117,6 +137,9 @@ func run(args []string) error {
 		}
 		if len(allStructs) == 0 {
 			continue
+		}
+		if name, dup := duplicateStructName(allStructs); dup {
+			return fmt.Errorf("domain %s: struct %q would be declared more than once; rename the colliding operation or nested property before generating (go/format only checks syntax and would not catch this)", domainName, name)
 		}
 
 		source, err := renderFile(domainName, *specPath, allStructs)

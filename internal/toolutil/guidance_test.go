@@ -74,6 +74,17 @@ func TestFillScopeParameterGuidance_LeavesExplicitDefaultTableKeyAlone(t *testin
 	}
 }
 
+// TestFillScopeParameterGuidance_DoesNotMutateItsInput guards against writing
+// straight into the caller's ParameterGuidance map instead of copying it
+// first. The fixture must start with a non-nil map that already carries one
+// default-table key ("endpointId") and an Input whose JSON fields name a
+// second, not-yet-present default-table key ("stackId"): only then does a
+// buggy implementation that adds "stackId" directly to the map object the
+// caller passed in have anything to leak into. A fixture with
+// ParameterGuidance left nil (as this test used to build it) forces even a
+// buggy implementation to allocate a fresh map — there being nothing to
+// mutate in place — so it could never fail here regardless of whether the
+// real map object is copied before merging.
 func TestFillScopeParameterGuidance_DoesNotMutateItsInput(t *testing.T) {
 	t.Parallel()
 	// Specs come from package-level slices shared across editions and
@@ -81,10 +92,22 @@ func TestFillScopeParameterGuidance_DoesNotMutateItsInput(t *testing.T) {
 	// another's.
 	type input struct {
 		EndpointID int `json:"endpointId"`
+		StackID    int `json:"stackId"`
 	}
-	original := []ActionSpec{{Name: "x.get", Input: input{}}}
+	callerMap := map[string]ParameterGuidance{
+		"endpointId": {SemanticRole: "hand written"},
+	}
+	original := []ActionSpec{{Name: "x.get", Input: input{}, ParameterGuidance: callerMap}}
+
 	_ = FillScopeParameterGuidance(original)
-	if original[0].ParameterGuidance != nil {
-		t.Error("FillScopeParameterGuidance mutated the specs it was given")
+
+	if len(callerMap) != 1 {
+		t.Errorf("caller's map grew from 1 entry to %d: FillScopeParameterGuidance must copy the map before merging defaults into it, not write through the reference it was given", len(callerMap))
+	}
+	if _, leaked := callerMap["stackId"]; leaked {
+		t.Error("FillScopeParameterGuidance wrote a new key (\"stackId\") straight into the caller's ParameterGuidance map")
+	}
+	if original[0].ParameterGuidance["endpointId"].SemanticRole != "hand written" {
+		t.Error("the caller's own map entry was altered")
 	}
 }

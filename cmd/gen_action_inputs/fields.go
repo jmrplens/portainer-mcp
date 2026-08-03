@@ -172,6 +172,17 @@ func assembleFields(props []schemaProperty, structNamePrefix string, structs *[]
 	return fields, nil
 }
 
+// bodyDescription returns a request body's own "description" — a sibling of
+// "content" and "required" in the OpenAPI document, describing the body as a
+// whole rather than any single property of it — falling back to def when rb
+// carries none (an anonymous $ref'd body, or one that simply omits it).
+func bodyDescription(rb map[string]any, def string) string {
+	if d, ok := rb["description"].(string); ok && d != "" {
+		return d
+	}
+	return def
+}
+
 // mergeSource identifies which part of the operation a field came from, for
 // the collision error assembleOperationFields raises when two sources both
 // contribute the same wire name.
@@ -270,19 +281,66 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		if node.Type != "" && node.Type != "object" {
 			return nil, fmt.Errorf("request body: top-level type %q is not an object; only an object body flattens into named fields", node.Type)
 		}
-		bodyFields, err := assembleFields(node.Properties, structPrefix, structs)
-		if err != nil {
-			return nil, fmt.Errorf("request body: %w", err)
-		}
-		// requestBody.required (bodyRequired) governs only whether the body
-		// may be absent altogether; it does not loosen what the body
-		// schema's own "required" list says about its properties, so each
-		// field's Required flag (already set by assembleFields from that
-		// list) is carried through unchanged.
-		for _, f := range bodyFields {
+
+		switch {
+		case len(node.Properties) > 0:
+			// requestBody.required (bodyRequired) governs only whether the body
+			// may be absent altogether; it does not loosen what the body
+			// schema's own "required" list says about its properties, so each
+			// field's Required flag (already set by assembleFields from that
+			// list) is carried through unchanged.
+			bodyFields, err := assembleFields(node.Properties, structPrefix, structs)
+			if err != nil {
+				return nil, fmt.Errorf("request body: %w", err)
+			}
+			for _, f := range bodyFields {
+				if err := add("body", f); err != nil {
+					return nil, err
+				}
+			}
+		case node.MapValue != nil:
+			// The body itself is a map — the seven Kubernetes bulk-delete
+			// operations (DeleteCronJobs, DeleteJobs, DeleteKubernetesIngresses,
+			// DeleteKubernetesServices, DeleteRoleBindings, DeleteRoles,
+			// DeleteServiceAccounts) are the real example, each documented as "a
+			// map where the key is the namespace and the value is an array of
+			// <kind> to delete" — not an object with named properties to
+			// flatten. There is no property name to derive a field name from,
+			// because the map *is* the whole body, so this names the field
+			// "namespace" after what every instance of this shape in the
+			// vendored spec actually holds — the same identifier
+			// toolutil.scopeParameterDefaults already documents guidance for.
+			valueType, err := typeOf(node.MapValue, true, structPrefix+"Value", structs)
+			if err != nil {
+				return nil, fmt.Errorf("request body: map value: %w", err)
+			}
+			bodyRequired, _ := op.RequestBody["required"].(bool)
+			f := fieldSpec{
+				GoName:      "Namespace",
+				GoType:      "map[string]" + valueType,
+				JSONName:    "namespace",
+				Required:    bodyRequired,
+				Description: bodyDescription(op.RequestBody, "Values keyed by Kubernetes namespace."),
+			}
 			if err := add("body", f); err != nil {
 				return nil, err
 			}
+		default:
+			// Neither named properties nor a typed additionalProperties: route
+			// the body node through typeOf so its free-form-object refusal —
+			// the whole reason this generator exists rather than publishing a
+			// vacuous struct for every operation — can actually fire for a
+			// request body. Before this fix, a required body that resolved to
+			// this shape (PolicyCreate, PolicyConflicts) silently contributed
+			// zero fields instead of aborting generation: the refusal lived
+			// inside typeOf, but nothing on this path ever called it, so an
+			// operation whose whole point was "we cannot express this safely"
+			// published the same empty-object schema as a genuinely
+			// parameterless action.
+			if _, err := typeOf(node, true, structPrefix, structs); err != nil {
+				return nil, fmt.Errorf("request body: %w", err)
+			}
+			return nil, fmt.Errorf("request body: resolved to no fields even though a body is present; this generator has a gap for this schema shape")
 		}
 	}
 
