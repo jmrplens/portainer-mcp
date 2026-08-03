@@ -1,6 +1,10 @@
 package main
 
-import "unicode"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
 
 // commonInitialisms are the Go-idiomatic initialisms this generator
 // upper-cases in full when they appear as one word of an identifier (e.g.
@@ -212,4 +216,135 @@ func inputStructName(operationID string) string {
 	}
 	r[0] = unicode.ToLower(r[0])
 	return string(r) + "Input"
+}
+
+// ActionName derives the canonical, domain-qualified action name (the
+// ActionSpec.Name a model searches for through portainer_find_action and
+// calls portainer_execute_action with) from a domain package name and an
+// operation's exported OperationID: "TagCreate" in domain "tags" becomes
+// "tags.create".
+//
+// The local part is the OperationID with the domain's own prefix removed,
+// lower-cased and snake_cased. That prefix is not simply the domain string:
+// three cases actually occur across the vendored spec's 46 tags, tried in
+// this order against every operation independently (a domain is not
+// committed to one shape for every one of its operations) —
+//
+//  1. the domain name itself, underscores removed ("settings" matches
+//     SettingsInspect's "Settings", "AllowList" for domain "allowlist");
+//  2. the domain's last word singularised, underscores removed ("tags" ->
+//     "tag" matches TagCreate; "registries" -> "registry" matches
+//     RegistryList; "team_memberships" -> "teammembership" matches
+//     TeamMembershipCreate) — the shape the pilot domains' own hand-written
+//     names already assume;
+//  3. neither, in which case the whole OperationID is kept and no prefix is
+//     removed at all (RepositoryTagsDelete and Ecr* keep their full name in
+//     domain "registries": neither "registries" nor "registry" prefixes
+//     them).
+//
+// A plain strings.TrimPrefix(operationID, domain) is not this rule: it would
+// also strip "Auth" from "AuthenticateUser" in domain "auth" (wrong — the
+// word is "Authenticate", not "Auth" followed by a new word), so a match
+// only counts when what follows is either the end of the identifier or the
+// start of a new word (an upper-case rune) — never mid-word. Comparison
+// itself is case-insensitive throughout, since operationID is PascalCase and
+// domain is snake_case lower-case.
+//
+// Stripping a prefix that consumes the OperationID whole (remainder empty)
+// is treated as a real match, not "no match, keep the whole thing" — domain
+// "motd"'s only operation is itself "MOTD", and domain "team_memberships"
+// has a bare "TeamMemberships" alongside its TeamMembership* siblings. Both
+// leave nothing after their own domain name is removed, and this is refused
+// below rather than silently emitting "motd.motd": a domain hitting this
+// must declare that one action's name by hand instead of generating it.
+func ActionName(domain, operationID string) (string, error) {
+	if domain == "" {
+		return "", fmt.Errorf("gen_action_inputs: ActionName: domain must not be empty")
+	}
+	if operationID == "" {
+		return "", fmt.Errorf("gen_action_inputs: ActionName: operationID must not be empty")
+	}
+
+	remainder := stripDomainPrefix(operationID, domainPrefixCandidates(domain))
+
+	words := splitWords(remainder)
+	parts := make([]string, 0, len(words))
+	for _, w := range words {
+		parts = append(parts, lower(w))
+	}
+	local := strings.Join(parts, "_")
+	if local == "" {
+		return "", fmt.Errorf(
+			"gen_action_inputs: ActionName: operationID %q leaves nothing after removing domain %q's own prefix; declare this action's Name by hand instead of generating it",
+			operationID, domain)
+	}
+	return domain + "." + local, nil
+}
+
+// domainPrefixCandidates returns the prefix(es) ActionName tries against an
+// operationID for domain, longest-shape-first: the domain name itself
+// (underscores removed), then the same with its last underscore-separated
+// word singularised, when that differs. Both are returned lower-case;
+// stripDomainPrefix folds the operationID's case to compare against them, so
+// neither candidate needs any case massaging of its own.
+func domainPrefixCandidates(domain string) []string {
+	segments := strings.Split(domain, "_")
+	asIs := strings.ToLower(strings.Join(segments, ""))
+	candidates := []string{asIs}
+
+	last := segments[len(segments)-1]
+	if sing := singularize(last); sing != last {
+		singSegments := make([]string, len(segments))
+		copy(singSegments, segments)
+		singSegments[len(singSegments)-1] = sing
+		if singular := strings.ToLower(strings.Join(singSegments, "")); singular != asIs {
+			candidates = append(candidates, singular)
+		}
+	}
+	return candidates
+}
+
+// singularize applies the minimal English singularisation the vendored
+// spec's ~46 domain names actually need: "ies" -> "y" (registries ->
+// registry, policies -> policy) and a plain trailing "s" dropped otherwise
+// (tags -> tag, addons -> addon, memberships -> membership). It is not a
+// general solution — "kubernetes" becomes the nonsense "kubernete" — but
+// nothing in the vendored spec ever begins with that string, so the
+// nonsense candidate simply never matches rather than matching wrongly.
+func singularize(word string) string {
+	lowerWord := strings.ToLower(word)
+	switch {
+	case strings.HasSuffix(lowerWord, "ies") && len(lowerWord) > 3:
+		return word[:len(word)-3] + "y"
+	case strings.HasSuffix(lowerWord, "s") && !strings.HasSuffix(lowerWord, "ss") && len(lowerWord) > 1:
+		return word[:len(word)-1]
+	default:
+		return word
+	}
+}
+
+// stripDomainPrefix returns the part of operationID left after removing the
+// first candidate that prefixes it at a word boundary (case-insensitively),
+// or operationID unchanged if none do. A candidate that consumes operationID
+// whole returns "" — a deliberate, real match ActionName above turns into a
+// refusal, not a signal to fall through to the next candidate or keep the
+// original.
+//
+// operationID is always plain ASCII (see exportedName's doc comment), so
+// indexing by byte offset is exact rather than an approximation of rune
+// boundaries.
+func stripDomainPrefix(operationID string, candidates []string) string {
+	lowerID := strings.ToLower(operationID)
+	for _, prefix := range candidates {
+		if prefix == "" || len(lowerID) < len(prefix) || lowerID[:len(prefix)] != prefix {
+			continue
+		}
+		if len(operationID) == len(prefix) {
+			return ""
+		}
+		if next := rune(operationID[len(prefix)]); unicode.IsUpper(next) {
+			return operationID[len(prefix):]
+		}
+	}
+	return operationID
 }

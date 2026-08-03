@@ -44,7 +44,7 @@ func Specs() []toolutil.ActionSpec {
 			Handler:     systemVersion,
 		},
 		{
-			Name: "system.nodes", Domain: "system", OperationID: "SystemNodesCount",
+			Name: "system.nodes_count", Domain: "system", OperationID: "SystemNodesCount",
 			Title:       "Count nodes",
 			Description: "Returns the total number of nodes across every environment this Portainer server manages.",
 			Edition:     edition.CE,
