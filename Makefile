@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -71,6 +71,16 @@ test-e2e:
 # swallowed, so coverage nobody has never reads as coverage verified.
 audit-e2e-gaps:
 	go run ./cmd/audit_e2e_gaps
+
+# audit-1to1 is the gate this whole rewrite exists for: it fails when any
+# operation documented in either vendored spec has no matching catalog
+# action. Unlike audit-e2e-gaps it is a real gate, not merely informational —
+# its non-zero exit is what a CI job wires up as a required check once P3
+# closes the gap it reports today. See cmd/audit_1to1's package doc for why
+# it currently fails (18 of 441 Business Edition operations declared) and why
+# that is the correct state for most of P3.
+audit-1to1:
+	go run ./cmd/audit_1to1
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)

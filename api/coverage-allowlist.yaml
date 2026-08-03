@@ -1,0 +1,29 @@
+# Portainer operations that cmd/audit_1to1 will never require a catalog
+# action for.
+#
+# Every entry requires:
+#   operation_id  the exported Go identifier oapi-codegen assigns to the
+#                 operation (e.g. "AddonInstall" for the raw operationId
+#                 "addonInstall") — the same form
+#                 toolutil.ActionSpec.OperationID uses, so this file and the
+#                 catalog can be compared directly.
+#   reason        why this operation will never be exposed as an MCP action.
+#   added         the ISO 8601 date (YYYY-MM-DD) the entry was added.
+#
+# audit_1to1 excludes every entry here from its pass/fail gate but always
+# prints how many entries exist and what they are, alongside the coverage
+# numbers: an allow-list that can hide an entry from its own report is how
+# coverage decays while the number looks fine. An entry naming an operation
+# that exists in neither vendored spec is itself a build error, because a
+# stale entry would otherwise keep forgiving something that no longer
+# exists, and a real, unrelated gap could later inherit its name.
+#
+# Empty today, deliberately: as of this file's introduction the catalog
+# covers 18 of 441 Business Edition operations and 15 of 251 Community
+# Edition operations, so almost everything currently failing this audit is a
+# real gap waiting for its action, not a legitimate exclusion. An entry
+# belongs here only once a specific operation has been examined and found
+# genuinely impossible to expose — a deprecated route, a websocket upgrade
+# MCP cannot carry, and similar — never as a shortcut to make the count look
+# better before that examination happens.
+[]

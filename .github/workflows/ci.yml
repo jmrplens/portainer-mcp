@@ -126,3 +126,26 @@ jobs:
           fi
 
           exit $fail
+
+  audit-1to1:
+    name: "1:1 API coverage (informational until P3 completes)"
+    runs-on: ubuntu-latest
+    # This is the gate the whole P3 rewrite exists to install: it fails
+    # whenever an operation documented in either vendored spec has no
+    # matching catalog action, which is what the previous incarnation of
+    # this server never checked on its way to 37% coverage. With 18 of 441
+    # Business Edition operations declared, cmd/audit_1to1 fails today and
+    # keeps failing for most of P3 — that is correct, not a bug to silence.
+    # continue-on-error keeps that expected failure from turning this
+    # repository's required checks red: a gate that blocks every commit for
+    # months teaches everyone to route around it instead. Remove
+    # continue-on-error, making this job required, only once the count it
+    # reports reaches zero.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Report 1:1 coverage of both vendored specs by the action catalog
+        run: make audit-1to1
