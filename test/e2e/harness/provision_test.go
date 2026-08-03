@@ -391,12 +391,20 @@ func TestApplyLicence_ConflictingKeys_ReturnedAndRedacted(t *testing.T) {
 	// The early warning the plan asks to watch for: a non-null
 	// conflictingKeys is the first observable sign the vendor tracks
 	// activations across runs. It must not become an error (failing here
-	// would only block investigating it), and if the server happened to name
-	// our own key back to us, that value is exactly as sensitive as the key
-	// itself and must not reach the estate file or a log unredacted.
+	// would only block investigating it). Every conflicting key returned must
+	// be redacted, whether or not it happens to equal our own secret: a
+	// conflicting key is, by construction, someone else's key, so a guard that
+	// only redacts occurrences of our own key's text inside it is a
+	// near-guaranteed no-op for exactly the value it exists to protect. The
+	// second entry here ("3-someOtherKey") is a genuinely different key,
+	// deliberately never equal to secret, so this test would have caught that
+	// defect: an implementation that redacted only by searching for our own
+	// key would leave it in the clear, and this assertion requires it to be
+	// redacted by its own shape instead.
 	const secret = "3-SUPERSECRETLICENCEKEY=="
+	const otherKey = "3-someOtherKey"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintf(w, `{"conflictingKeys":[%q,"3-someOtherKey"]}`, secret)
+		_, _ = fmt.Fprintf(w, `{"conflictingKeys":[%q,%q]}`, secret, otherKey)
 	}))
 	t.Cleanup(server.Close)
 
@@ -412,8 +420,11 @@ func TestApplyLicence_ConflictingKeys_ReturnedAndRedacted(t *testing.T) {
 			t.Fatalf("a conflicting key leaked our own licence key unredacted: %v", conflicting)
 		}
 	}
-	if conflicting[1] != "3-someOtherKey" {
-		t.Errorf("conflicting[1] = %q, want the unrelated key left untouched", conflicting[1])
+	if conflicting[1] == otherKey {
+		t.Errorf("conflicting[1] = %q, a genuinely different conflicting key was returned unredacted", conflicting[1])
+	}
+	if !strings.HasPrefix(conflicting[1], otherKey[:redactKeyPrefixLen]) || !strings.Contains(conflicting[1], redactedMarker) {
+		t.Errorf("conflicting[1] = %q, want a short identifying prefix of %q followed by %q", conflicting[1], otherKey, redactedMarker)
 	}
 }
 
@@ -461,19 +472,21 @@ func TestReleaseLicence_SendsTheKeyAsALicenseKeysArray(t *testing.T) {
 	t.Parallel()
 	const secret = "3-SOMELICENCEKEY=="
 	var gotBody map[string][]string
-	var gotAuth string
+	var gotAPIKey string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAPIKey = r.Header.Get("X-Api-Key")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
 
-	if err := ReleaseLicence(context.Background(), server.Client(), server.URL, "the-jwt", secret); err != nil {
+	if err := ReleaseLicence(context.Background(), server.Client(), server.URL, "the-api-key", secret); err != nil {
 		t.Fatalf("ReleaseLicence() error = %v", err)
 	}
-	if gotAuth != "Bearer the-jwt" {
-		t.Errorf("Authorization header = %q, want Bearer the-jwt", gotAuth)
+	// X-Api-Key, not a bearer JWT: see ReleaseLicence's own doc for why — a
+	// JWT is a session token a server restart invalidates, an API key is not.
+	if gotAPIKey != "the-api-key" {
+		t.Errorf("X-Api-Key header = %q, want the-api-key", gotAPIKey)
 	}
 	want := []string{secret}
 	if len(gotBody["LicenseKeys"]) != 1 || gotBody["LicenseKeys"][0] != want[0] {

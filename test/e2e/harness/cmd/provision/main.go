@@ -424,8 +424,8 @@ func releaseKubernetesLicence(estatePath string) error {
 		fmt.Fprintln(os.Stderr, "no kubernetes leg in the estate: nothing to release")
 		return nil
 	}
-	if estate.Kubernetes.Creds.JWT == "" {
-		fmt.Fprintln(os.Stderr, "kubernetes leg has no jwt on file: nothing to release")
+	if estate.Kubernetes.Creds.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "kubernetes leg has no api key on file: nothing to release")
 		return nil
 	}
 
@@ -433,8 +433,14 @@ func releaseKubernetesLicence(estatePath string) error {
 	if err != nil {
 		return fmt.Errorf("build kubernetes client: %w", err)
 	}
+	// X-Api-Key, not the JWT: see harness.ReleaseLicence's own doc. A restart
+	// of the in-cluster server between provisioning and this teardown call —
+	// a daemon restart, a host reboot, system.upgrade itself once P3 lands it
+	// — invalidates the JWT captured at provisioning time but not the API key,
+	// and this call is exactly the one that must not silently no-op on that
+	// 401 and strand the licence.
 	if err := harness.ReleaseLicence(context.Background(), client, estate.Kubernetes.BaseURL,
-		estate.Kubernetes.Creds.JWT, licence); err != nil {
+		estate.Kubernetes.Creds.APIKey, licence); err != nil {
 		return fmt.Errorf("release kubernetes licence: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "kubernetes: licence released")
@@ -463,14 +469,18 @@ func releaseComposeLicence(estatePath string) error {
 		fmt.Fprintln(os.Stderr, "no business edition leg in the estate: nothing to release")
 		return nil
 	}
-	if estate.EE.Creds.JWT == "" {
-		fmt.Fprintln(os.Stderr, "business edition leg has no jwt on file: nothing to release")
+	if estate.EE.Creds.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "business edition leg has no api key on file: nothing to release")
 		return nil
 	}
 
 	client := &http.Client{Timeout: kubernetesClientTimeout}
+	// X-Api-Key, not the JWT: see harness.ReleaseLicence's own doc. down.sh
+	// may run this after the compose EE container restarted for any reason
+	// since provisioning — the JWT captured then is a session token that
+	// invalidates across a restart; the API key does not.
 	if err := harness.ReleaseLicence(context.Background(), client, estate.EE.BaseURL,
-		estate.EE.Creds.JWT, licence); err != nil {
+		estate.EE.Creds.APIKey, licence); err != nil {
 		return fmt.Errorf("release business edition licence: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "business edition: licence released")
@@ -519,7 +529,7 @@ func recoverStrandedLicence() error {
 	}
 	logConflictingKeys("recovery", conflicting)
 
-	if err := harness.ReleaseLicence(ctx, client, baseURL, creds.JWT, licence); err != nil {
+	if err := harness.ReleaseLicence(ctx, client, baseURL, creds.APIKey, licence); err != nil {
 		return fmt.Errorf("release stranded licence: %w", err)
 	}
 

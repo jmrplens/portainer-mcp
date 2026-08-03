@@ -1,14 +1,29 @@
 // Command audit_e2e_gaps reports which catalog actions no end-to-end test
-// exercises.
+// references.
 //
-// The catalog holds 18 actions across three pilot domains today; P3 grows it
+// The catalog holds 19 actions across three pilot domains today; P3 grows it
 // to 441 across 44 domains, and this is how anyone will know what that growth
-// left untested. It reports and exits 0 rather than gating CI: with a small
-// fraction of the catalog written, a hard gate would fail on almost the whole
-// catalog and teach everyone to ignore it. It gains a threshold in P7, once
-// the catalog is complete. It still exits non-zero on a genuine error, such
-// as the catalog failing to build or the suite directory being unreadable —
-// only "N actions are unexercised" is not treated as failure.
+// left with no e2e reference. It reports and exits 0 rather than gating CI:
+// with a small fraction of the catalog written, a hard gate would fail on
+// almost the whole catalog and teach everyone to ignore it. It gains a
+// threshold in P7, once the catalog is complete. It still exits non-zero on a
+// genuine error, such as the catalog failing to build or the suite directory
+// being unreadable — only "N actions are unreferenced" is not treated as
+// failure.
+//
+// This audits references, not executions, and the name says so: it greps
+// test/e2e/suite's source for the three shapes an action name can appear in,
+// which is all a static scan can ever see. It cannot see a t.Skip, and it
+// cannot see that safe mode intercepts a mutating call before it ever reaches
+// a handler. On a contributor machine with no licence — a supported
+// configuration this repository's own suites accommodate (see Sessions.For
+// and Sessions.SafeModeEE in test/e2e/suite/sessions_test.go) — system.update
+// and the Business-Edition-only registries actions are skipped outright, and
+// even a licensed run's safe-mode tests never let their handlers run. Every
+// one of those still counts as "referenced" here, because the name appears in
+// the source regardless. A tool with "exercises" or "coverage" in its output
+// would overstate what it measured; this one is named for exactly what it
+// does.
 //
 // It never writes to standard output: that stream carries the MCP JSON-RPC
 // transport for the real server binary, and this repository's CI guard bans
@@ -52,17 +67,9 @@ func main() {
 // so tests can point it at a temporary directory without changing the
 // process's working directory.
 func run(w io.Writer, dir string) error {
-	// Business Edition, no version ceiling: the audit must account for every
-	// action that could ever be registered, including EE-gated ones, not just
-	// what one particular target server would see today.
-	catalog, err := actioncatalog.Build(allSpecs(), actioncatalog.Options{Edition: edition.EE})
+	names, err := allCatalogActionNames()
 	if err != nil {
-		return fmt.Errorf("build action catalog: %w", err)
-	}
-
-	names := make([]string, 0, len(catalog.Actions()))
-	for _, spec := range catalog.Actions() {
-		names = append(names, spec.Name)
+		return err
 	}
 
 	found, err := scanSuiteDir(dir)
@@ -75,6 +82,37 @@ func run(w io.Writer, dir string) error {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil
+}
+
+// allCatalogActionNames returns the name of every action that could ever be
+// registered, in either edition, with no version ceiling.
+//
+// A single actioncatalog.Build call, for either edition alone, is not enough:
+// Build filters for the one edition it is building, and that filtering runs
+// in both directions. system.upgrade is declared Edition: CE and its
+// OperationID resolves only in Community Edition's applicability index, so
+// building with Options{Edition: EE} filters it OUT — the opposite of "every
+// action that could ever be registered" this audit's denominator is required
+// to be. Measured: allSpecs() declares 19 actions; a Build with Edition: EE
+// alone keeps only 18. Building once per edition and taking the union of both
+// is what makes the count exhaustive regardless of which edition a given
+// action is exclusive to.
+func allCatalogActionNames() ([]string, error) {
+	seen := map[string]bool{}
+	for _, ed := range []edition.Edition{edition.CE, edition.EE} {
+		catalog, err := actioncatalog.Build(allSpecs(), actioncatalog.Options{Edition: ed})
+		if err != nil {
+			return nil, fmt.Errorf("build action catalog (%s): %w", ed, err)
+		}
+		for _, spec := range catalog.Actions() {
+			seen[spec.Name] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	return names, nil
 }
 
 // allSpecs collects every domain's declared actions. Each pilot domain
@@ -264,18 +302,22 @@ func stripComments(src []byte) []byte {
 	return out
 }
 
-// buildReport renders a human-readable summary of catalog coverage. It
-// always states the exercised and unexercised counts in an unambiguous
+// buildReport renders a human-readable summary of catalog references. It
+// always states the referenced and unreferenced counts in an unambiguous
 // "N of M" form, never just a bare number lost among unrelated digits,
-// because silent truncation reads as full coverage.
+// because silent truncation reads as full coverage. It says "Referenced", not
+// "Exercised" or "Covered": this tool scans source text for action names, it
+// never runs anything, and a name only its own doc comment or a t.Skip'd test
+// mentions counts exactly the same as one a passing assertion exercises for
+// real. See this package's doc comment for what that limitation costs.
 func buildReport(names []string, found map[string]bool) string {
 	sorted := append([]string(nil), names...)
 	sort.Strings(sorted)
 
-	var unexercised []string
+	var unreferenced []string
 	for _, name := range sorted {
 		if !found[name] {
-			unexercised = append(unexercised, name)
+			unreferenced = append(unreferenced, name)
 		}
 	}
 
@@ -283,16 +325,16 @@ func buildReport(names []string, found map[string]bool) string {
 	fmt.Fprintln(&b, "Portainer MCP e2e coverage audit")
 	fmt.Fprintln(&b, "================================")
 	fmt.Fprintf(&b, "Catalog actions:   %d\n", len(sorted))
-	fmt.Fprintf(&b, "Exercised:         %d of %d\n", len(sorted)-len(unexercised), len(sorted))
-	fmt.Fprintf(&b, "Unexercised:       %d of %d\n", len(unexercised), len(sorted))
+	fmt.Fprintf(&b, "Referenced:        %d of %d\n", len(sorted)-len(unreferenced), len(sorted))
+	fmt.Fprintf(&b, "Not referenced:    %d of %d\n", len(unreferenced), len(sorted))
 
-	if len(unexercised) == 0 {
+	if len(unreferenced) == 0 {
 		fmt.Fprintln(&b, "\nEvery catalog action is referenced by the e2e suite.")
 		return b.String()
 	}
 
 	fmt.Fprintln(&b, "\nActions with no e2e reference:")
-	for _, name := range unexercised {
+	for _, name := range unreferenced {
 		fmt.Fprintf(&b, "  - %s\n", name)
 	}
 	return b.String()

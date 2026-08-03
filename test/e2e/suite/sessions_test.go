@@ -17,6 +17,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 	"github.com/jmrplens/portainer-mcp/internal/wiring"
 	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
 )
@@ -393,5 +394,182 @@ func TestSessions_ReadOnlyAndSafeModeSessions_ListTools(t *testing.T) {
 				t.Error("safe-mode session published no tools")
 			}
 		})
+	}
+}
+
+// TestSafeMode_TagsCreate_DoesNotActuallyCreateATag proves safe mode
+// discriminates a genuine interception from a silent no-op, the way
+// TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart in system_test.go
+// no longer can (see that test's own comment): a whole-branch review measured
+// that InstanceID, the signal that test used to rely on, survives both a
+// `docker restart` of the container and an image replacement, so comparing it
+// before and after a safe-mode call never actually detected a restart at all.
+//
+// tags.create is the right action to prove this property with instead of a
+// system action: its side effect (a new tag on the server) is both
+// observable through a raw API read and, unlike an actual system restart,
+// harmless to let happen for real if safe mode ever regressed. A preview
+// response and a safe_mode:true flag alone are satisfied identically by a
+// correct interception and by a handler that silently no-ops before ever
+// calling the Portainer API — this is the read-back that tells them apart,
+// the same rule TestTags_CreateThenListThenDelete's own read-back follows for
+// a real create.
+//
+// Built against the Community Edition safe-mode session (Sessions.SafeMode),
+// not the Business Edition one: tags exists on both editions and this
+// property has nothing to do with edition, so it is proven against the leg
+// every estate always carries, licensed or not.
+func TestSafeMode_TagsCreate_DoesNotActuallyCreateATag(t *testing.T) {
+	for _, surface := range surfaceNames {
+		t.Run(surface, func(t *testing.T) {
+			t.Parallel()
+			session := sessions.SafeMode(t, surface)
+
+			name := uniqueName("tag")
+			out := callAction[map[string]any](t, session, surface, "tags.create", map[string]any{"name": name})
+			if safeMode, _ := out["safe_mode"].(bool); !safeMode {
+				t.Fatalf("tags.create under safe mode = %v, want a safe_mode preview, not a real call", out)
+			}
+			if out["action"] != "tags.create" {
+				t.Errorf("safe-mode preview action = %v, want %q", out["action"], "tags.create")
+			}
+
+			assertTagAbsent(t, name, "safe mode intercepting tags.create")
+		})
+	}
+}
+
+// TestReadOnly_TagsCreate_IsHiddenRefusedAndNeverExecutes proves read-only
+// mode's three claims together, on all three surfaces: the mutating action is
+// hidden from that surface's own discovery mechanism, calling it by name is
+// refused, and nothing was written.
+//
+// TestSessions_ReadOnlyAndSafeModeSessions_ListTools's own
+// `len(res.Tools) == 0` check cannot prove any of this: it never names
+// tags.create at all, so it passes identically whether read-only mode hides
+// mutating actions correctly or the read-only sessions were built with
+// ReadOnly: false by mistake — the exact mutation a whole-branch review
+// applied, which left every existing assertion in this package green. The
+// first two properties here are checked per surface, because "hidden" means
+// something different on each: the individual surface omits the tool
+// entirely from ListTools; the meta surface's per-domain tool description
+// (describeActions) stops enumerating the action; the dynamic surface's
+// portainer_find_action stops matching it, because actioncatalog.Build's
+// ReadOnly filter removes the action from the catalog before any surface
+// ever sees it. The third property — nothing was written — is what makes the
+// first two trustworthy: either alone would pass against a server that hid
+// the tool, or refused it with the right words, and executed it anyway.
+func TestReadOnly_TagsCreate_IsHiddenRefusedAndNeverExecutes(t *testing.T) {
+	for _, surface := range surfaceNames {
+		t.Run(surface, func(t *testing.T) {
+			t.Parallel()
+			ro := sessions.ReadOnly(t, surface)
+
+			switch surface {
+			case "individual":
+				roRes, err := ro.ListTools(t.Context(), nil)
+				if err != nil {
+					t.Fatalf("ListTools: %v", err)
+				}
+				for _, tool := range roRes.Tools {
+					if tool.Name == "portainer_tags_create" {
+						t.Error("read-only individual surface published portainer_tags_create")
+					}
+				}
+				normal := sessions.For(t, "individual", "CE")
+				normalRes, err := normal.ListTools(t.Context(), nil)
+				if err != nil {
+					t.Fatalf("ListTools (normal session): %v", err)
+				}
+				if len(roRes.Tools) >= len(normalRes.Tools) {
+					t.Errorf("read-only individual surface published %d tools, want fewer than the normal session's %d",
+						len(roRes.Tools), len(normalRes.Tools))
+				}
+			case "meta":
+				res, err := ro.ListTools(t.Context(), nil)
+				if err != nil {
+					t.Fatalf("ListTools: %v", err)
+				}
+				for _, tool := range res.Tools {
+					if tool.Name == "portainer_tags" && strings.Contains(tool.Description, "tags.create") {
+						t.Errorf("read-only portainer_tags description still advertises tags.create: %q", tool.Description)
+					}
+				}
+			case "dynamic":
+				res, err := ro.CallTool(t.Context(), &mcp.CallToolParams{
+					Name: "portainer_find_action", Arguments: map[string]any{"query": "tags"},
+				})
+				if err != nil {
+					t.Fatalf("CallTool(portainer_find_action): %v", err)
+				}
+				if text := toolResultText(res); strings.Contains(text, "tags.create") {
+					t.Errorf("read-only dynamic surface's find_action for %q still surfaced tags.create: %s", "tags", text)
+				}
+			}
+
+			name := uniqueName("tag")
+			toolName, args := actionCallParams(t, surface, "tags.create", map[string]any{"name": name})
+			res, err := ro.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: args})
+			switch surface {
+			case "individual":
+				if err == nil {
+					t.Fatal("CallTool(portainer_tags_create) on a read-only session succeeded, want a refusal")
+				}
+				const want = `unknown tool "portainer_tags_create"`
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal = %q, want it to contain %q", err.Error(), want)
+				}
+			case "meta":
+				if err != nil {
+					t.Fatalf("CallTool: %v", err)
+				}
+				if !res.IsError {
+					t.Fatal("tags.create through the read-only meta session succeeded, want a refusal")
+				}
+				const want = `unknown action "tags.create" for domain "tags"`
+				if text := toolResultText(res); !strings.Contains(text, want) {
+					t.Errorf("refusal = %q, want it to contain %q", text, want)
+				}
+			case "dynamic":
+				if err != nil {
+					t.Fatalf("CallTool: %v", err)
+				}
+				if !res.IsError {
+					t.Fatal("tags.create through the read-only dynamic session succeeded, want a refusal")
+				}
+				const want = `Unknown action "tags.create"`
+				if text := toolResultText(res); !strings.Contains(text, want) {
+					t.Errorf("refusal = %q, want it to contain %q", text, want)
+				}
+			}
+
+			assertTagAbsent(t, name, "read-only mode refusing tags.create")
+		})
+	}
+}
+
+// assertTagAbsent fails t if a tag named name exists on the Community
+// Edition server, read directly through the Portainer API rather than
+// through any MCP surface — the one check that cannot be satisfied by a
+// surface that hides or refuses a call and executes it anyway. reason names,
+// in the failure message, what was supposed to have prevented the tag from
+// existing.
+func assertTagAbsent(t *testing.T, name, reason string) {
+	t.Helper()
+	client := fixtureClient(t, "CE")
+	resp, err := client.API.TagListWithResponse(t.Context())
+	if err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		t.Fatalf("list tags: %v", err)
+	}
+	if resp.JSON200 == nil {
+		return
+	}
+	for _, tag := range *resp.JSON200 {
+		if tag.Name != nil && *tag.Name == name {
+			t.Errorf("tag %q exists on the server despite %s", name, reason)
+		}
 	}
 }

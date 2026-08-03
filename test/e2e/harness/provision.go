@@ -286,8 +286,9 @@ func EnableEdgeCompute(ctx context.Context, c *http.Client, baseURL, apiKey, por
 // can otherwise read do not show (see plan/carry-forward.md). The caller logs
 // it prominently and carries it into the estate; failing here would only
 // block the investigation that signal is for. The returned keys are redacted
-// exactly like our own error text, since a conflicting key is exactly as
-// sensitive as the one this harness holds.
+// by shape (see redactKeyShape), since a conflicting key is exactly as
+// sensitive as the one this harness holds, and by construction is *not* our
+// own key's text — so it cannot be found by searching for our key inside it.
 func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) ([]string, error) {
 	body := map[string]string{"key": key}
 	bearer := map[string]string{"Authorization": "Bearer " + jwt}
@@ -302,7 +303,7 @@ func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string)
 	}
 	conflicting := make([]string, len(resp.ConflictingKeys))
 	for i, k := range resp.ConflictingKeys {
-		conflicting[i] = redactString(k, key)
+		conflicting[i] = redactKeyShape(k)
 	}
 	return conflicting, nil
 }
@@ -312,13 +313,22 @@ func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string)
 // Licence release is unconditional: every server this harness attaches a
 // licence to must give it back before it is destroyed, the Kubernetes leg
 // included, since its licence key is shared with a real account and a
-// disposable estate is not where it belongs to remain. Mirrors ApplyLicence's
-// redaction: an error that echoes the key it was given back is exactly as
-// likely coming from /licenses/remove as it is from /licenses/add.
-func ReleaseLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) error {
+// disposable estate is not where it belongs to remain.
+//
+// Authenticated with apiKey (sent as X-Api-Key), not a JWT: a JWT is a
+// session token that a server restart invalidates, while an API key is
+// persisted in Portainer's own database and survives one. Measured against a
+// live estate: after restarting the Business Edition container, the JWT
+// captured at provisioning time answers 401 on this same endpoint while the
+// API key still answers 200. down.sh and k3d-down.sh call this best-effort
+// and swallow a failure to avoid blocking teardown — authenticating with a
+// token a restart destroys would silently reintroduce the exact licence
+// stranding this function exists to prevent, on the very failure path meant
+// to catch it (a daemon restart, a host reboot, or system.upgrade itself).
+func ReleaseLicence(ctx context.Context, c *http.Client, baseURL, apiKey, key string) error {
 	body := map[string][]string{"LicenseKeys": {key}}
-	bearer := map[string]string{"Authorization": "Bearer " + jwt}
-	if err := postJSON(ctx, c, baseURL+"/api/licenses/remove", body, bearer, nil); err != nil {
+	headers := map[string]string{"X-Api-Key": apiKey}
+	if err := postJSON(ctx, c, baseURL+"/api/licenses/remove", body, headers, nil); err != nil {
 		return fmt.Errorf("release licence: %w", redactSecret(err, key))
 	}
 	return nil
@@ -335,6 +345,27 @@ func redactString(s, secret string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, secret, redactedMarker)
+}
+
+// redactKeyPrefixLen is how much of a conflicting licence key redactKeyShape
+// keeps, for identification (telling two conflicting keys apart in a log)
+// without exposing enough to reuse the key.
+const redactKeyPrefixLen = 4
+
+// redactKeyShape redacts a licence key by its own shape: a short prefix kept,
+// the rest elided.
+//
+// This exists because a conflicting key named back by the server is, by
+// construction, not the text of our own key — redactString(k, ourKey) is a
+// near-guaranteed no-op in exactly the case it was written for, since it only
+// ever finds and replaces occurrences of ourKey's own text. Redacting the
+// conflicting key by its own shape works regardless of what it actually
+// contains.
+func redactKeyShape(s string) string {
+	if len(s) <= redactKeyPrefixLen {
+		return redactedMarker
+	}
+	return s[:redactKeyPrefixLen] + "..." + redactedMarker
 }
 
 // redactSecret returns err with every occurrence of secret in its rendered

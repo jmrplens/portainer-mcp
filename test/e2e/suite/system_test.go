@@ -121,30 +121,31 @@ func TestSystemUpgrade_SafeModePreview_AcrossSurfaces(t *testing.T) {
 // system.update is Business-Edition-only, so a Community Edition session,
 // safe mode or not, never has it in its catalog to call.
 //
-// Three things are asserted, not two, because the first two alone would
-// pass against a handler that silently no-ops — the same defect
-// TestTags_CreateThenListThenDelete's read-back exists to catch:
+// Only two things are asserted here: the call returns a preview, not an
+// error, and the preview's own text identifies it as a safe-mode
+// interception. Both are satisfied identically by a correct interception and
+// by a handler that silently no-ops — a whole-branch review measured this
+// directly: InstanceID (Portainer's own per-instance identity) survives both
+// a `docker restart` of the container and an image replacement, so
+// comparing it before and after system.update, which this test used to do,
+// never actually detects a restart at all and proves nothing beyond what
+// these two assertions already do. It has been removed rather than left
+// alongside a comment claiming it discriminates the two, which it does not.
 //
-//  1. the call returns a preview, not an error;
-//  2. the preview's own text identifies it as a safe-mode interception;
-//  3. the server did not actually restart. This is the assertion that does
-//     the real discriminating work: re-reading system.status before and
-//     after and comparing InstanceID (Portainer's own per-instance identity,
-//     which a genuine restart changes) is what tells "safe mode intercepted
-//     it" apart from "the call quietly did nothing" — (1) and (2) alone
-//     cannot make that distinction, since both a correct interception and a
-//     silent no-op return the identical preview body.
+// The property "safe mode prevents the handler from ever running, not just
+// the response from looking like a preview" is what actually needs an
+// observable side effect to prove, and system.update — Portainer's own
+// restart — is exactly the wrong action to prove it with: a real side effect
+// here would take down every other test running against this Business
+// Edition server. TestSafeMode_TagsCreate_DoesNotActuallyCreateATag in
+// sessions_test.go proves that property instead, against tags.create, whose
+// side effect (a new tag on the server) is both observable through a raw API
+// read and safe to actually let happen if safe mode ever regressed.
 func TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart(t *testing.T) {
 	for _, surface := range surfaceNames {
 		t.Run(surface, func(t *testing.T) {
 			t.Parallel()
 			session := sessions.SafeModeEE(t, surface)
-
-			before := callAction[map[string]any](t, session, surface, "system.status", nil)
-			beforeID, _ := before["InstanceID"].(string)
-			if beforeID == "" {
-				t.Fatalf("system.status before system.update returned no InstanceID: %v", before)
-			}
 
 			out := callAction[map[string]any](t, session, surface, "system.update", nil)
 			if safeMode, _ := out["safe_mode"].(bool); !safeMode {
@@ -156,12 +157,6 @@ func TestSystemUpdate_SafeModePreview_DoesNotActuallyRestart(t *testing.T) {
 			note, _ := out["note"].(string)
 			if !strings.Contains(note, "Safe mode is enabled") {
 				t.Errorf("safe-mode preview note = %q, want it to identify a safe-mode interception", note)
-			}
-
-			after := callAction[map[string]any](t, session, surface, "system.status", nil)
-			afterID, _ := after["InstanceID"].(string)
-			if afterID != beforeID {
-				t.Errorf("InstanceID changed from %q to %q across system.update: the server appears to have actually restarted despite safe mode", beforeID, afterID)
 			}
 		})
 	}

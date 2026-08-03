@@ -68,12 +68,25 @@ func TestBusinessEditionActions_AreAbsentOnCommunity(t *testing.T) {
 // name, through the dynamic surface's find/execute pair, must fail with a
 // message a model can act on rather than a bare 404.
 //
-// registries.ecr_delete_tags is the action under test, chosen because it is
-// Business-Edition-only and requires no input to reach the "not in this
-// edition's catalog" refusal — dynamic's execute handler looks the action up
-// in the catalog before it ever reaches the handler that would validate
-// input, so an empty input map never gets in the way of reaching that
-// refusal.
+// It is driven from businessOnlySpecs(t), the same derived list the
+// structural half (TestBusinessEditionActions_AreAbsentOnCommunity) already
+// uses, rather than one hardcoded action name. A hardcoded name is exactly
+// what a whole-branch review caught failing to discriminate: swapping
+// "registries.ecr_delete_tags" for "registries.no_such_action_at_all" — an
+// action that never existed at all — left the test green, because dynamic's
+// refusal text ("Unknown action %q...") is identical whether the name is
+// unknown for being nonexistent or for being edition-gated. Asserting the
+// refusal names the actual action under test (spec.Name, read from the
+// catalog, never a literal that could quietly drift or be swapped) is what
+// makes that confusion impossible: a P3 rename of any Business-Edition-only
+// action changes businessOnlySpecs' output and this test's subtests with it,
+// rather than silently leaving a stale literal behind to test nothing.
+//
+// requires no input to reach the "not in this edition's catalog" refusal for
+// any of them: dynamic's execute handler looks the action up in the catalog
+// before it ever reaches the handler that would validate input, so an empty
+// input map never gets in the way of reaching that refusal, regardless of
+// what a given action's real parameters are.
 //
 // Two things were checked before trusting this test, because the standing
 // warning for this whole plan is that a check can match something other than
@@ -89,7 +102,10 @@ func TestBusinessEditionActions_AreAbsentOnCommunity(t *testing.T) {
 //     tools.Execute when the lookup misses, which is exactly what happens
 //     for an action absent from the Community Edition catalog. So the only
 //     way to reach this text is the catalog lookup missing — which is what
-//     "Business Edition only, called on Community" means.
+//     "Business Edition only, called on Community" means. Requiring the
+//     refusal to also contain the actual action's own name (not a fixed
+//     literal that could match anything) rules out the nonexistent-action
+//     confusion the mutation above demonstrated.
 //  2. The brief's own draft of this assertion checked for the lowercase
 //     substring "unknown action". dynamic.go's actual refusal capitalises it
 //     — "Unknown action %q. Call portainer_find_action..." — so a
@@ -99,24 +115,28 @@ func TestBusinessEditionActions_AreAbsentOnCommunity(t *testing.T) {
 //     actually emits, verified by reading internal/tools/dynamic/dynamic.go
 //     directly rather than assumed from the brief.
 func TestBusinessEditionAction_CalledOnCommunity_FailsInformatively(t *testing.T) {
-	t.Parallel()
 	session := sessions.For(t, "dynamic", "CE")
-	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "portainer_execute_action",
-		Arguments: map[string]any{"action": "registries.ecr_delete_tags", "input": map[string]any{}},
-	})
-	if err != nil {
-		t.Fatalf("CallTool: %v", err)
-	}
-	if !res.IsError {
-		t.Fatal("a Business Edition action succeeded against a Community estate")
-	}
-	text := toolResultText(res)
-	// A model reading "404" learns nothing. It must learn that the action
-	// exists, that this estate cannot run it, and why.
-	for _, want := range []string{"registries.ecr_delete_tags", "Unknown action"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("refusal = %q, want it to contain %q", text, want)
-		}
+	for _, spec := range businessOnlySpecs(t) {
+		t.Run(spec.Name, func(t *testing.T) {
+			t.Parallel()
+			res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+				Name:      "portainer_execute_action",
+				Arguments: map[string]any{"action": spec.Name, "input": map[string]any{}},
+			})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("Business Edition action %s succeeded against a Community estate", spec.Name)
+			}
+			text := toolResultText(res)
+			// A model reading "404" learns nothing. It must learn that the
+			// action exists, that this estate cannot run it, and why.
+			for _, want := range []string{spec.Name, "Unknown action"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("refusal = %q, want it to contain %q", text, want)
+				}
+			}
+		})
 	}
 }
