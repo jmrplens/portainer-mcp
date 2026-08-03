@@ -29,6 +29,22 @@ func tagCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) 
 	return resp.JSON200, nil
 }
 
+// tagDelete is the generated handler for operation TagDelete.
+func tagDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var params tagDeleteInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("TagDelete: parse input: %w", err)
+	}
+	resp, err := c.API.TagDeleteWithResponse(ctx, params.ID)
+	if err != nil {
+		return nil, fmt.Errorf("TagDelete: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return nil, fmt.Errorf("TagDelete: %w", err)
+	}
+	return map[string]any{"status": "ok"}, nil
+}
+
 // tagList is the generated handler for operation TagList.
 func tagList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
 	resp, err := c.API.TagListWithResponse(ctx)
@@ -56,6 +72,17 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Handler:     tagCreate,
 			Input:       tagCreateInput{},
 		}, narrative("TagCreate")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "tags.delete", Domain: "tags", OperationID: "TagDelete",
+			Title:       "Remove a tag",
+			Description: "Remove a tag.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Destructive: true,
+			Idempotent:  true,
+			Handler:     tagDelete,
+			Input:       tagDeleteInput{},
+		}, narrative("TagDelete")),
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "tags.list", Domain: "tags", OperationID: "TagList",
 			Title:       "List tags",

@@ -70,6 +70,7 @@ func renderStruct(buf *strings.Builder, s structSpec) {
 	buf.WriteString("}\n")
 
 	renderEnumParams(buf, s)
+	renderMinimumParams(buf, s)
 }
 
 // renderEnumParams emits an EnumParams() method for s if any of its fields
@@ -98,6 +99,31 @@ func renderEnumParams(buf *strings.Builder, s structSpec) {
 			buf.WriteString(renderEnumLiteral(v, f.EnumScalarType))
 		}
 		buf.WriteString("},\n")
+	}
+	buf.WriteString("\t}\n}\n")
+}
+
+// renderMinimumParams emits a MinimumParams() method for s if any of its
+// fields carry a Minimum constraint (see fieldSpec.Minimum and
+// isIdentifierPathParam), implementing toolutil.MinimumParams by structural
+// typing — the same mechanism renderEnumParams already uses for EnumParams,
+// for the same reason: no import of internal/toolutil is needed for a
+// generated domain package to satisfy an interface it already depends on
+// transitively through toolutil.ActionSpec.
+func renderMinimumParams(buf *strings.Builder, s structSpec) {
+	var withMin []fieldSpec
+	for _, f := range s.Fields {
+		if f.Minimum != nil {
+			withMin = append(withMin, f)
+		}
+	}
+	if len(withMin) == 0 {
+		return
+	}
+	fmt.Fprintf(buf, "\nfunc (%s) MinimumParams() map[string]int {\n", s.Name)
+	buf.WriteString("\treturn map[string]int{\n")
+	for _, f := range withMin {
+		fmt.Fprintf(buf, "%q: %d,\n", f.JSONName, *f.Minimum)
 	}
 	buf.WriteString("\t}\n}\n")
 }

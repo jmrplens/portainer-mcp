@@ -214,16 +214,26 @@ func TestTagDelete_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI pins the
+// non-positive-id guard. tags.delete now runs on generated code (see this
+// file's package doc): the guard now lives in the generated input schema's
+// "minimum": 1 constraint on "id" (toolutil.MinimumParams), enforced by
+// tools.Execute before any handler runs, so this routes through it rather
+// than calling the handler directly.
 func TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
+	spec := findSpec(t, "tags.delete")
 	for _, id := range []int{0, -1} {
 		called := false
 		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called = true })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
-		_, err := find(t, "tags.delete")(context.Background(), c, input)
-		if err == nil {
-			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
+		result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+		if err != nil {
+			t.Fatalf("id=%d: Execute error = %v", id, err)
+		}
+		if !result.IsError {
+			t.Errorf("id=%d: result.IsError = false, want true for a non-positive id", id)
 		}
 		if called {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)

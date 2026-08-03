@@ -398,16 +398,28 @@ func TestRegistryInspect_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestRegistryInspect_InvalidID_ReturnsErrorWithoutCallingAPI pins the
+// non-positive-id guard. registries.inspect now runs on generated code
+// (see this file's package doc): the guard now lives in the generated
+// input schema's "minimum": 1 constraint on "id" (toolutil.MinimumParams),
+// enforced by tools.Execute before any handler runs — so this routes through
+// tools.Execute, the path every real caller actually takes, rather than
+// calling the handler directly and asserting a guard clause the handler no
+// longer has.
 func TestRegistryInspect_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
+	spec := findSpec(t, "registries.inspect")
 	for _, id := range []int{0, -1} {
 		var called atomic.Bool
 		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
-		_, err := find(t, "registries.inspect")(context.Background(), c, input)
-		if err == nil {
-			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
+		result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+		if err != nil {
+			t.Fatalf("id=%d: Execute error = %v", id, err)
+		}
+		if !result.IsError {
+			t.Errorf("id=%d: result.IsError = false, want true for a non-positive id", id)
 		}
 		if called.Load() {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)
@@ -437,6 +449,14 @@ func TestRegistryUpdate_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestRegistryUpdate_MissingFields_ReturnErrorWithoutCallingAPI pins both a
+// non-positive-id guard and a required-field check. registries.update now
+// runs on generated code (see this file's package doc): "invalid id" is
+// caught by the generated input schema's "minimum": 1 on "id"
+// (toolutil.MinimumParams), and "missing name"/"missing url" by the schema's
+// own required-field list — both enforced by tools.Execute before any
+// handler runs, so every subtest routes through it rather than the handler
+// directly.
 func TestRegistryUpdate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -447,15 +467,19 @@ func TestRegistryUpdate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T)
 		{"missing name", map[string]any{"id": 4, "url": "quay.io"}},
 		{"missing url", map[string]any{"id": 4, "name": "quay"}},
 	}
+	spec := findSpec(t, "registries.update")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var called atomic.Bool
 			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
-			_, err := find(t, "registries.update")(context.Background(), c, input)
-			if err == nil {
-				t.Fatal("handler error = nil, want an error for missing required input")
+			result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+			if err != nil {
+				t.Fatalf("Execute error = %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("result.IsError = false, want true for missing/invalid required input")
 			}
 			if called.Load() {
 				t.Error("the API was called despite missing required input")
@@ -674,16 +698,24 @@ func TestRegistryDelete_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestRegistryDelete_InvalidID_ReturnsErrorWithoutCallingAPI is the delete
+// counterpart of registries.inspect's guard above: registries.delete also
+// runs on generated code now, and the same generated "minimum": 1 on "id"
+// is what tools.Execute enforces.
 func TestRegistryDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
+	spec := findSpec(t, "registries.delete")
 	for _, id := range []int{0, -1} {
 		var called atomic.Bool
 		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
 		input, _ := json.Marshal(map[string]any{"id": id})
-		_, err := find(t, "registries.delete")(context.Background(), c, input)
-		if err == nil {
-			t.Errorf("id=%d: handler error = nil, want an error for a non-positive id", id)
+		result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+		if err != nil {
+			t.Fatalf("id=%d: Execute error = %v", id, err)
+		}
+		if !result.IsError {
+			t.Errorf("id=%d: result.IsError = false, want true for a non-positive id", id)
 		}
 		if called.Load() {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)
@@ -729,6 +761,11 @@ func TestEcrDeleteRepository_Success_CallsCorrectPath(t *testing.T) {
 	}
 }
 
+// TestEcrDeleteRepository_MissingFields_ReturnErrorWithoutCallingAPI pins
+// both a non-positive-id guard and a required-field check.
+// registries.ecr_delete_repository now runs on generated code (see this
+// file's package doc), with both enforced by tools.Execute before any
+// handler runs.
 func TestEcrDeleteRepository_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -738,15 +775,19 @@ func TestEcrDeleteRepository_MissingFields_ReturnErrorWithoutCallingAPI(t *testi
 		{"invalid id", map[string]any{"id": 0, "repositoryName": "my-repo"}},
 		{"missing repositoryName", map[string]any{"id": 4}},
 	}
+	spec := findSpec(t, "registries.ecr_delete_repository")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var called atomic.Bool
 			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 			input, _ := json.Marshal(tt.input)
-			_, err := find(t, "registries.ecr_delete_repository")(context.Background(), c, input)
-			if err == nil {
-				t.Fatal("handler error = nil, want an error for missing required input")
+			result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+			if err != nil {
+				t.Fatalf("Execute error = %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("result.IsError = false, want true for missing/invalid required input")
 			}
 			if called.Load() {
 				t.Error("the API was called despite missing required input")

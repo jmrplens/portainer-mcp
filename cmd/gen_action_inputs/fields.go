@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // structSpec is one Go struct this generator will emit: either the flat
@@ -52,6 +53,47 @@ type fieldSpec struct {
 	// rather than a jsonschema tag.
 	Enum           []any
 	EnumScalarType string // "string", "integer", "number" or "boolean"
+	// Minimum is non-nil when this field carries a lower-bound constraint —
+	// see isIdentifierPathParam's doc comment: this is a constraint this
+	// generator adds itself, never one the vendored specification declares.
+	// Rendered by renderMinimumParams the same way Enum is rendered by
+	// renderEnumParams: as a MinimumParams() method (toolutil.MinimumParams),
+	// since google/jsonschema-go's reflector has no struct-tag syntax for
+	// "minimum" either.
+	Minimum *int
+}
+
+// isIdentifierPathParam reports whether name — a path parameter's own OpenAPI
+// name, not yet through goFieldName/bodyJSONTag — looks like a Portainer
+// resource identifier: it matches case-insensitively on the suffix "id"
+// ("id", "environmentId", "credentialID", "endpoint_id", "containerId",
+// "taskID", "endpointId", "registryId", "endpointID", "serviceId",
+// "stackId", "jobID", "keyID", "repositoryID" — every one of the 285
+// integer path parameters the vendored EE specification declares except
+// three: "state", "rpn" and "repositoryName").
+//
+// "repositoryName" deliberately does not match despite being declared
+// "integer": EcrDeleteTags's repositoryName is Portainer's own known
+// upstream defect (a resource *name* typed as an integer, not a
+// resource identifier — see registries.go's own doc comment on
+// ecrDeleteTagsInput), so this generator refuses to assume anything about
+// its range rather than mislabel a defect as a guarantee. "state" and "rpn"
+// are ordinary non-identifier integers (a Docker task state code, and Quay's
+// "rpn" toggle) that legitimately accept zero — see
+// TestUnit_IsIdentifierPathParam_AcceptsIdentifiersRejectsCounterexamples,
+// which pins all three exclusions by name, not just the identifiers this
+// matches.
+//
+// This constraint is this project's own addition, not the specification's:
+// Portainer resource identifiers are always positive integers, a zero or
+// negative one is never a valid route for any of them, and the vendored
+// specification simply never says so — checked against every one of the 285.
+// Refusing a non-positive identifier once, in the published schema (which
+// tools.Execute validates against before any handler runs and before any
+// network call), is both earlier and more uniform than the same guard clause
+// hand-written into every handler that takes one.
+func isIdentifierPathParam(name string) bool {
+	return len(name) >= 2 && strings.EqualFold(name[len(name)-2:], "id")
 }
 
 // jsonTag renders one field's struct tag. required decides omitempty, and
@@ -345,6 +387,10 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		if len(node.Enum) > 0 && isEnumScalar(node.Type) {
 			f.Enum = node.Enum
 			f.EnumScalarType = node.Type
+		}
+		if in == "path" && node.Type == "integer" && isIdentifierPathParam(name) {
+			one := 1
+			f.Minimum = &one
 		}
 		if err := add(origin, f); err != nil {
 			return nil, nil, err

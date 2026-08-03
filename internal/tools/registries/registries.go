@@ -7,34 +7,46 @@
 // the pilot for per-action edition gating within a single domain: the same
 // declarations must yield a smaller catalog on CE than on EE.
 //
-// registries.list, registries.create and registries.ping run on
-// cmd/gen_action_inputs's generated code (actions.gen.go): once
-// redactRegistryList/redactRegistryCreate below exist, nothing about their
-// success responses blocks generation (see task-4b's report), and their only
-// existing guard-clause tests assert a required-field check
-// (TestRegistryCreate_MissingFields_..., TestRegistryPing_MissingURL_...),
-// which now route through tools.Execute — the path every real caller takes,
-// and where that check now actually lives (see cmd/gen_action_inputs's own
-// package doc: "no required-field checks... a second hand-rolled check would
-// drift").
+// registries.list, registries.create, registries.ping, registries.inspect,
+// registries.update, registries.delete and registries.ecr_delete_repository
+// all run on cmd/gen_action_inputs's generated code (actions.gen.go).
 //
-// registries.inspect, registries.update, registries.delete,
-// registries.ecr_delete_repository, registries.ecr_delete_tags and
-// registries.repository_tags_delete stay hand-written: each has an existing
-// test (TestRegistryInspect_InvalidID_..., TestRegistryUpdate_MissingFields_...
-// "invalid id", TestRegistryDelete_InvalidID_..., and the ecr/repository
-// equivalents) that calls the handler directly and asserts it refuses a
-// non-positive id *before* the request reaches the network. That is not a
-// required-field check — the id is present, just out of range — so
-// tools.Execute's schema validation (which has no "minimum" keyword support;
-// see internal/toolutil/schema.go's EnumParams doc comment on what the
-// reflector does and does not express) cannot replicate it, and there is no
-// equivalent path to route these tests through. Swapping any of these six
-// to generated code would genuinely weaken that guard rather than just move
-// where it is asserted, which this project's standing rule refuses.
-// registries.configure additionally carries Task 2's own width refusal
-// (TLSCACertFile/TLSCertFile/TLSKeyFile narrow from this generator's []int to
-// the generated client's []int32).
+// The id-guard tests that used to block inspect/update/delete/
+// ecr_delete_repository (TestRegistryInspect_InvalidID_...,
+// TestRegistryUpdate_MissingFields_... "invalid id", and the delete/ecr
+// equivalents — each asserting the handler refuses a non-positive id before
+// the request reaches the network) are now satisfied by
+// cmd/gen_action_inputs's own generated schema constraint instead: every
+// integer path parameter shaped like a Portainer identifier (isIdentifierPathParam,
+// fields.go) publishes a JSON Schema "minimum": 1
+// (toolutil.MinimumParams), so tools.Execute's central validation refuses a
+// non-positive id before any handler runs — see that generator's own doc
+// comment for why this is this project's addition, not the specification's.
+// Every remaining guard-clause test that asserted a required-field check
+// (TestRegistryCreate_MissingFields_..., TestRegistryPing_MissingURL_...,
+// TestRegistryEcrDeleteRepository_MissingFields_... "missing repositoryName")
+// routes through tools.Execute rather than calling the handler directly —
+// the path every real caller actually takes, and where that check now lives.
+// registries.inspect and registries.update additionally needed a redaction
+// wrapper (redactRegistryInspect, redactRegistryUpdate below) before
+// cmd/gen_action_inputs would generate them at all, for the same reason
+// registries.list/create did (see task-4b's report).
+//
+// registries.ecr_delete_tags and registries.repository_tags_delete stay
+// hand-written: each has an existing test
+// (TestEcrDeleteTags_EmptyTags_ReturnsErrorWithoutCallingAPI and its
+// repository_tags_delete equivalent) asserting the handler refuses an empty
+// or omitted tags list before the request reaches the network. That is an
+// array-length ("minItems") constraint, not an integer range — the fix that
+// closed the id-guard gap does not reach it, and jsonschema-go's reflector
+// has no struct-tag syntax for "minItems" either (see
+// internal/toolutil/schema.go's EnumParams/MinimumParams doc comments on
+// what it does and does not express), so there is still no equivalent path
+// to route these two tests through.
+//
+// registries.configure stays hand-written for an unrelated, pre-existing
+// reason: Task 2's own width refusal (TLSCACertFile/TLSCertFile/TLSKeyFile
+// narrow from this generator's []int to the generated client's []int32).
 package registries
 
 import (
@@ -49,27 +61,11 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// Specs declares every registry action: generatedSpecs()'s three entries
-// (registries.list/create/ping) plus the seven kept hand-written below.
+// Specs declares every registry action: generatedSpecs()'s seven entries
+// (registries.list/create/ping/inspect/update/delete/ecr_delete_repository)
+// plus the three kept hand-written below.
 func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(),
-		toolutil.ActionSpec{
-			Name: "registries.inspect", Domain: "registries", OperationID: "RegistryInspect",
-			Title:       "Inspect a registry",
-			Description: "Returns the details of a single registry by identifier.",
-			Edition:     edition.CE,
-			Handler:     registryInspect,
-			Input:       registryInspectInput{},
-		},
-		toolutil.ActionSpec{
-			Name: "registries.update", Domain: "registries", OperationID: "RegistryUpdate",
-			Title:       "Update a registry",
-			Description: "Replaces a registry's configuration.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Handler:     registryUpdate,
-			Input:       registryUpdateInput{},
-		},
 		toolutil.ActionSpec{
 			Name: "registries.configure", Domain: "registries", OperationID: "RegistryConfigure",
 			Title:       "Configure a registry for management",
@@ -78,26 +74,6 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Handler:     registryConfigure,
 			Input:       registryConfigureInput{},
-		},
-		toolutil.ActionSpec{
-			Name: "registries.delete", Domain: "registries", OperationID: "RegistryDelete",
-			Title:       "Delete a registry",
-			Description: "Permanently removes a registry from Portainer. This cannot be undone.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Destructive: true,
-			Handler:     registryDelete,
-			Input:       registryDeleteInput{},
-		},
-		toolutil.ActionSpec{
-			Name: "registries.ecr_delete_repository", Domain: "registries", OperationID: "EcrDeleteRepository",
-			Title:       "Delete an ECR repository",
-			Description: "Permanently deletes a repository from an Amazon ECR registry. Business Edition only. This cannot be undone.",
-			Edition:     edition.EE,
-			Mutating:    true,
-			Destructive: true,
-			Handler:     ecrDeleteRepository,
-			Input:       ecrDeleteRepositoryInput{},
 		},
 		toolutil.ActionSpec{
 			Name: "registries.ecr_delete_tags", Domain: "registries", OperationID: "EcrDeleteTags",
@@ -147,101 +123,29 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title:       "Test a registry connection",
 			Description: "Checks that Portainer can reach and authenticate against a registry, without persisting it.",
 		}
+	case "RegistryInspect":
+		return toolutil.ActionNarrative{
+			Title:       "Inspect a registry",
+			Description: "Returns the details of a single registry by identifier.",
+		}
+	case "RegistryUpdate":
+		return toolutil.ActionNarrative{
+			Title:       "Update a registry",
+			Description: "Replaces a registry's configuration.",
+		}
+	case "RegistryDelete":
+		return toolutil.ActionNarrative{
+			Title:       "Delete a registry",
+			Description: "Permanently removes a registry from Portainer. This cannot be undone.",
+		}
+	case "EcrDeleteRepository":
+		return toolutil.ActionNarrative{
+			Title:       "Delete an ECR repository",
+			Description: "Permanently deletes a repository from an Amazon ECR registry. Business Edition only. This cannot be undone.",
+		}
 	default:
 		return toolutil.ActionNarrative{}
 	}
-}
-
-// The functions below convert the nested objects declared on the generated
-// input structs (registryUpdateInput, registryConfigureInput) into the
-// corresponding apigen wire types. registryCreateInput's own Ecr/Github/
-// Gitlab/Quay/TLS fields needed no such converter even before task-4b:
-// registries.create now runs on cmd/gen_action_inputs's generated code (see
-// this file's package doc), whose handler round-trips the caller's raw input
-// straight into apigen.RegistryCreateJSONRequestBody through encoding/json
-// (see cmd/gen_action_inputs/handler.go's own package doc on why that is
-// correct), rather than assigning each field by hand the way registryUpdate
-// (kept hand-written; see this file's package doc for why) still does below.
-//
-// registryCreateInputEcr and registryUpdateInputEcr (and their Github/Quay
-// counterparts) are field-for-field identical, but the generator emits a
-// distinct named type per operation, so registryUpdate's own converter is
-// kept named for what it actually converts rather than shared by structural
-// coincidence with create's (now generated-away) counterpart.
-
-// updateEcrToAPI converts registryUpdate's Ecr input to the wire type.
-func updateEcrToAPI(in *registryUpdateInputEcr) *apigen.PortainerEcrData {
-	if in == nil {
-		return nil
-	}
-	return &apigen.PortainerEcrData{Region: in.Region}
-}
-
-// updateGithubToAPI converts registryUpdate's Github input to the wire type.
-func updateGithubToAPI(in *registryUpdateInputGithub) *apigen.PortainerGithubRegistryData {
-	if in == nil {
-		return nil
-	}
-	return &apigen.PortainerGithubRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
-}
-
-// updateQuayToAPI converts registryUpdate's Quay input to the wire type.
-func updateQuayToAPI(in *registryUpdateInputQuay) *apigen.PortainerQuayRegistryData {
-	if in == nil {
-		return nil
-	}
-	return &apigen.PortainerQuayRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
-}
-
-// toRegistryAccesses converts registryUpdate's RegistryAccesses input —
-// keyed by registry ID, each value carrying Namespaces plus per-team and
-// per-user access policies — into the wire type. It nests through
-// PortainerRegistryAccessPolicies -> PortainerTeamAccessPolicies /
-// PortainerUserAccessPolicies -> PortainerAccessPolicy, converting one level
-// at a time rather than re-marshaling, since the input and wire shapes carry
-// the same fields under different (and, for the map value, differently
-// pointered) named types.
-func toRegistryAccesses(in map[string]registryUpdateInputRegistryAccessesValue) *apigen.PortainerRegistryAccesses {
-	if in == nil {
-		return nil
-	}
-	out := make(apigen.PortainerRegistryAccesses, len(in))
-	for registryID, access := range in {
-		policies := apigen.PortainerRegistryAccessPolicies{}
-		if access.Namespaces != nil {
-			namespaces := access.Namespaces
-			policies.Namespaces = &namespaces
-		}
-		if access.TeamAccessPolicies != nil {
-			team := make(apigen.PortainerTeamAccessPolicies, len(access.TeamAccessPolicies))
-			for teamID, policy := range access.TeamAccessPolicies {
-				team[teamID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
-			}
-			policies.TeamAccessPolicies = &team
-		}
-		if access.UserAccessPolicies != nil {
-			user := make(apigen.PortainerUserAccessPolicies, len(access.UserAccessPolicies))
-			for userID, policy := range access.UserAccessPolicies {
-				user[userID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
-			}
-			policies.UserAccessPolicies = &user
-		}
-		out[registryID] = policies
-	}
-	return &out
-}
-
-// toAccessPolicy converts one team- or user-access-policy entry into the
-// wire type; registryUpdateInputRegistryAccessesValueTeamAccessPoliciesValue
-// and its User counterpart declare identical fields, so both callers pass
-// the same two values in rather than needing their own converter.
-func toAccessPolicy(namespaces []string, roleID int) apigen.PortainerAccessPolicy {
-	policy := apigen.PortainerAccessPolicy{RoleId: roleID}
-	if namespaces != nil {
-		ns := namespaces
-		policy.Namespaces = &ns
-	}
-	return policy
 }
 
 // toTLSFileBytes converts registryConfigure's TLS certificate file inputs to
@@ -269,71 +173,17 @@ func toTLSFileBytes(in []int) (*[]int32, error) {
 
 // registryList, registryCreate and registryPing are no longer declared here:
 // they run on cmd/gen_action_inputs's generated code (actions.gen.go) — see
-// this file's package doc. redactRegistryList and redactRegistryCreate below
-// are what that generated code calls instead of returning
-// RegistryListWithResponse's/RegistryCreateWithResponse's JSON200 directly.
-
-func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params registryInspectInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("registries inspect: parse input: %w", err)
-	}
-	if params.ID <= 0 {
-		return nil, fmt.Errorf("registries inspect: id must be a positive integer, got %d", params.ID)
-	}
-
-	var reqParams *apigen.RegistryInspectParams
-	if params.EndpointID != nil {
-		reqParams = &apigen.RegistryInspectParams{EndpointId: params.EndpointID}
-	}
-
-	resp, err := c.API.RegistryInspectWithResponse(ctx, params.ID, reqParams)
-	if err != nil {
-		return nil, fmt.Errorf("registries inspect: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("registries inspect: %w", err)
-	}
-	return redact(resp.JSON200), nil
-}
-
-func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params registryUpdateInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("registries update: parse input: %w", err)
-	}
-	if params.ID <= 0 {
-		return nil, fmt.Errorf("registries update: id must be a positive integer, got %d", params.ID)
-	}
-	if params.Name == "" {
-		return nil, fmt.Errorf("registries update: name is required")
-	}
-	if params.URL == "" {
-		return nil, fmt.Errorf("registries update: url is required")
-	}
-
-	body := apigen.RegistryUpdateJSONRequestBody{
-		Name:             params.Name,
-		URL:              params.URL,
-		Authentication:   params.Authentication,
-		Username:         params.Username,
-		Password:         params.Password,
-		BaseURL:          params.BaseURL,
-		Ecr:              updateEcrToAPI(params.Ecr),
-		Github:           updateGithubToAPI(params.Github),
-		Quay:             updateQuayToAPI(params.Quay),
-		RegistryAccesses: toRegistryAccesses(params.RegistryAccesses),
-	}
-
-	resp, err := c.API.RegistryUpdateWithResponse(ctx, params.ID, body)
-	if err != nil {
-		return nil, fmt.Errorf("registries update: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("registries update: %w", err)
-	}
-	return redact(resp.JSON200), nil
-}
+// this file's package doc. redactRegistryList, redactRegistryCreate,
+// redactRegistryInspect and redactRegistryUpdate below are what that
+// generated code calls instead of returning
+// RegistryListWithResponse's/RegistryCreateWithResponse's/
+// RegistryInspectWithResponse's/RegistryUpdateWithResponse's JSON200
+// directly. registryUpdate's own Ecr/Github/Quay/RegistryAccesses converters
+// (updateEcrToAPI and siblings) are gone for the identical reason
+// registryCreate's were: the generated handler round-trips the caller's raw
+// input straight into apigen.RegistryUpdateJSONRequestBody through
+// encoding/json, so nothing here needs to assign those fields by hand any
+// more.
 
 // redact removes credentials from a registry record before it is returned.
 //
@@ -380,23 +230,27 @@ func redactList(rs *[]apigen.PortainereeRegistry) *[]apigen.PortainereeRegistry 
 	return &out
 }
 
-// redactRegistryList and redactRegistryCreate are the redaction wrappers
-// cmd/gen_action_inputs's generator requires before it will generate a
-// handler for RegistryList/RegistryCreate at all: both operations' success
-// response can carry Password/AccessToken (per
+// redactRegistryList, redactRegistryCreate, redactRegistryInspect and
+// redactRegistryUpdate are the redaction wrappers cmd/gen_action_inputs's
+// generator requires before it will generate a handler for
+// RegistryList/RegistryCreate/RegistryInspect/RegistryUpdate at all: every
+// one of their success responses can carry Password/AccessToken (per
 // toolutil.IsCredentialShapedName, resolved through the vendored spec's own
 // $refs — see credential.go in that package), so the generator refuses to
-// emit a bare handler for either without a function named exactly this way
-// already declared here. Each is a thin rename over the redact/redactList
+// emit a bare handler for any of them without a function named exactly this
+// way already declared here. Each is a thin rename over the redact/redactList
 // this domain already had and already tests
 // (TestRegistryList_ResponseWithPassword_IsRedacted,
 // TestRegistryCreate_ResponseWithPassword_IsRedacted,
+// TestRegistryInspect_ResponseWithPassword_IsRedacted,
+// TestRegistryUpdate_ResponseWithPassword_IsRedacted,
 // TestRedact_LeavesNoCredentialShapedFieldPopulated): the generator's
 // contract only requires a function of this name and shape to exist, not
-// that it be a new implementation — see this file's package doc for why
-// list/create can run on generated code now when they could not before.
+// that it be a new implementation.
 func redactRegistryList(rs *[]apigen.PortainereeRegistry) any { return redactList(rs) }
 func redactRegistryCreate(r *apigen.PortainereeRegistry) any  { return redact(r) }
+func redactRegistryInspect(r *apigen.PortainereeRegistry) any { return redact(r) }
+func redactRegistryUpdate(r *apigen.PortainereeRegistry) any  { return redact(r) }
 
 func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryConfigureInput
@@ -442,46 +296,11 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 	return map[string]any{"configured": true, "id": params.ID}, nil
 }
 
-func registryDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params registryDeleteInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("registries delete: parse input: %w", err)
-	}
-	if params.ID <= 0 {
-		return nil, fmt.Errorf("registries delete: id must be a positive integer, got %d", params.ID)
-	}
-
-	resp, err := c.API.RegistryDeleteWithResponse(ctx, params.ID)
-	if err != nil {
-		return nil, fmt.Errorf("registries delete: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("registries delete: %w", err)
-	}
-	return map[string]any{"deleted": true, "id": params.ID}, nil
-}
-
-func ecrDeleteRepository(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params ecrDeleteRepositoryInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("registries ecr_delete_repository: parse input: %w", err)
-	}
-	if params.ID <= 0 {
-		return nil, fmt.Errorf("registries ecr_delete_repository: id must be a positive integer, got %d", params.ID)
-	}
-	if params.RepositoryName == "" {
-		return nil, fmt.Errorf("registries ecr_delete_repository: repositoryName is required")
-	}
-
-	resp, err := c.API.EcrDeleteRepositoryWithResponse(ctx, params.ID, params.RepositoryName)
-	if err != nil {
-		return nil, fmt.Errorf("registries ecr_delete_repository: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("registries ecr_delete_repository: %w", err)
-	}
-	return map[string]any{"deleted": true, "id": params.ID, "repositoryName": params.RepositoryName}, nil
-}
+// registryDelete and ecrDeleteRepository are no longer declared here: they
+// run on cmd/gen_action_inputs's generated code (actions.gen.go) — see this
+// file's package doc. Neither response carries a credential-shaped field, so
+// unlike inspect/update, neither needed a redaction wrapper to become
+// eligible.
 
 func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params ecrDeleteTagsInput

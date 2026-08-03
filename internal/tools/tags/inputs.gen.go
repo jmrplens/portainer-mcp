@@ -12,3 +12,9 @@ type tagDeleteInput struct {
 	// ID Tag identifier
 	ID int `json:"id"`
 }
+
+func (tagDeleteInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
+}

@@ -82,6 +82,11 @@ func (s ActionSpec) InputSchema() (map[string]any, error) {
 			return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
 		}
 	}
+	if minimums, ok := s.Input.(MinimumParams); ok {
+		if err := applyMinimumParams(asMap, minimums.MinimumParams()); err != nil {
+			return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
+		}
+	}
 
 	schemaCacheMu.Lock()
 	schemaCache[t] = asMap
@@ -128,6 +133,55 @@ func applyEnumParams(schema map[string]any, enums map[string][]any) error {
 			return fmt.Errorf("EnumParams declares %q, which is not a property of this schema", name)
 		}
 		propSchema["enum"] = values
+	}
+	return nil
+}
+
+// MinimumParams optionally lets an Input type declare a lower-bound
+// constraint per JSON property name, the same way EnumParams declares an
+// enum constraint above: google/jsonschema-go v0.4.3's reflector has no
+// struct-tag syntax for "minimum" either, so an Input whose spec-derived
+// shape needs one implements this interface instead of encoding a constraint
+// the library would silently ignore if it were written as a tag.
+//
+// Every constraint an Input declares this way is cmd/gen_action_inputs's own
+// addition, never something the vendored specification itself states — see
+// that generator's isIdentifierPathParam (fields.go) for exactly which
+// fields get one and why: none of the 285 integer path parameters in the
+// vendored Business Edition specification declare a "minimum" of their own,
+// yet every one of them that names a Portainer resource identifier is never
+// valid at zero or below. Declaring that constraint once, here, means
+// tools.Execute's central validation refuses a non-positive identifier
+// before any handler runs and before any network call — the same refusal
+// every hand-written "id must be a positive integer" guard clause across
+// this project's domains already enacted individually, now expressed once
+// where every surface's schema validation already looks.
+type MinimumParams interface {
+	// MinimumParams returns, for each constrained field's JSON property name,
+	// the smallest value that field may hold. A field name absent from the
+	// returned map carries no lower-bound constraint.
+	MinimumParams() map[string]int
+}
+
+// applyMinimumParams writes each entry of minimums into schema's matching
+// property as JSON Schema's "minimum" keyword, mutating schema in place.
+//
+// It refuses — returns an error rather than silently no-op-ing — an entry
+// naming a property the reflected schema does not have, for the identical
+// reason applyEnumParams does: a typo or a stale entry left after a field
+// was renamed would otherwise publish a schema that looks complete while
+// quietly failing to constrain anything.
+func applyMinimumParams(schema map[string]any, minimums map[string]int) error {
+	if len(minimums) == 0 {
+		return nil
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for name, minimum := range minimums {
+		propSchema, ok := props[name].(map[string]any)
+		if !ok {
+			return fmt.Errorf("MinimumParams declares %q, which is not a property of this schema", name)
+		}
+		propSchema["minimum"] = minimum
 	}
 	return nil
 }

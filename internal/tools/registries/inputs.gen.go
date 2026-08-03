@@ -10,6 +10,12 @@ type ecrDeleteRepositoryInput struct {
 	RepositoryName string `json:"repositoryName"`
 }
 
+func (ecrDeleteRepositoryInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
+}
+
 // ecrDeleteTagsInput is the parameter shape for operation EcrDeleteTags (DELETE /registries/{id}/ecr/repositories/{repositoryName}/tags).
 type ecrDeleteTagsInput struct {
 	// ID Registry identifier
@@ -17,6 +23,12 @@ type ecrDeleteTagsInput struct {
 	// RepositoryName Repository name
 	RepositoryName int      `json:"repositoryName"`
 	Tags           []string `json:"tags,omitempty"`
+}
+
+func (ecrDeleteTagsInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
 }
 
 // registryConfigureInput is the parameter shape for operation RegistryConfigure (POST /registries/{id}/configure).
@@ -41,6 +53,12 @@ type registryConfigureInput struct {
 	TLSSkipVerify *bool `json:"tlsSkipVerify,omitempty"`
 	// Username Username used to authenticate against this registry. Required when Authentication is true
 	Username *string `json:"username,omitempty"`
+}
+
+func (registryConfigureInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
 }
 
 // registryCreateInput is the parameter shape for operation RegistryCreate (POST /registries).
@@ -115,12 +133,24 @@ type registryDeleteInput struct {
 	ID int `json:"id"`
 }
 
+func (registryDeleteInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
+}
+
 // registryInspectInput is the parameter shape for operation RegistryInspect (GET /registries/{id}).
 type registryInspectInput struct {
 	// EndpointID Environment identifier (applies policy overrides if provided)
 	EndpointID *int `json:"endpointId,omitempty"`
 	// ID Registry identifier
 	ID int `json:"id"`
+}
+
+func (registryInspectInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
 }
 
 // registryPingInput is the parameter shape for operation RegistryPing (POST /registries/ping).
@@ -165,6 +195,12 @@ type registryUpdateInput struct {
 	RegistryAccesses map[string]registryUpdateInputRegistryAccessesValue `json:"registryAccesses,omitempty"`
 	URL              string                                              `json:"url"`
 	Username         *string                                             `json:"username,omitempty"`
+}
+
+func (registryUpdateInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
 }
 
 // registryUpdateInputEcr is a nested object property.
@@ -216,4 +252,10 @@ type repositoryTagsDeleteInput struct {
 	// RepositoryName Repository name
 	RepositoryName string   `json:"repositoryName"`
 	Tags           []string `json:"tags,omitempty"`
+}
+
+func (repositoryTagsDeleteInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
 }
