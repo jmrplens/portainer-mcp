@@ -1,0 +1,201 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
+)
+
+func op(id, method, path, domain string) specOperation {
+	return specOperation{OperationID: id, Method: method, Path: path, Domain: domain}
+}
+
+func action(name, operationID string) toolutil.ActionSpec {
+	return toolutil.ActionSpec{Name: name, OperationID: operationID}
+}
+
+// TestAudit_OperationWithNoAction_IsReportedAndFails is the core property
+// this whole command exists for: an operation the spec declares with no
+// catalog action must both be named in the report and make the audit fail.
+//
+// The exit-code half of the assertion is checked on auditCoverage's returned
+// error and on HasGap directly, never on whether the rendered text happens to
+// contain a particular word — see this package's main_test.go for why that
+// distinction matters (a report that prints "FAIL" and returns nil satisfies
+// a text-matching check and gates nothing).
+func TestAudit_OperationWithNoAction_IsReportedAndFails(t *testing.T) {
+	t.Parallel()
+	ee := map[string]specOperation{
+		"TagList":   op("TagList", "GET", "/tags", "tags"),
+		"TagDelete": op("TagDelete", "DELETE", "/tags/{id}", "tags"),
+	}
+	ce := map[string]specOperation{
+		"TagList": op("TagList", "GET", "/tags", "tags"),
+	}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+
+	result, err := auditCoverage(ce, ee, actions, nil)
+	if err != nil {
+		t.Fatalf("auditCoverage() error = %v, want a result to report on", err)
+	}
+
+	// The property that actually gates CI: HasGap must be true, checked as a
+	// boolean, not derived from string content.
+	if !result.HasGap() {
+		t.Fatal("auditCoverage().HasGap() = false, want true: TagDelete has no action")
+	}
+	if len(result.EE.Uncovered) != 1 || result.EE.Uncovered[0].OperationID != "TagDelete" {
+		t.Fatalf("auditCoverage().EE.Uncovered = %v, want exactly [TagDelete]", result.EE.Uncovered)
+	}
+
+	// The report must actually name the gap: a count with no names would tell
+	// nobody what to fix.
+	report := buildReport(result)
+	if !strings.Contains(report, "TagDelete") {
+		t.Errorf("buildReport() does not name the uncovered operation:\n%s", report)
+	}
+}
+
+// TestAudit_AllowListedOperation_IsExcludedButCounted proves the allow-list
+// removes an operation from the failure without removing it from the report:
+// silent exclusion is exactly what would let coverage decay behind a clean
+// number.
+func TestAudit_AllowListedOperation_IsExcludedButCounted(t *testing.T) {
+	t.Parallel()
+	ee := map[string]specOperation{
+		"TagList":       op("TagList", "GET", "/tags", "tags"),
+		"WebsocketExec": op("WebsocketExec", "GET", "/websocket/exec", "websocket"),
+	}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+	allowList := []allowListEntry{
+		{OperationID: "WebsocketExec", Reason: "MCP cannot carry a websocket upgrade.", Added: "2026-08-03"},
+	}
+
+	result, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList)
+	if err != nil {
+		t.Fatalf("auditCoverage() error = %v", err)
+	}
+
+	if result.HasGap() {
+		t.Fatalf("auditCoverage().HasGap() = true, want false: the only gap is allow-listed: %v", result.EE.Uncovered)
+	}
+	if result.AllowListCount != 1 {
+		t.Errorf("auditCoverage().AllowListCount = %d, want 1", result.AllowListCount)
+	}
+	if len(result.EE.AllowListed) != 1 || result.EE.AllowListed[0].OperationID != "WebsocketExec" {
+		t.Fatalf("auditCoverage().EE.AllowListed = %v, want exactly [WebsocketExec]", result.EE.AllowListed)
+	}
+
+	// Still visible in the human-facing output, not just the struct.
+	report := buildReport(result)
+	if !strings.Contains(report, "WebsocketExec") {
+		t.Errorf("buildReport() does not mention the allow-listed operation:\n%s", report)
+	}
+	if !strings.Contains(report, "Allow-list entries: 1") {
+		t.Errorf("buildReport() does not state the allow-list count:\n%s", report)
+	}
+}
+
+// TestAudit_AllowListEntryForAnUnknownOperation_IsAnError proves a stale
+// allow-list entry — one naming an operation neither vendored spec declares
+// any more — is refused outright, rather than silently ignored. An ignored
+// stale entry would keep forgiving something that no longer exists, and a
+// real, unrelated future gap could reuse that same operation name and
+// inherit the forgiveness.
+func TestAudit_AllowListEntryForAnUnknownOperation_IsAnError(t *testing.T) {
+	t.Parallel()
+	ee := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+	allowList := []allowListEntry{
+		{OperationID: "LongRemovedOperation", Reason: "no longer exists", Added: "2026-08-03"},
+	}
+
+	_, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList)
+	if err == nil {
+		t.Fatal("auditCoverage() = nil error, want an error for the stale allow-list entry")
+	}
+	if !strings.Contains(err.Error(), "LongRemovedOperation") {
+		t.Errorf("auditCoverage() error = %v, want it to name the stale entry", err)
+	}
+}
+
+// TestAudit_ActionNamingAnOperationNotInEitherSpec_IsAnError is the reverse
+// direction: a catalog action whose OperationID resolves in neither vendored
+// spec is a typo or a stale declaration. actioncatalog.Build already refuses
+// to build such a catalog against the version-applicability table, but this
+// audit is the one place that checks both vendored specs at once, and it
+// must not let such an action through just because it happens to be
+// well-formed otherwise.
+func TestAudit_ActionNamingAnOperationNotInEitherSpec_IsAnError(t *testing.T) {
+	t.Parallel()
+	ee := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
+	actions := []toolutil.ActionSpec{
+		action("tags.list", "TagList"),
+		action("tags.typo", "TagLisst"),
+	}
+
+	_, err := auditCoverage(map[string]specOperation{}, ee, actions, nil)
+	if err == nil {
+		t.Fatal("auditCoverage() = nil error, want an error for the action naming an unresolvable operation")
+	}
+	if !strings.Contains(err.Error(), "tags.typo") || !strings.Contains(err.Error(), "TagLisst") {
+		t.Errorf("auditCoverage() error = %v, want it to name the action and its OperationID", err)
+	}
+}
+
+// TestAudit_EveryOperationCovered_NoGap is the positive control for
+// TestAudit_OperationWithNoAction_IsReportedAndFails: with a matching action
+// for every declared operation, the audit must not report a gap and must not
+// return an error.
+func TestAudit_EveryOperationCovered_NoGap(t *testing.T) {
+	t.Parallel()
+	ce := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
+	ee := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+
+	result, err := auditCoverage(ce, ee, actions, nil)
+	if err != nil {
+		t.Fatalf("auditCoverage() error = %v", err)
+	}
+	if result.HasGap() {
+		t.Fatalf("auditCoverage().HasGap() = true, want false: %v / %v", result.CE.Uncovered, result.EE.Uncovered)
+	}
+	if result.CE.Covered != 1 || result.EE.Covered != 1 {
+		t.Errorf("auditCoverage() covered = CE:%d EE:%d, want 1 and 1", result.CE.Covered, result.EE.Covered)
+	}
+}
+
+// TestAudit_ActionCoveringBothEditions_CountsInBoth proves an action shared
+// by both specs (the common case: most operations exist in both editions)
+// is counted as covered in each edition's own report, not just one.
+func TestAudit_ActionCoveringBothEditions_CountsInBoth(t *testing.T) {
+	t.Parallel()
+	shared := op("TagList", "GET", "/tags", "tags")
+	ce := map[string]specOperation{"TagList": shared}
+	ee := map[string]specOperation{"TagList": shared}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+
+	result, err := auditCoverage(ce, ee, actions, nil)
+	if err != nil {
+		t.Fatalf("auditCoverage() error = %v", err)
+	}
+	if result.CE.Covered != 1 {
+		t.Errorf("auditCoverage().CE.Covered = %d, want 1", result.CE.Covered)
+	}
+	if result.EE.Covered != 1 {
+		t.Errorf("auditCoverage().EE.Covered = %d, want 1", result.EE.Covered)
+	}
+}
+
+func TestUnit_BuildReport_FullCoverage_StatesSo(t *testing.T) {
+	t.Parallel()
+	result := &auditResult{
+		CE: editionReport{Name: "Community Edition (CE)", Total: 1, Covered: 1},
+		EE: editionReport{Name: "Business Edition (EE)", Total: 1, Covered: 1},
+	}
+	report := buildReport(result)
+	if !strings.Contains(report, "Every operation in both vendored specs has a catalog action") {
+		t.Errorf("buildReport() does not state full coverage:\n%s", report)
+	}
+}
