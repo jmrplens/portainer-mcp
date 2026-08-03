@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -44,6 +45,33 @@ type ActionSpec struct {
 	// effect. Only meaningful when Mutating.
 	Idempotent bool
 	Handler    Handler
+	// Input is a zero value of the action's parameter struct, or nil when the
+	// action takes none. The JSON Schema published by every surface is
+	// reflected from this type, and each handler unmarshals into the same
+	// type — one declaration, so the published shape and the parsed shape
+	// cannot drift.
+	Input any
+
+	// Aliases are alternative names a model might reach for instead of Name,
+	// such as a REST verb or a synonym used elsewhere in Portainer's own
+	// documentation. Purely discovery metadata: no surface resolves an
+	// alias to the action, it only helps a model recognise the right one.
+	Aliases []string
+	// Tags group actions by concept across domains — e.g. "kubernetes" or
+	// "audit-log" — independent of Domain, which groups them by meta-tool.
+	Tags []string
+	// Usage is one or two sentences of model-facing guidance on when to
+	// reach for this action instead of a neighbouring one, complementing
+	// Description rather than repeating it.
+	Usage string
+	// RelatedActions names other actions' Name values a model is likely to
+	// need next to, or instead of, this one.
+	RelatedActions []string
+	// ParameterGuidance carries per-parameter discovery metadata, keyed by
+	// the parameter's JSON field name. Populate it directly for anything
+	// genuinely confusable; FillScopeParameterGuidance fills the rest from a
+	// central table of Portainer's well-known identifier names.
+	ParameterGuidance map[string]ParameterGuidance
 }
 
 // Validate reports whether the spec is internally coherent.
@@ -97,6 +125,33 @@ func (s ActionSpec) Validate() error {
 	}
 	if s.Handler == nil {
 		return fail("Handler is required")
+	}
+	if s.Input != nil {
+		t := reflect.TypeOf(s.Input)
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct {
+			return fail("Input must be a struct or nil, got %s: the schema every surface publishes is reflected from it", t.Kind())
+		}
+	}
+	if len(s.ParameterGuidance) > 0 {
+		// A typo or a renamed field otherwise leaves a stale ParameterGuidance
+		// entry that silently does nothing — the same class of drift this
+		// project already refuses for EnumParams (see schema.go/schema_test.go)
+		// for the stated reason: a loud refusal beats a struct that is
+		// silently wrong. jsonFieldNames is the same resolution
+		// FillScopeParameterGuidance already uses, so a name valid there is
+		// valid here.
+		known := make(map[string]bool, len(s.ParameterGuidance))
+		for _, name := range jsonFieldNames(s.Input) {
+			known[name] = true
+		}
+		for name := range s.ParameterGuidance {
+			if !known[name] {
+				return fail("ParameterGuidance names %q, which is not a JSON field of Input", name)
+			}
+		}
 	}
 	return nil
 }

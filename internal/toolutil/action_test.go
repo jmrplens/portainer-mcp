@@ -117,3 +117,72 @@ func TestValidate_NameWithIllegalCharacter_ReturnsError(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_InputMustBeAStruct(t *testing.T) {
+	t.Parallel()
+	spec := ActionSpec{
+		Name: "tags.list", Domain: "tags", OperationID: "TagList",
+		Title: "T", Description: "D", Edition: edition.CE, Input: "not a struct",
+		Handler: func(_ context.Context, _ *portainer.Client, _ json.RawMessage) (any, error) {
+			return nil, nil
+		},
+	}
+	if err := spec.Validate(); err == nil {
+		t.Error("Validate() error = nil, want a refusal for a non-struct Input")
+	}
+}
+
+// TestValidate_ParameterGuidanceKeyNotAJSONFieldOfInput_ReturnsError guards
+// against exactly the drift EnumParams already refuses elsewhere in this
+// package: a typo, or a field renamed after its guidance was written, leaves
+// a ParameterGuidance entry that names nothing on Input and would otherwise
+// silently do nothing forever.
+func TestValidate_ParameterGuidanceKeyNotAJSONFieldOfInput_ReturnsError(t *testing.T) {
+	t.Parallel()
+	spec := validSpec()
+	spec.Input = struct {
+		EndpointID int `json:"endpointId"`
+	}{}
+	spec.ParameterGuidance = map[string]ParameterGuidance{
+		"endpontId": {SemanticRole: "typo'd key"}, // "endpointId" misspelled
+	}
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want an error: \"endpontId\" names no JSON field of Input")
+	}
+	if !strings.Contains(err.Error(), "endpontId") {
+		t.Errorf("Validate() error = %q, want it to name the stale key", err)
+	}
+}
+
+// TestValidate_ParameterGuidanceKeyMatchesInputField_ReturnsNil is the
+// positive control: a ParameterGuidance key that does name a real JSON field
+// of Input must not be refused.
+func TestValidate_ParameterGuidanceKeyMatchesInputField_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	spec := validSpec()
+	spec.Input = struct {
+		EndpointID int `json:"endpointId"`
+	}{}
+	spec.ParameterGuidance = map[string]ParameterGuidance{
+		"endpointId": {SemanticRole: "the real field"},
+	}
+	if err := spec.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil: \"endpointId\" is a real JSON field of Input", err)
+	}
+}
+
+// TestValidate_ParameterGuidanceWithNoInput_ReturnsError proves the same
+// refusal fires when Input is nil altogether: a ParameterGuidance entry then
+// names a field of nothing, which is exactly as stale as a typo.
+func TestValidate_ParameterGuidanceWithNoInput_ReturnsError(t *testing.T) {
+	t.Parallel()
+	spec := validSpec()
+	spec.Input = nil
+	spec.ParameterGuidance = map[string]ParameterGuidance{
+		"id": {SemanticRole: "orphaned: Input has no fields at all"},
+	}
+	if err := spec.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want an error: Input is nil, so \"id\" names no JSON field")
+	}
+}

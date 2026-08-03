@@ -31,12 +31,18 @@ import (
 
 // AllSpecs collects every declared action. Later phases append their domains
 // here; this is the only place that changes when a domain is added.
+//
+// FillScopeParameterGuidance runs once, here, rather than inside each
+// domain's own Specs(): this is the single path cmd/portainer-mcp builds a
+// real catalog from (see the package doc), so filling defaults here is what
+// makes them reach a model at all, regardless of which domain declared the
+// parameter or which surface later publishes its schema.
 func AllSpecs() []toolutil.ActionSpec {
 	var specs []toolutil.ActionSpec
 	specs = append(specs, system.Specs()...)
 	specs = append(specs, tags.Specs()...)
 	specs = append(specs, registries.Specs()...)
-	return specs
+	return toolutil.FillScopeParameterGuidance(specs)
 }
 
 // BuildCatalog resolves the target server's edition and version, then builds

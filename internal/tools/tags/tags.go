@@ -35,6 +35,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     tagCreate,
+			Input:       tagCreateInput{},
 		},
 		{
 			Name: "tags.delete", Domain: "tags", OperationID: "TagDelete",
@@ -44,6 +45,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     tagDelete,
+			Input:       tagDeleteInput{},
 		},
 	}
 }
@@ -57,12 +59,6 @@ func tagList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, 
 		return nil, fmt.Errorf("tags list: %w", err)
 	}
 	return resp.JSON200, nil
-}
-
-// tagCreateInput is the parameter shape for tags.create.
-type tagCreateInput struct {
-	// Name is the tag's display name.
-	Name string `json:"name"`
 }
 
 func tagCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -82,12 +78,6 @@ func tagCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) 
 		return nil, fmt.Errorf("tags create: %w", err)
 	}
 	return resp.JSON200, nil
-}
-
-// tagDeleteInput is the parameter shape for tags.delete.
-type tagDeleteInput struct {
-	// ID is the tag identifier to remove.
-	ID int `json:"id"`
 }
 
 func tagDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {

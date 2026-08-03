@@ -32,7 +32,7 @@ import (
 // up.sh's "registered docker endpoint 1" / "registered agent endpoint 2"),
 // so the true count is never zero on either edition.
 func TestSystemInfo_AcrossSurfacesAndEditions(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -52,7 +52,7 @@ func TestSystemInfo_AcrossSurfacesAndEditions(t *testing.T) {
 // asserting a fact specific enough that a handler returning an empty or
 // wrong-shaped body would be caught rather than merely "no error".
 func TestSystemStatusVersionNodes_AcrossSurfacesAndEditions(t *testing.T) {
-	for _, edition := range []string{"CE", "EE"} {
+	for _, edition := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(edition+"/"+surface, func(t *testing.T) {
 				t.Parallel()

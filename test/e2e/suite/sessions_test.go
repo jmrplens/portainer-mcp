@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 
@@ -67,18 +68,19 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 
 	logger := logging.New(slog.LevelWarn)
 
-	legs := map[string]harness.Server{"CE": e.CE}
-	if e.HasBusinessEdition() {
-		legs["EE"] = e.EE
-	}
-
-	for ed, srv := range legs {
+	// composeLegs (fixtures_test.go) derives this from e.Legs() rather than
+	// a hardcoded map literal — task 7b's fix. The Kubernetes leg is filtered
+	// out there for a documented reason (no pinned CA in this process to
+	// verify its self-signed certificate against); see
+	// TestKubernetesLeg_ReachableThroughEveryMCPSurface in kubernetes_test.go
+	// for the session that leg is reached through instead.
+	for _, leg := range composeLegs(e) {
 		for _, surface := range surfaceNames {
-			session, err := buildSession(srv, config.ToolSurface(surface), false, false, false, logger)
+			session, err := buildSession(leg.Server, config.ToolSurface(surface), false, false, false, logger)
 			if err != nil {
-				return nil, fmt.Errorf("build %s/%s session: %w", surface, ed, err)
+				return nil, fmt.Errorf("build %s/%s session: %w", surface, leg.Name, err)
 			}
-			s.byKey[surface+"/"+ed] = session
+			s.byKey[surface+"/"+leg.Name] = session
 		}
 	}
 
@@ -172,6 +174,34 @@ func (s *Sessions) Close() {
 			_ = session.Close()
 		}
 	}
+}
+
+// Editions returns the name of every edition this Sessions actually built —
+// "CE" always, "EE" only when a licence was provisioned — sorted for
+// deterministic iteration.
+//
+// This is task 7b's derived replacement for the []string{"CE", "EE"} literal
+// that used to appear, unchanged, at the top of every per-domain suite
+// (system_test.go, tags_test.go, registries_test.go and this file's own
+// matrix test below): rather than a second list a P3 domain would have to
+// keep in sync with whatever newSessions actually built, a domain suite
+// ranges over this — the single source of truth for "which editions can
+// actually be asked for a session" — the same way businessOnlySpecs derives
+// its list from the catalog instead of maintaining a parallel one by hand.
+func (s *Sessions) Editions() []string {
+	seen := map[string]bool{}
+	for key := range s.byKey {
+		_, ed, ok := strings.Cut(key, "/")
+		if ok {
+			seen[ed] = true
+		}
+	}
+	editions := make([]string, 0, len(seen))
+	for ed := range seen {
+		editions = append(editions, ed)
+	}
+	sort.Strings(editions)
+	return editions
 }
 
 // For returns the session for one surface and edition, skipping when that
@@ -350,7 +380,7 @@ func TestSessions_EveryProvisionedSurfaceListsItsTools(t *testing.T) {
 		"individual": func(n int) bool { return n > 3 },
 	}
 
-	for _, ed := range []string{"CE", "EE"} {
+	for _, ed := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			want := wantTools[surface]
 			t.Run(ed+"/"+surface, func(t *testing.T) {

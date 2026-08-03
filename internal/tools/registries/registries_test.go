@@ -238,6 +238,53 @@ func TestRegistryCreate_ExplicitTLSFalse_ReachesRequestBody(t *testing.T) {
 	}
 }
 
+// TestRegistryCreate_ForwardsNestedProviderObjects is the task-4 regression
+// guard: Ecr, Github, Gitlab and Quay are declared on the generated input
+// schema but were silently dropped by the handler. The body is decoded into
+// the actual generated wire type (not a map, and not string-matched) so the
+// assertion discriminates a converter that wires a field to the wrong slot,
+// or one that never runs at all, from one that genuinely forwards it —
+// each nested object carries a value that appears nowhere else in the
+// fixture or the request.
+func TestRegistryCreate_ForwardsNestedProviderObjects(t *testing.T) {
+	t.Parallel()
+	var body apigen.RegistriesRegistryCreatePayload
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":9,"Name":"my-registry"}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{
+		"name": "my-registry", "url": "registry.example.com", "type": 7,
+		"ecr":    map[string]any{"region": "eu-west-1"},
+		"github": map[string]any{"organisationName": "acme-gh", "useOrganisation": true},
+		"gitlab": map[string]any{"instanceUrl": "https://gitlab.example.com", "projectId": 42, "projectPath": "group/project"},
+		"quay":   map[string]any{"organisationName": "acme-quay", "useOrganisation": false},
+	})
+	_, err := find(t, "registries.create")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	if body.Ecr == nil || body.Ecr.Region == nil || *body.Ecr.Region != "eu-west-1" {
+		t.Errorf("Ecr = %+v, want Region=eu-west-1", body.Ecr)
+	}
+	if body.Github == nil || body.Github.OrganisationName == nil || *body.Github.OrganisationName != "acme-gh" ||
+		body.Github.UseOrganisation == nil || !*body.Github.UseOrganisation {
+		t.Errorf("Github = %+v, want OrganisationName=acme-gh UseOrganisation=true", body.Github)
+	}
+	if body.Gitlab == nil || body.Gitlab.InstanceURL == nil || *body.Gitlab.InstanceURL != "https://gitlab.example.com" ||
+		body.Gitlab.ProjectId == nil || *body.Gitlab.ProjectId != 42 ||
+		body.Gitlab.ProjectPath == nil || *body.Gitlab.ProjectPath != "group/project" {
+		t.Errorf("Gitlab = %+v, want InstanceURL/ProjectId/ProjectPath forwarded", body.Gitlab)
+	}
+	if body.Quay == nil || body.Quay.OrganisationName == nil || *body.Quay.OrganisationName != "acme-quay" ||
+		body.Quay.UseOrganisation == nil || *body.Quay.UseOrganisation {
+		t.Errorf("Quay = %+v, want OrganisationName=acme-quay UseOrganisation=false", body.Quay)
+	}
+}
+
 func TestRegistryPing_Success_ReturnsDecodedBody(t *testing.T) {
 	t.Parallel()
 	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
@@ -384,6 +431,82 @@ func TestRegistryUpdate_MissingFields_ReturnErrorWithoutCallingAPI(t *testing.T)
 	}
 }
 
+// TestRegistryUpdate_ForwardsBaseURLNestedProviderObjectsAndRegistryAccesses
+// is the task-4 regression guard for registries.update: BaseURL, Ecr,
+// Github, Quay and RegistryAccesses are declared on the generated input
+// schema but were silently dropped. RegistryAccesses is asserted three
+// levels deep (namespace, team policy, user policy) because forwarding only
+// the top level while dropping the nested policies would be the same defect
+// one layer down.
+func TestRegistryUpdate_ForwardsBaseURLNestedProviderObjectsAndRegistryAccesses(t *testing.T) {
+	t.Parallel()
+	var body apigen.RegistriesRegistryUpdatePayload
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":4,"Name":"quay"}`))
+	})
+
+	input, _ := json.Marshal(map[string]any{
+		"id": 4, "name": "quay", "url": "quay.io",
+		"baseUrl": "registry.mydomain.tld:2375",
+		"ecr":     map[string]any{"region": "us-east-1"},
+		"github":  map[string]any{"organisationName": "acme-gh", "useOrganisation": true},
+		"quay":    map[string]any{"organisationName": "acme-quay", "useOrganisation": false},
+		"registryAccesses": map[string]any{
+			"3": map[string]any{
+				"namespaces": []string{"prod"},
+				"teamAccessPolicies": map[string]any{
+					"7": map[string]any{"roleId": 2, "namespaces": []string{"prod"}},
+				},
+				"userAccessPolicies": map[string]any{
+					"11": map[string]any{"roleId": 1},
+				},
+			},
+		},
+	})
+	_, err := find(t, "registries.update")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	if body.BaseURL == nil || *body.BaseURL != "registry.mydomain.tld:2375" {
+		t.Errorf("BaseURL = %v, want registry.mydomain.tld:2375", body.BaseURL)
+	}
+	if body.Ecr == nil || body.Ecr.Region == nil || *body.Ecr.Region != "us-east-1" {
+		t.Errorf("Ecr = %+v, want Region=us-east-1", body.Ecr)
+	}
+	if body.Github == nil || body.Github.OrganisationName == nil || *body.Github.OrganisationName != "acme-gh" {
+		t.Errorf("Github = %+v, want OrganisationName=acme-gh", body.Github)
+	}
+	if body.Quay == nil || body.Quay.OrganisationName == nil || *body.Quay.OrganisationName != "acme-quay" {
+		t.Errorf("Quay = %+v, want OrganisationName=acme-quay", body.Quay)
+	}
+
+	if body.RegistryAccesses == nil {
+		t.Fatal("RegistryAccesses = nil, want forwarded")
+	}
+	access, ok := (*body.RegistryAccesses)["3"]
+	if !ok {
+		t.Fatal(`RegistryAccesses["3"] missing`)
+	}
+	if access.Namespaces == nil || len(*access.Namespaces) != 1 || (*access.Namespaces)[0] != "prod" {
+		t.Errorf("RegistryAccesses[3].Namespaces = %v, want [prod]", access.Namespaces)
+	}
+	if access.TeamAccessPolicies == nil {
+		t.Fatal("RegistryAccesses[3].TeamAccessPolicies = nil, want forwarded")
+	}
+	if team, ok := (*access.TeamAccessPolicies)["7"]; !ok || team.RoleId != 2 {
+		t.Errorf("TeamAccessPolicies[7] = %+v (present=%v), want RoleId=2", team, ok)
+	}
+	if access.UserAccessPolicies == nil {
+		t.Fatal("RegistryAccesses[3].UserAccessPolicies = nil, want forwarded")
+	}
+	if user, ok := (*access.UserAccessPolicies)["11"]; !ok || user.RoleId != 1 {
+		t.Errorf("UserAccessPolicies[11] = %+v (present=%v), want RoleId=1", user, ok)
+	}
+}
+
 func TestRegistryConfigure_Success_CallsCorrectPath(t *testing.T) {
 	t.Parallel()
 	var gotPath, gotMethod string
@@ -427,6 +550,60 @@ func TestRegistryConfigure_ExplicitTLSFalse_ReachesRequestBody(t *testing.T) {
 	skip, present := gotBody["TLSSkipVerify"]
 	if !present || skip != false {
 		t.Errorf("request body TLSSkipVerify = %v (present=%v), want false present", skip, present)
+	}
+}
+
+// TestRegistryConfigure_ForwardsTLSCertificateFileFields is the task-4
+// regression guard for registries.configure: TLSCACertFile, TLSCertFile and
+// TLSKeyFile are declared on the generated input schema (as []int, per the
+// spec's int32-array items) but were silently dropped. The body is decoded
+// into the wire type's []int32 fields so the assertion catches both a
+// dropped field and a converter that mixes the three slices up.
+func TestRegistryConfigure_ForwardsTLSCertificateFileFields(t *testing.T) {
+	t.Parallel()
+	var body apigen.RegistriesRegistryConfigurePayload
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	input, _ := json.Marshal(map[string]any{
+		"id": 4, "authentication": false,
+		"tlsCACertFile": []int{1, 2, 3},
+		"tlsCertFile":   []int{4, 5},
+		"tlsKeyFile":    []int{6},
+	})
+	_, err := find(t, "registries.configure")(context.Background(), c, input)
+	if err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	if body.TLSCACertFile == nil || !reflect.DeepEqual(*body.TLSCACertFile, []int32{1, 2, 3}) {
+		t.Errorf("TLSCACertFile = %v, want [1 2 3]", body.TLSCACertFile)
+	}
+	if body.TLSCertFile == nil || !reflect.DeepEqual(*body.TLSCertFile, []int32{4, 5}) {
+		t.Errorf("TLSCertFile = %v, want [4 5]", body.TLSCertFile)
+	}
+	if body.TLSKeyFile == nil || !reflect.DeepEqual(*body.TLSKeyFile, []int32{6}) {
+		t.Errorf("TLSKeyFile = %v, want [6]", body.TLSKeyFile)
+	}
+}
+
+// TestRegistryConfigure_TLSCertificateFileOverflowsInt32_ReturnsErrorWithoutCallingAPI
+// guards the conversion's bounds check: a byte value that does not fit in
+// int32 must fail before the request is sent, not be silently truncated.
+func TestRegistryConfigure_TLSCertificateFileOverflowsInt32_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+	t.Parallel()
+	var called atomic.Bool
+	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
+
+	input, _ := json.Marshal(map[string]any{"id": 4, "tlsCACertFile": []int64{1<<31 + 1}})
+	_, err := find(t, "registries.configure")(context.Background(), c, input)
+	if err == nil {
+		t.Fatal("handler error = nil, want an error for a TLS file byte that overflows int32")
+	}
+	if called.Load() {
+		t.Error("the API was called despite an out-of-range TLS file byte")
 	}
 }
 
@@ -949,6 +1126,22 @@ func TestRedact_LeavesNoCredentialShapedFieldPopulated(t *testing.T) {
 		RegistryAccesses: &apigen.PortainerRegistryAccesses{
 			"1": apigen.PortainerRegistryAccessPolicies{Namespaces: &[]string{"production"}},
 		},
+		// Ecr/Github/Gitlab/Quay are populated too: task 4 widened what
+		// registries.create/update forward into these provider-specific
+		// objects, and PortainereeRegistry carries the identically-shaped
+		// objects back on read. None of their fields are credential-shaped
+		// today (checked by hand against PortainerEcrData,
+		// PortainerGithubRegistryData, PortainerGitlabRegistryData and
+		// PortainerQuayRegistryData), but leaving them nil here would mean
+		// the walk below never descends into them at all — a nil pointer is
+		// skipped, not "checked and found clean". Populating them proves the
+		// walk actually reaches these paths, so a credential-shaped field
+		// added to any of them later is caught here rather than by a
+		// fixture no one thought to update.
+		Ecr:    &apigen.PortainerEcrData{Region: ptr("eu-west-1")},
+		Github: &apigen.PortainerGithubRegistryData{OrganisationName: ptr("acme-gh")},
+		Gitlab: &apigen.PortainerGitlabRegistryData{InstanceURL: ptr("https://gitlab.example.com")},
+		Quay:   &apigen.PortainerQuayRegistryData{OrganisationName: ptr("acme-quay")},
 		// Populate every credential-shaped field the type currently has.
 		// The reflective walk below is what catches ones added later.
 	}

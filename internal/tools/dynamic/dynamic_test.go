@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
+	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -183,6 +185,157 @@ func TestExecuteAction_SafeMode_Intercepts(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "safe mode") {
 		t.Error("safe mode did not intercept through the dynamic surface")
+	}
+}
+
+// TestFind_MatchesCarryTheirSchemaAndRequiredParameters is the reason this
+// surface's default status makes token cost a non-issue: find only ever
+// returns schemas for the matches a query produced, never for the whole
+// catalog, so the surface can publish the real shape unconditionally.
+// system.update has no Input struct, so this exercises tags.create instead,
+// via the "tags" package's real, already-declared tagCreateInput.
+func TestFind_MatchesCarryTheirSchemaAndRequiredParameters(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "create tag"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "tags.create" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("tags.create was not among the matches for \"create tag\"")
+	}
+	if found.InputSchema == nil {
+		t.Fatal("find returned a match with no schema; the model still has to guess")
+	}
+	if !slices.Contains(found.RequiredParams, "name") {
+		t.Errorf("RequiredParams = %v, want it to name the required parameter", found.RequiredParams)
+	}
+	props, _ := found.InputSchema["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("InputSchema has no \"name\" property: %v", found.InputSchema)
+	}
+}
+
+// TestFind_MatchesCarryAnExample guards the third field this task adds: an
+// illustrative value per parameter, so a model calling execute has something
+// concrete to shape its call around.
+func TestFind_MatchesCarryAnExample(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "create tag"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "tags.create" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("tags.create was not among the matches for \"create tag\"")
+	}
+	if _, ok := found.Example["name"]; !ok {
+		t.Errorf("Example = %v, want it to carry a value for \"name\"", found.Example)
+	}
+}
+
+// TestFindAction_NoInputAction_CarriesNoRequiredParamsOrExample guards the
+// other half: an action with no parameters must publish an input schema
+// (an empty, closed object, never nil), but neither RequiredParams nor
+// Example, since there is nothing to require or illustrate.
+func TestFindAction_NoInputAction_CarriesNoRequiredParamsOrExample(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, tools.Deps{}))
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "portainer_find_action", Arguments: map[string]any{"query": "system version"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	var result findResult
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+		t.Fatalf("find did not return JSON: %v", err)
+	}
+	var found *match
+	for i := range result.Matches {
+		if result.Matches[i].Action == "system.version" {
+			found = &result.Matches[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("system.version was not among the matches")
+	}
+	if found.InputSchema == nil {
+		t.Error("InputSchema = nil, want a real (empty) schema, not an absent one")
+	}
+	if len(found.RequiredParams) != 0 {
+		t.Errorf("RequiredParams = %v, want none for an action that takes no parameters", found.RequiredParams)
+	}
+	if found.Example != nil {
+		t.Errorf("Example = %v, want none for an action that takes no parameters", found.Example)
+	}
+}
+
+// TestFind_DescriptionNoLongerDisclaimsTheSchema guards against reverting to
+// P2's honest-at-the-time wording: it was accurate when schemas were not
+// published, and would now send a model back to guessing when they are.
+func TestFind_DescriptionNoLongerDisclaimsTheSchema(t *testing.T) {
+	t.Parallel()
+	session, ctx := connect(t, serverFor(t, tools.Deps{}))
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var description string
+	for _, tool := range res.Tools {
+		if tool.Name == "portainer_find_action" {
+			description = tool.Description
+		}
+	}
+	if description == "" {
+		t.Fatal("portainer_find_action is not registered")
+	}
+	if strings.Contains(description, "not yet published") {
+		t.Error("find still tells the model its parameter shapes are unpublished")
 	}
 }
 
@@ -373,5 +526,149 @@ func TestSearch_LongQuery_DoesNotLetDescriptionNoiseOutrankANameMatch(t *testing
 	}
 	if !within {
 		t.Error("tags.list fell outside the result cap, so the model would never see the correct action")
+	}
+}
+
+// --- exampleFor / bindingAs / placeholderFor ---
+
+// TestExampleFor_IntegerGuidance_ProducesANumberNotAString is the regression
+// guard for the mistyped-example defect: ParameterGuidance.ExampleBinding is
+// always text (it is written as plain strings in
+// internal/toolutil/guidance.go's scopeParameterDefaults table, e.g.
+// endpointId's "3"), and FillScopeParameterGuidance fills guidance for
+// exactly the identifier parameters that commonly declare an integer schema
+// type. Before this fix, exampleFor assigned the binding's string value
+// straight into the example regardless of the property's declared type, so a
+// model copying the published example for an "integer" property would send a
+// quoted string that fails schema validation.
+func TestExampleFor_IntegerGuidance_ProducesANumberNotAString(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"endpointId": {ExampleBinding: "3"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"endpointId": map[string]any{"type": "integer"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	value, ok := example["endpointId"]
+	if !ok {
+		t.Fatal("exampleFor() did not carry a value for endpointId")
+	}
+	if _, isString := value.(string); isString {
+		t.Fatalf("exampleFor()[\"endpointId\"] = %#v (a string), want a number for an \"integer\"-typed property", value)
+	}
+	if n, ok := value.(int); !ok || n != 3 {
+		t.Errorf("exampleFor()[\"endpointId\"] = %#v, want the int 3", value)
+	}
+}
+
+// TestExampleFor_StringGuidance_StillProducesAString is the positive control:
+// a guided property actually declared "string" must still publish the
+// binding text unchanged.
+func TestExampleFor_StringGuidance_StillProducesAString(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"namespace": {ExampleBinding: "default"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"namespace": map[string]any{"type": "string"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if example["namespace"] != "default" {
+		t.Errorf("exampleFor()[\"namespace\"] = %#v, want the string \"default\"", example["namespace"])
+	}
+}
+
+// TestExampleFor_BooleanGuidance_ProducesABool guards the third scalar type
+// bindingAs converts.
+func TestExampleFor_BooleanGuidance_ProducesABool(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"force": {ExampleBinding: "true"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"force": map[string]any{"type": "boolean"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if v, ok := example["force"].(bool); !ok || v != true {
+		t.Errorf("exampleFor()[\"force\"] = %#v, want the bool true", example["force"])
+	}
+}
+
+// TestExampleFor_BindingThatDoesNotParseAsTheDeclaredType_FallsBackToPlaceholder
+// proves bindingAs's failure path is actually used: a binding that cannot
+// parse as the property's declared type must not be published verbatim
+// (that would still be schema-invalid), it must fall back to
+// placeholderFor's generic value instead.
+func TestExampleFor_BindingThatDoesNotParseAsTheDeclaredType_FallsBackToPlaceholder(t *testing.T) {
+	t.Parallel()
+	spec := toolutil.ActionSpec{
+		ParameterGuidance: map[string]toolutil.ParameterGuidance{
+			"count": {ExampleBinding: "not-a-number"},
+		},
+	}
+	schema := map[string]any{
+		"properties": map[string]any{
+			"count": map[string]any{"type": "integer"},
+		},
+	}
+	example := exampleFor(spec, schema)
+	if example["count"] != 0 {
+		t.Errorf("exampleFor()[\"count\"] = %#v, want placeholderFor's fallback (0) for an unparseable binding", example["count"])
+	}
+}
+
+// TestPlaceholderFor_TypeArray_UsesFirstNonNullEntry guards a nullable
+// property (declared as e.g. ["string", "null"], the JSON Schema idiom for
+// "optional and nullable"): before this fix, propType read raw["type"] as a
+// plain string only, so a type array always fell into the default branch and
+// published a bare null example — no shape at all.
+func TestPlaceholderFor_TypeArray_UsesFirstNonNullEntry(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"type": []any{"null", "string"}})
+	if got != "string" {
+		t.Errorf("placeholderFor(type=[null,string]) = %#v, want the string placeholder for the first non-null entry", got)
+	}
+}
+
+// TestPlaceholderFor_RefProperty_IsTreatedAsAnObject guards a $ref'd property,
+// which carries no "type" keyword of its own.
+func TestPlaceholderFor_RefProperty_IsTreatedAsAnObject(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"$ref": "#/components/schemas/Thing"})
+	if _, ok := got.(map[string]any); !ok {
+		t.Errorf("placeholderFor($ref) = %#v, want an object placeholder", got)
+	}
+}
+
+// TestPlaceholderFor_InlinePropertiesWithNoType_IsTreatedAsAnObject guards an
+// inline object schema that omits the redundant "type": "object" keyword.
+func TestPlaceholderFor_InlinePropertiesWithNoType_IsTreatedAsAnObject(t *testing.T) {
+	t.Parallel()
+	got := placeholderFor(map[string]any{"properties": map[string]any{"x": map[string]any{"type": "string"}}})
+	if _, ok := got.(map[string]any); !ok {
+		t.Errorf("placeholderFor(properties, no type) = %#v, want an object placeholder", got)
+	}
+}
+
+// TestPlaceholderFor_NoTypeNoRefNoProperties_StaysNil is the negative control:
+// a genuinely shapeless schema must still fall back to nil, not be coerced
+// into some default type.
+func TestPlaceholderFor_NoTypeNoRefNoProperties_StaysNil(t *testing.T) {
+	t.Parallel()
+	if got := placeholderFor(map[string]any{}); got != nil {
+		t.Errorf("placeholderFor({}) = %#v, want nil", got)
 	}
 }

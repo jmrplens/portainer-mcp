@@ -50,6 +50,31 @@ func Execute(ctx context.Context, spec toolutil.ActionSpec, deps Deps, input jso
 		return safeModePreview(spec, input), nil
 	}
 
+	// Validated here, once, for the same reason input is normalized here: the
+	// MCP SDK only validates a typed tool's arguments against its published
+	// InputSchema automatically, and the individual surface is the only one
+	// that registers a typed tool. A surface that instead accepts a generic
+	// {action, input} wrapper — meta and dynamic, the two the owner considers
+	// primary — publishes a permissive schema for that wrapper, so the SDK
+	// never sees the chosen action's own schema and never rejects anything
+	// against it. Checking it here, before any surface's difference in
+	// registration can matter, is what makes a missing required field refused
+	// identically everywhere instead of only on whichever surface happens to
+	// register a typed tool.
+	//
+	// Deliberately after the safe-mode check, not before: a safe-mode preview
+	// never runs the handler, so an input that would fail schema validation is
+	// no more harmful to preview than a valid one, and TestExecute_SafeMode_
+	// MalformedInput_StillReportsSafeMode pins exactly that — safe mode must
+	// keep its own framing even over input this check would otherwise refuse.
+	if err := spec.ValidateInput(input); err != nil {
+		return errorResult(fmt.Sprintf(
+			"%s. Call portainer_find_action to see this action's schema (on the dynamic surface), "+
+				"or read its published input schema on this surface, then retry with corrected input.",
+			err,
+		)), nil
+	}
+
 	// A nil client means the server was wired wrong. Every handler would
 	// dereference it and panic, and a panic inside a tool call takes the whole
 	// MCP server down — a tool error does not. Execute is the single path all

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -79,16 +80,21 @@ func rawClientFor(ed string) (*portainer.Client, error) {
 		return c, nil
 	}
 
+	// Looked up by name from estate.Legs() rather than a switch naming "CE"
+	// and "EE" as its only two cases: the derived leg list is the one place
+	// task 7b's edition/platform axis is defined, and a name this estate
+	// never provisioned (an unlicensed "EE", a typo, or "Kubernetes" today,
+	// since no fixture here builds a client for it) is "not found", exactly
+	// like a name this estate really never heard of.
 	var srv harness.Server
-	switch ed {
-	case "CE":
-		srv = estate.CE
-	case "EE":
-		srv = estate.EE
-	default:
-		return nil, fmt.Errorf("rawClientFor: unknown edition %q, want CE or EE", ed)
+	var found bool
+	for _, leg := range estate.Legs() {
+		if leg.Name == ed {
+			srv, found = leg.Server, true
+			break
+		}
 	}
-	if srv.BaseURL == "" {
+	if !found || srv.BaseURL == "" {
 		return nil, fmt.Errorf("rawClientFor: no %s server in this estate", ed)
 	}
 
@@ -402,44 +408,111 @@ func isOrphanEligible(name string, now time.Time) bool {
 	return now.Sub(time.Unix(0, nanos)) >= orphanMinAge
 }
 
-// cleanupOrphans deletes every tag and registry, on every provisioned leg of
-// e, whose name starts with orphanPrefix and is old enough per
-// isOrphanEligible. It is the net for a run that died between creating a
-// resource and its own cleanup running: nothing else distinguishes one
-// test's tag from another's on a server every session in the matrix shares,
-// so a run that dies mid-test leaves its fixtures behind for the next run to
-// trip over unless something like this sweeps first — and the age check is
-// what keeps that same sweep from also devouring a concurrently running
-// sibling's fixtures.
+// composeLegs returns e's ordinary compose-provisioned legs (CE always, EE
+// when licensed) — Estate.Legs() filtered to drop the Kubernetes leg, when
+// present.
+//
+// The Kubernetes leg is excluded here, not in Estate.Legs() itself: it
+// deploys a self-signed certificate that this test process has no pinned CA
+// to verify (see buildSession's skipTLSVerify doc and
+// kubernetes_test.go), so a plain portainer.New(&config.Config{URL: ...})
+// against it — what both of this function's callers (cleanupOrphans and
+// newSessions) build — would fail on every call with a certificate error,
+// not the specific TLS handling that leg actually needs. This is a genuine
+// technical constraint on how this leg is reached, not a re-introduction of
+// the hardcoded-axis problem Estate.Legs() itself exists to close: fixing it
+// (teaching this function to skip TLS verification for the Kubernetes leg
+// specifically) is orthogonal to task 7's three gaps and left for whenever a
+// domain suite actually needs cross-run fixture cleanup or a matrix session
+// against that leg.
+func composeLegs(e harness.Estate) []harness.Leg {
+	var legs []harness.Leg
+	for _, leg := range e.Legs() {
+		if leg.Name == "Kubernetes" {
+			continue
+		}
+		legs = append(legs, leg)
+	}
+	return legs
+}
+
+// orphanSweep is one resource kind's cross-run cleanup: given a client
+// already proven (by cleanupOrphans, via isHarnessProvisioned) to be talking
+// to a server this harness provisioned, list what still exists and delete
+// whatever is eligible.
+//
+// cleanupOrphans is deliberately ignorant of what a sweep function actually
+// checks. deleteOrphanTags and deleteOrphanRegistries below both key on a
+// name prefix and an embedded timestamp (orphanPrefix, isOrphanEligible), but
+// nothing about this type requires that: a sweep for containers or volumes
+// created *through* Portainer, or namespaces, could match a Docker/Kubernetes
+// label instead of a name; one for a numerically identified resource
+// (schedules, resource controls, access policies) could match against ids a
+// fixture wrote to some other cache entirely. Every one of those decisions
+// lives inside the sweep function itself, not in cleanupOrphans.
+type orphanSweep func(ctx context.Context, client *portainer.Client, now time.Time) error
+
+// namedOrphanSweep pairs an orphanSweep with a name used only to identify
+// which sweep failed in a wrapped error — cleanupOrphans itself never
+// branches on it.
+type namedOrphanSweep struct {
+	name  string
+	sweep orphanSweep
+}
+
+// orphanSweeps is the registration point every fixture helper that needs
+// cross-run cleanup adds itself to, instead of cleanupOrphans hardcoding a
+// call to it by name.
+//
+// This is the fix for the gap task 7c's brief names directly: "every new
+// resource type needs a bespoke pair of functions, about twenty of them."
+// Adding tags and registries this way — as two entries here, in a slice
+// cleanupOrphans merely ranges over — means the ~20 resource kinds P3
+// domains will eventually need cross-run cleanup for each add one entry to
+// this slice (or, if that resource's own file prefers to keep its cleanup
+// logic local, append to this slice from an init in that file) rather than
+// teaching cleanupOrphans a twentieth bespoke pair of functions apiece. See
+// TestCleanupOrphans_CallsEveryRegisteredSweeper for the proof that
+// cleanupOrphans genuinely does not need to know what "tags" or "registries"
+// are to sweep them.
+var orphanSweeps = []namedOrphanSweep{
+	{name: "tags", sweep: deleteOrphanTags},
+	{name: "registries", sweep: deleteOrphanRegistries},
+}
+
+// cleanupOrphans runs every registered orphanSweep (see orphanSweeps) against
+// every compose-provisioned leg of e. It is the net for a run that died
+// between creating a resource and its own cleanup running: nothing else
+// distinguishes one test's fixture from another's on a server every session
+// in the matrix shares, so a run that dies mid-test leaves its fixtures
+// behind for the next run to trip over unless something like this sweeps
+// first.
 //
 // It refuses to touch a leg that does not pass isHarnessProvisioned,
 // returning an error instead of silently skipping it: skipping would look
 // identical to "nothing to clean up" from the caller's side, and the whole
-// point of the guard is to fail loudly rather than delete when unsure.
+// point of the guard is to fail loudly rather than delete when unsure. This
+// guard is unconditional and untouched by the registration mechanism above:
+// every sweep, whatever it matches on, only ever runs against a client this
+// check has already approved.
 func cleanupOrphans(ctx context.Context, e harness.Estate) error {
-	legs := map[string]harness.Server{"CE": e.CE}
-	if e.HasBusinessEdition() {
-		legs["EE"] = e.EE
-	}
-
 	now := time.Now()
-	for name, srv := range legs {
-		client, err := portainer.New(&config.Config{URL: srv.BaseURL, Token: srv.Creds.APIKey})
+	for _, leg := range composeLegs(e) {
+		client, err := portainer.New(&config.Config{URL: leg.Server.BaseURL, Token: leg.Server.Creds.APIKey})
 		if err != nil {
-			return fmt.Errorf("cleanupOrphans: build %s client: %w", name, err)
+			return fmt.Errorf("cleanupOrphans: build %s client: %w", leg.Name, err)
 		}
 
-		if err := isHarnessProvisioned(ctx, client, srv); err != nil {
+		if err := isHarnessProvisioned(ctx, client, leg.Server); err != nil {
 			return fmt.Errorf("cleanupOrphans: %s server %s does not carry this harness's own "+
 				"provisioning identity; refusing to delete e2e- resources against a server this "+
-				"harness cannot confirm it provisioned: %w", name, srv.BaseURL, err)
+				"harness cannot confirm it provisioned: %w", leg.Name, leg.Server.BaseURL, err)
 		}
 
-		if err := deleteOrphanTags(ctx, client, now); err != nil {
-			return fmt.Errorf("cleanupOrphans: %s: %w", name, err)
-		}
-		if err := deleteOrphanRegistries(ctx, client, now); err != nil {
-			return fmt.Errorf("cleanupOrphans: %s: %w", name, err)
+		for _, s := range orphanSweeps {
+			if err := s.sweep(ctx, client, now); err != nil {
+				return fmt.Errorf("cleanupOrphans: %s: %s: %w", leg.Name, s.name, err)
+			}
 		}
 	}
 	return nil
@@ -649,6 +722,77 @@ func TestCleanupOrphans_RefusesAnEstateWithoutARecordedInstanceID(t *testing.T) 
 	if !strings.Contains(err.Error(), wantSubstring) {
 		t.Fatalf("cleanupOrphans error = %q, want it to contain %q (the credential guard's own reason, "+
 			"not a network failure reaching an unreachable host)", err.Error(), wantSubstring)
+	}
+}
+
+// TestCleanupOrphans_CallsEveryRegisteredSweeper is task 7c's proof:
+// cleanupOrphans must not need to know what "tags" or "registries" are to
+// sweep them. It temporarily replaces the package-level orphanSweeps
+// registry with two fakes that record their own invocation, points
+// cleanupOrphans at a fake server that satisfies isHarnessProvisioned, and
+// requires both fakes to have run.
+//
+// This is the test the brief's own trap warns against writing trivially: a
+// cleanupOrphans that quietly kept calling deleteOrphanTags and
+// deleteOrphanRegistries directly — reverting the registration mechanism
+// while leaving this test's shape unchanged — would leave "called" empty,
+// because neither of those functions is one of the two fakes this test
+// registered. Only a cleanupOrphans that genuinely iterates orphanSweeps can
+// pass this.
+//
+// Not run with t.Parallel(): it swaps the package-level orphanSweeps var for
+// the duration of the call, and TestCleanupOrphans_RefusesAnEstateWithoutARecordedInstanceID
+// is the only other test that calls cleanupOrphans — it returns before ever
+// reading orphanSweeps (isHarnessProvisioned fails first on that estate), but
+// keeping this one serial avoids relying on that ordering under -race.
+func TestCleanupOrphans_CallsEveryRegisteredSweeper(t *testing.T) {
+	server := fakeSystemStatusServer(t, "matching-instance-id")
+
+	original := orphanSweeps
+	t.Cleanup(func() { orphanSweeps = original })
+
+	var called []string
+	orphanSweeps = []namedOrphanSweep{
+		{name: "fake-a", sweep: func(context.Context, *portainer.Client, time.Time) error {
+			called = append(called, "fake-a")
+			return nil
+		}},
+		{name: "fake-b", sweep: func(context.Context, *portainer.Client, time.Time) error {
+			called = append(called, "fake-b")
+			return nil
+		}},
+	}
+
+	e := harness.Estate{CE: harness.Server{BaseURL: server.URL, InstanceID: "matching-instance-id"}}
+	if err := cleanupOrphans(context.Background(), e); err != nil {
+		t.Fatalf("cleanupOrphans() error = %v", err)
+	}
+	if !reflect.DeepEqual(called, []string{"fake-a", "fake-b"}) {
+		t.Errorf("sweeps called = %v, want [fake-a fake-b]: cleanupOrphans must invoke every "+
+			"registered sweeper without knowing its type", called)
+	}
+}
+
+// TestComposeLegs_ExcludesKubernetes proves composeLegs' one deliberate
+// deviation from Estate.Legs(): a fully provisioned estate's Kubernetes leg
+// must not appear, because neither of composeLegs' callers can reach it
+// (self-signed certificate, no pinned CA in this process — see composeLegs'
+// own doc), while both compose legs must.
+func TestComposeLegs_ExcludesKubernetes(t *testing.T) {
+	t.Parallel()
+	e := harness.Estate{
+		CE:         harness.Server{Edition: "CE", BaseURL: "http://ce"},
+		EE:         harness.Server{Edition: "EE", BaseURL: "http://ee", Creds: harness.Credentials{APIKey: "ee-key"}},
+		Kubernetes: harness.Server{Edition: "Kubernetes", BaseURL: "https://k8s", Creds: harness.Credentials{APIKey: "k8s-key"}},
+	}
+	legs := composeLegs(e)
+	if len(legs) != 2 {
+		t.Fatalf("composeLegs() returned %d legs, want 2 (CE and EE): %+v", len(legs), legs)
+	}
+	for _, leg := range legs {
+		if leg.Name == "Kubernetes" {
+			t.Errorf("composeLegs() included the Kubernetes leg: %+v", legs)
+		}
 	}
 }
 

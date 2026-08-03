@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -279,6 +280,114 @@ func TestCallTool_SafeMode_InterceptsThroughTheMetaSurface(t *testing.T) {
 	}
 }
 
+// TestRegister_ParamSchemaMode_DefaultsToFullAndPublishesSchemas is the
+// owner's ruling made concrete: unlike portainer_find_action, this surface
+// has nowhere else to publish a per-action shape (every domain tool shares
+// one {action, input} input schema), so the description is where "the
+// default publishes the schemas" has to show up. No PORTAINER_META_PARAM_SCHEMA
+// is set here, which is exactly the zero-configuration case a real
+// deployment starts from.
+func TestRegister_ParamSchemaMode_DefaultsToFullAndPublishesSchemas(t *testing.T) {
+	t.Parallel()
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	if !strings.Contains(description, "Parameters:") {
+		t.Error("default mode does not embed a Parameters: line; the schema is not published")
+	}
+	if !strings.Contains(description, `"name"`) {
+		t.Errorf("description does not carry tags.create's \"name\" property: %s", description)
+	}
+	if !strings.Contains(description, "Required parameters: name") {
+		t.Errorf("description does not name \"name\" as required for tags.create: %s", description)
+	}
+}
+
+// TestRegister_ParamSchemaMode_Summary_OmitsTheFullSchema is the escape hatch
+// for a tight context budget: it must still say what a call requires, just
+// without the complete JSON Schema the full mode embeds.
+func TestRegister_ParamSchemaMode_Summary_OmitsTheFullSchema(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "summary")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	if strings.Contains(description, "Parameters:") {
+		t.Error("summary mode still embeds the full Parameters: schema line")
+	}
+	if !strings.Contains(description, "Required parameters: name") {
+		t.Errorf("summary mode does not name \"name\" as required for tags.create: %s", description)
+	}
+}
+
+// TestRegister_ParamSchemaMode_None_MatchesThePreSchemaBehaviour is the
+// tightest escape hatch, reproducing this surface's description exactly as
+// it was before any parameter detail was reflected into it.
+func TestRegister_ParamSchemaMode_None_MatchesThePreSchemaBehaviour(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "none")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	description := res.Tools[0].Description
+
+	for _, absent := range []string{"Parameters:", "Required parameters:"} {
+		if strings.Contains(description, absent) {
+			t.Errorf("none mode still embeds %q: %s", absent, description)
+		}
+	}
+}
+
+// An unrecognised PORTAINER_META_PARAM_SCHEMA must fail loudly, the same way
+// an unrecognised TOOL_SURFACE does in internal/config: silently falling back
+// to a default would hide a typo that changes what a deployment publishes.
+func TestRegister_ParamSchemaMode_Invalid_ReturnsError(t *testing.T) {
+	t.Setenv(paramSchemaEnvVar, "bogus")
+	catalog, err := actioncatalog.Build(tags.Specs(), actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{}); err == nil {
+		t.Error("Register() = nil, want an error for an invalid PORTAINER_META_PARAM_SCHEMA")
+	}
+}
+
 func toolsSpecForOtherDomain() toolutil.ActionSpec {
 	return toolutil.ActionSpec{
 		Name: "tags.list", Domain: "tags", OperationID: "TagList",
@@ -322,5 +431,79 @@ func TestRegister_Description_MarksDangerousActions(t *testing.T) {
 		if strings.Contains(line, "`tags.list`") && (strings.Contains(line, "[mutating]") || strings.Contains(line, "[destructive]")) {
 			t.Errorf("read-only action marked dangerous: %q", line)
 		}
+	}
+}
+
+// --- warnIfDescriptionIsLarge ---
+
+func TestWarnIfDescriptionIsLarge_AboveThreshold_LogsAWarning(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	big := strings.Repeat("x", largeDescriptionThreshold+1)
+	warnIfDescriptionIsLarge(logger, "registries", paramSchemaFull, big)
+
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") {
+		t.Fatalf("warnIfDescriptionIsLarge() did not log a warning:\n%s", out)
+	}
+	if !strings.Contains(out, "domain=registries") {
+		t.Errorf("warning does not name the domain:\n%s", out)
+	}
+}
+
+// TestWarnIfDescriptionIsLarge_AtOrBelowThreshold_LogsNothing is the negative
+// control: the ordinary case (every pilot domain today) must not log at all.
+func TestWarnIfDescriptionIsLarge_AtOrBelowThreshold_LogsNothing(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	small := strings.Repeat("x", largeDescriptionThreshold)
+	warnIfDescriptionIsLarge(logger, "tags", paramSchemaFull, small)
+
+	if buf.Len() != 0 {
+		t.Errorf("warnIfDescriptionIsLarge() logged something for a description at the threshold:\n%s", buf.String())
+	}
+}
+
+// TestWarnIfDescriptionIsLarge_NilLogger_DoesNotPanic guards the case
+// Register actually exercises whenever no logger is configured (most tests
+// in this file build tools.Deps{} with none): a nil logger must be a no-op,
+// never a nil-pointer panic.
+func TestWarnIfDescriptionIsLarge_NilLogger_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+	big := strings.Repeat("x", largeDescriptionThreshold+1)
+	warnIfDescriptionIsLarge(nil, "registries", paramSchemaFull, big)
+}
+
+// TestRegister_LargeDescription_LogsAWarningThroughDeps proves the wiring
+// end to end: Register itself, not just the helper in isolation, must reach
+// the warning when a real domain's rendered description crosses the
+// threshold.
+func TestRegister_LargeDescription_LogsAWarningThroughDeps(t *testing.T) {
+	t.Parallel()
+	longDescription := strings.Repeat("word ", 4000) // well past largeDescriptionThreshold
+	spec := toolutil.ActionSpec{
+		Name: "bigdomain.action", Domain: "bigdomain", OperationID: "TagList",
+		Title: "t", Description: longDescription, Edition: edition.CE,
+		Handler: func(context.Context, *portainer.Client, json.RawMessage) (any, error) { return nil, nil },
+	}
+	catalog, err := actioncatalog.Build([]toolutil.ActionSpec{spec}, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	server := mcp.NewServer(&mcp.Implementation{Name: "portainer-mcp", Version: "test"}, nil)
+	if err := (Surface{}).Register(server, catalog, tools.Deps{Logger: logger}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "domain=bigdomain") {
+		t.Errorf("Register() did not warn about bigdomain's large description through deps.Logger:\n%s", out)
 	}
 }

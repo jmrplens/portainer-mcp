@@ -19,6 +19,20 @@ const EstateFileEnv = "PORTAINER_E2E_ESTATE"
 // strings out of it.
 const EdgeEnvFileEnv = "PORTAINER_E2E_EDGE_ENV"
 
+// The well-known Environments names cmd/provision/main.go registers today:
+// EnvironmentDocker for each edition's own Docker-in-Docker endpoint,
+// EnvironmentAgent for the agent endpoint registered against the Community
+// Edition server only, and EnvironmentK3D for the Kubernetes leg. Exported so
+// a domain reading one of them by name — roughly twenty P3 domains will —
+// gets a typo caught at compile time instead of Environment silently
+// returning ok = false, which a domain action could too easily treat as "no
+// environment configured" rather than "the caller misspelled the name".
+const (
+	EnvironmentDocker = "docker"
+	EnvironmentAgent  = "agent"
+	EnvironmentK3D    = "k3d"
+)
+
 // Server is one provisioned Portainer.
 type Server struct {
 	Edition string      `json:"edition"`
@@ -48,6 +62,56 @@ type Server struct {
 	// afterwards. Values are redacted the same way harness.ApplyLicence
 	// redacts its own errors.
 	ConflictingLicenceKeys []string `json:"conflicting_licence_keys,omitempty"`
+
+	// Environments maps a locally-meaningful name ("docker", "agent", "k3d",
+	// ...) to the numeric endpoint id Portainer assigned when
+	// cmd/provision/main.go registered it against this server.
+	//
+	// This replaces the single Estate.AgentID field this harness used to
+	// carry: that field recorded exactly one environment, could not be
+	// extended without growing Estate a new field per name, and nothing ever
+	// read it back. Every P3 action that takes an environment id — the
+	// containers, stacks, volumes, images, kubernetes, webhooks and agent-
+	// proxy domains all take one — reads it from here, by name, instead of
+	// hardcoding 1 or 2 on the assumption that those numbers only ever mean
+	// what they meant on an empty database at creation time.
+	//
+	// It is a map keyed by a caller-chosen name, not a fixed pair of fields,
+	// specifically so a domain that needs two Docker environments (endpoint
+	// groups, edge groups, tag assignment, migration all do) can register a
+	// second one under a name of its own choosing without Estate or Server
+	// growing a new field for every domain that needs more than one.
+	Environments map[string]int `json:"environments,omitempty"`
+}
+
+// Environment returns the numeric endpoint id registered under name on this
+// server, and whether one was found. name is whatever
+// cmd/provision/main.go's provisionServer or runKubernetes called
+// WithEnvironment with — EnvironmentDocker and, on the Community Edition leg
+// only, EnvironmentAgent today.
+func (s Server) Environment(name string) (int, bool) {
+	id, ok := s.Environments[name]
+	return id, ok
+}
+
+// WithEnvironment returns s with one more environment identity recorded
+// under name, leaving every existing entry — and every other field — intact.
+//
+// It returns a new Server rather than mutating the receiver, the same rule
+// Estate.MergeKubernetes already follows for the identical reason: two
+// callers holding a Server obtained before this call must not silently
+// observe each other's addition through a map both happen to share. The
+// underlying map is copied on every call rather than mutated in place, so
+// the Server this was called on keeps reporting exactly the entries it had
+// before.
+func (s Server) WithEnvironment(name string, id int) Server {
+	next := make(map[string]int, len(s.Environments)+1)
+	for k, v := range s.Environments {
+		next[k] = v
+	}
+	next[name] = id
+	s.Environments = next
+	return s
 }
 
 // Estate is everything a suite needs to reach a running world.
@@ -59,7 +123,6 @@ type Estate struct {
 	CE         Server `json:"ce"`
 	EE         Server `json:"ee"`
 	Kubernetes Server `json:"kubernetes"`
-	AgentID    int    `json:"agent_endpoint_id"`
 
 	// EdgeEndpointID, EdgeAgentID and EdgeKey identify the edge environment
 	// registered against EE, present only when a licence was available: edge
@@ -90,6 +153,38 @@ func (e Estate) HasBusinessEdition() bool {
 // HasKubernetes reports whether the k3d leg was provisioned.
 func (e Estate) HasKubernetes() bool {
 	return e.Kubernetes.BaseURL != "" && e.Kubernetes.Creds.APIKey != ""
+}
+
+// Leg is one provisioned server in an Estate, named the way this harness's
+// own tests and cleanup routines already address it ("CE", "EE" or
+// "Kubernetes"), paired with the Server it identifies.
+type Leg struct {
+	Name   string
+	Server Server
+}
+
+// Legs returns every server this Estate actually provisioned: the Community
+// Edition leg always, the Business Edition and Kubernetes legs only when
+// HasBusinessEdition and HasKubernetes respectively report one was
+// provisioned. Order is fixed (CE, EE, Kubernetes) so iteration is
+// deterministic.
+//
+// This is the single derivation of the edition/platform axis every suite
+// used to hardcode as a literal []string{"CE", "EE"} — or, worse,
+// structurally, as a switch or a two-entry map built by hand — none of which
+// knew about the Kubernetes leg without a third case added to every one of
+// them by hand. A caller that needs "every edition this estate provisions"
+// ranges over this instead of repeating that list a P3 domain would
+// otherwise have copied roughly 88 more times.
+func (e Estate) Legs() []Leg {
+	legs := []Leg{{Name: "CE", Server: e.CE}}
+	if e.HasBusinessEdition() {
+		legs = append(legs, Leg{Name: "EE", Server: e.EE})
+	}
+	if e.HasKubernetes() {
+		legs = append(legs, Leg{Name: "Kubernetes", Server: e.Kubernetes})
+	}
+	return legs
 }
 
 // MergeKubernetes returns e with its Kubernetes leg set to k8s, leaving every

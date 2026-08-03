@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -72,6 +72,36 @@ test-e2e:
 audit-e2e-gaps:
 	go run ./cmd/audit_e2e_gaps
 
+# audit-discovery reports which sibling actions (same domain, same base name
+# once CRUD and variant suffixes are stripped, e.g. registries.delete and
+# registries.repository_tags_delete) cannot yet be told apart because their
+# Usage text is identical or missing. Informational, like audit-e2e-gaps: it
+# exits 0 unless the catalog itself fails to build. Discovery quality is a
+# judgement call, and gating on one invites satisfying the gate with filler
+# text instead of writing text that actually helps — audit_1to1 is the audit
+# that blocks the build.
+audit-discovery:
+	go run ./cmd/audit_discovery
+
+# audit-1to1 is the gate this whole rewrite exists for: it fails when any
+# operation documented in either vendored spec has no matching catalog
+# action. Unlike audit-e2e-gaps it is a real gate, not merely informational.
+# It is the 100%-or-bust check a human asking "are we done" runs; see
+# cmd/audit_1to1's package doc for why it currently fails (18 of 441 Business
+# Edition operations declared) and why that is the correct state for most of
+# P3. CI does not call this target directly — see audit-1to1-ratchet below.
+audit-1to1:
+	go run ./cmd/audit_1to1 -spec-version=$(SPEC_VERSION)
+
+# audit-1to1-ratchet is what CI actually gates on: the same audit as
+# audit-1to1, but passing once coverage meets the floor committed in
+# api/coverage-baseline.yaml rather than requiring 100%. See runRatchet's own
+# doc comment in cmd/audit_1to1/main.go for why a ratchet, rather than either
+# a permanently-failing or a permanently-passing check, is the right gate
+# while P3 is still landing domains.
+audit-1to1-ratchet:
+	go run ./cmd/audit_1to1 -spec-version=$(SPEC_VERSION) -ratchet
+
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
 	go run ./cmd/fetch_spec -edition ce -version $(SPEC_VERSION)
@@ -93,6 +123,15 @@ fetch-history:
 gen-applicability:
 	go run ./cmd/gen_applicability -history api/specs/history -out internal/apiversion/applicability_gen.go
 	gofmt -w internal/apiversion/applicability_gen.go
+
+# gen-action-inputs regenerates internal/tools/<domain>/inputs.gen.go from the
+# vendored Business Edition specification: one Input struct per operation
+# already declared by a domain package, merging its path parameters, query
+# parameters and request body into the flat, model-facing shape
+# toolutil.ActionSpec.Input expects. See cmd/gen_action_inputs's package doc
+# for what it refuses to guess rather than generate.
+gen-action-inputs:
+	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools
 
 # check-spec verifies the committed specifications still match a fresh fetch.
 # It writes into a temporary directory rather than over api/specs, so a failure

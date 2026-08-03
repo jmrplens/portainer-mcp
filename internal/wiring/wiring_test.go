@@ -108,6 +108,31 @@ func TestBuildCatalog_UnresponsiveServer_FailsWithinTheDeadline(t *testing.T) {
 	}
 }
 
+// TestAllSpecs_FillsScopeParameterGuidance guards the wiring that makes
+// FillScopeParameterGuidance's central default table reach a model at all:
+// before this, the function had no production caller, so ParameterGuidance
+// stayed nil on every real action regardless of how complete the table was.
+// registries.inspect's Input carries "id", a default-table key, so its
+// guidance is present if and only if AllSpecs actually calls
+// FillScopeParameterGuidance.
+func TestAllSpecs_FillsScopeParameterGuidance(t *testing.T) {
+	t.Parallel()
+	found := false
+	for _, spec := range AllSpecs() {
+		if spec.Name != "registries.inspect" {
+			continue
+		}
+		found = true
+		guidance, ok := spec.ParameterGuidance["id"]
+		if !ok || guidance.SemanticRole == "" {
+			t.Errorf(`registries.inspect ParameterGuidance["id"] = %+v, ok=%v; want the central default table's guidance, which means AllSpecs must call toolutil.FillScopeParameterGuidance`, guidance, ok)
+		}
+	}
+	if !found {
+		t.Fatal("registries.inspect not found in AllSpecs(); this test's assumption about the pilot domains is stale")
+	}
+}
+
 func TestSurfaceFor_EachSurface_ReturnsItsProjection(t *testing.T) {
 	t.Parallel()
 	if _, ok := SurfaceFor(config.SurfaceDynamic).(dynamic.Surface); !ok {

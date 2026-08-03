@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
@@ -36,6 +37,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryCreate,
+			Input:       registryCreateInput{},
 		},
 		{
 			Name: "registries.ping", Domain: "registries", OperationID: "RegistryPing",
@@ -44,6 +46,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryPing,
+			Input:       registryPingInput{},
 		},
 		{
 			Name: "registries.inspect", Domain: "registries", OperationID: "RegistryInspect",
@@ -51,6 +54,7 @@ func Specs() []toolutil.ActionSpec {
 			Description: "Returns the details of a single registry by identifier.",
 			Edition:     edition.CE,
 			Handler:     registryInspect,
+			Input:       registryInspectInput{},
 		},
 		{
 			Name: "registries.update", Domain: "registries", OperationID: "RegistryUpdate",
@@ -59,6 +63,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryUpdate,
+			Input:       registryUpdateInput{},
 		},
 		{
 			Name: "registries.configure", Domain: "registries", OperationID: "RegistryConfigure",
@@ -67,6 +72,7 @@ func Specs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Handler:     registryConfigure,
+			Input:       registryConfigureInput{},
 		},
 		{
 			Name: "registries.delete", Domain: "registries", OperationID: "RegistryDelete",
@@ -76,6 +82,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     registryDelete,
+			Input:       registryDeleteInput{},
 		},
 		{
 			Name: "registries.ecr_delete_repository", Domain: "registries", OperationID: "EcrDeleteRepository",
@@ -85,6 +92,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     ecrDeleteRepository,
+			Input:       ecrDeleteRepositoryInput{},
 		},
 		{
 			Name: "registries.ecr_delete_tags", Domain: "registries", OperationID: "EcrDeleteTags",
@@ -95,6 +103,7 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     ecrDeleteTags,
+			Input:       ecrDeleteTagsInput{},
 		},
 		{
 			Name: "registries.repository_tags_delete", Domain: "registries", OperationID: "RepositoryTagsDelete",
@@ -104,8 +113,156 @@ func Specs() []toolutil.ActionSpec {
 			Mutating:    true,
 			Destructive: true,
 			Handler:     repositoryTagsDelete,
+			Input:       repositoryTagsDeleteInput{},
 		},
 	}
+}
+
+// The functions below convert the nested objects declared on the generated
+// input structs (registryCreateInput, registryUpdateInput,
+// registryConfigureInput) into the corresponding apigen wire types. Every
+// field named in the task-4 finding — Ecr, Github, Gitlab, Quay,
+// RegistryAccesses, and the TLS certificate file fields — has a matching
+// parameter on the generated client's request body, so each is forwarded
+// whole rather than picked apart: a caller who sends "ecr": {"region": "x"}
+// gets exactly that structure on the wire, not a hand-picked subset of it.
+//
+// registryCreateInputEcr and registryUpdateInputEcr (and their Github/Quay
+// counterparts) are field-for-field identical, but the generator emits a
+// distinct named type per operation, so each operation gets its own
+// converter rather than one shared by structural coincidence.
+
+// createEcrToAPI converts registryCreate's Ecr input to the wire type.
+func createEcrToAPI(in *registryCreateInputEcr) *apigen.PortainerEcrData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerEcrData{Region: in.Region}
+}
+
+// updateEcrToAPI converts registryUpdate's Ecr input to the wire type.
+func updateEcrToAPI(in *registryUpdateInputEcr) *apigen.PortainerEcrData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerEcrData{Region: in.Region}
+}
+
+// createGithubToAPI converts registryCreate's Github input to the wire type.
+func createGithubToAPI(in *registryCreateInputGithub) *apigen.PortainerGithubRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGithubRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// updateGithubToAPI converts registryUpdate's Github input to the wire type.
+func updateGithubToAPI(in *registryUpdateInputGithub) *apigen.PortainerGithubRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGithubRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// createGitlabToAPI converts registryCreate's Gitlab input to the wire type.
+// Update has no Gitlab field — neither registryUpdateInput nor
+// registries.registryUpdatePayload declares one, so there is nothing to
+// forward there and no counterpart function.
+func createGitlabToAPI(in *registryCreateInputGitlab) *apigen.PortainerGitlabRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerGitlabRegistryData{InstanceURL: in.InstanceURL, ProjectId: in.ProjectID, ProjectPath: in.ProjectPath}
+}
+
+// createQuayToAPI converts registryCreate's Quay input to the wire type.
+func createQuayToAPI(in *registryCreateInputQuay) *apigen.PortainerQuayRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerQuayRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// updateQuayToAPI converts registryUpdate's Quay input to the wire type.
+func updateQuayToAPI(in *registryUpdateInputQuay) *apigen.PortainerQuayRegistryData {
+	if in == nil {
+		return nil
+	}
+	return &apigen.PortainerQuayRegistryData{OrganisationName: in.OrganisationName, UseOrganisation: in.UseOrganisation}
+}
+
+// toRegistryAccesses converts registryUpdate's RegistryAccesses input —
+// keyed by registry ID, each value carrying Namespaces plus per-team and
+// per-user access policies — into the wire type. It nests through
+// PortainerRegistryAccessPolicies -> PortainerTeamAccessPolicies /
+// PortainerUserAccessPolicies -> PortainerAccessPolicy, converting one level
+// at a time rather than re-marshaling, since the input and wire shapes carry
+// the same fields under different (and, for the map value, differently
+// pointered) named types.
+func toRegistryAccesses(in map[string]registryUpdateInputRegistryAccessesValue) *apigen.PortainerRegistryAccesses {
+	if in == nil {
+		return nil
+	}
+	out := make(apigen.PortainerRegistryAccesses, len(in))
+	for registryID, access := range in {
+		policies := apigen.PortainerRegistryAccessPolicies{}
+		if access.Namespaces != nil {
+			namespaces := access.Namespaces
+			policies.Namespaces = &namespaces
+		}
+		if access.TeamAccessPolicies != nil {
+			team := make(apigen.PortainerTeamAccessPolicies, len(access.TeamAccessPolicies))
+			for teamID, policy := range access.TeamAccessPolicies {
+				team[teamID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
+			}
+			policies.TeamAccessPolicies = &team
+		}
+		if access.UserAccessPolicies != nil {
+			user := make(apigen.PortainerUserAccessPolicies, len(access.UserAccessPolicies))
+			for userID, policy := range access.UserAccessPolicies {
+				user[userID] = toAccessPolicy(policy.Namespaces, policy.RoleID)
+			}
+			policies.UserAccessPolicies = &user
+		}
+		out[registryID] = policies
+	}
+	return &out
+}
+
+// toAccessPolicy converts one team- or user-access-policy entry into the
+// wire type; registryUpdateInputRegistryAccessesValueTeamAccessPoliciesValue
+// and its User counterpart declare identical fields, so both callers pass
+// the same two values in rather than needing their own converter.
+func toAccessPolicy(namespaces []string, roleID int) apigen.PortainerAccessPolicy {
+	policy := apigen.PortainerAccessPolicy{RoleId: roleID}
+	if namespaces != nil {
+		ns := namespaces
+		policy.Namespaces = &ns
+	}
+	return policy
+}
+
+// toTLSFileBytes converts registryConfigure's TLS certificate file inputs to
+// the wire type. Per registries.registryConfigurePayload, TLSCACertFile,
+// TLSCertFile and TLSKeyFile are declared as arrays of int32-formatted
+// integers, not — despite the "File" in their names — a multipart upload;
+// RegistryConfigureJSONRequestBody has no other way to carry them, so this
+// is the complete and correct forwarding, not a placeholder pending a real
+// upload path. It errors rather than truncating if a value does not fit in
+// an int32, since silently corrupting certificate bytes is worse than
+// refusing the call.
+func toTLSFileBytes(in []int) (*[]int32, error) {
+	if in == nil {
+		return nil, nil
+	}
+	out := make([]int32, len(in))
+	for i, v := range in {
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return nil, fmt.Errorf("byte at index %d (%d) does not fit in int32", i, v)
+		}
+		out[i] = int32(v)
+	}
+	return &out, nil
 }
 
 func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (any, error) {
@@ -117,18 +274,6 @@ func registryList(ctx context.Context, c *portainer.Client, _ json.RawMessage) (
 		return nil, fmt.Errorf("registries list: %w", err)
 	}
 	return redactList(resp.JSON200), nil
-}
-
-// registryCreateInput is the parameter shape for registries.create.
-type registryCreateInput struct {
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	Type           int    `json:"type"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	TLS            *bool  `json:"tls,omitempty"`
-	BaseURL        string `json:"baseUrl,omitempty"`
 }
 
 func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -148,17 +293,15 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 		URL:            params.URL,
 		Type:           apigen.PortainerRegistryType(params.Type),
 		Authentication: params.Authentication,
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		Username:       params.Username,
+		Password:       params.Password,
+		BaseURL:        params.BaseURL,
+		Ecr:            createEcrToAPI(params.Ecr),
+		Github:         createGithubToAPI(params.Github),
+		Gitlab:         createGitlabToAPI(params.Gitlab),
+		Quay:           createQuayToAPI(params.Quay),
 	}
 	body.TLS = params.TLS
-	if params.BaseURL != "" {
-		body.BaseURL = &params.BaseURL
-	}
 
 	resp, err := c.API.RegistryCreateWithResponse(ctx, body)
 	if err != nil {
@@ -168,15 +311,6 @@ func registryCreate(ctx context.Context, c *portainer.Client, input json.RawMess
 		return nil, fmt.Errorf("registries create: %w", err)
 	}
 	return redact(resp.JSON200), nil
-}
-
-// registryPingInput is the parameter shape for registries.ping.
-type registryPingInput struct {
-	URL      string `json:"url"`
-	Type     int    `json:"type"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	TLS      *bool  `json:"tls,omitempty"`
 }
 
 func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -189,14 +323,10 @@ func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessag
 	}
 
 	body := apigen.RegistryPingJSONRequestBody{
-		URL:  params.URL,
-		Type: apigen.PortainerRegistryType(params.Type),
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		URL:      params.URL,
+		Type:     apigen.PortainerRegistryType(params.Type),
+		Username: params.Username,
+		Password: params.Password,
 	}
 	body.TLS = params.TLS
 
@@ -208,12 +338,6 @@ func registryPing(ctx context.Context, c *portainer.Client, input json.RawMessag
 		return nil, fmt.Errorf("registries ping: %w", err)
 	}
 	return resp.JSON200, nil
-}
-
-// registryInspectInput is the parameter shape for registries.inspect.
-type registryInspectInput struct {
-	ID         int  `json:"id"`
-	EndpointID *int `json:"endpointId,omitempty"`
 }
 
 func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -240,16 +364,6 @@ func registryInspect(ctx context.Context, c *portainer.Client, input json.RawMes
 	return redact(resp.JSON200), nil
 }
 
-// registryUpdateInput is the parameter shape for registries.update.
-type registryUpdateInput struct {
-	ID             int    `json:"id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-}
-
 func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryUpdateInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -266,15 +380,16 @@ func registryUpdate(ctx context.Context, c *portainer.Client, input json.RawMess
 	}
 
 	body := apigen.RegistryUpdateJSONRequestBody{
-		Name:           params.Name,
-		URL:            params.URL,
-		Authentication: params.Authentication,
-	}
-	if params.Username != "" {
-		body.Username = &params.Username
-	}
-	if params.Password != "" {
-		body.Password = &params.Password
+		Name:             params.Name,
+		URL:              params.URL,
+		Authentication:   params.Authentication,
+		Username:         params.Username,
+		Password:         params.Password,
+		BaseURL:          params.BaseURL,
+		Ecr:              updateEcrToAPI(params.Ecr),
+		Github:           updateGithubToAPI(params.Github),
+		Quay:             updateQuayToAPI(params.Quay),
+		RegistryAccesses: toRegistryAccesses(params.RegistryAccesses),
 	}
 
 	resp, err := c.API.RegistryUpdateWithResponse(ctx, params.ID, body)
@@ -332,17 +447,6 @@ func redactList(rs *[]apigen.PortainereeRegistry) *[]apigen.PortainereeRegistry 
 	return &out
 }
 
-// registryConfigureInput is the parameter shape for registries.configure.
-type registryConfigureInput struct {
-	ID             int    `json:"id"`
-	Authentication bool   `json:"authentication,omitempty"`
-	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"`
-	Region         string `json:"region,omitempty"`
-	TLS            *bool  `json:"tls,omitempty"`
-	TLSSkipVerify  *bool  `json:"tlsSkipVerify,omitempty"`
-}
-
 func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params registryConfigureInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -352,15 +456,27 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 		return nil, fmt.Errorf("registries configure: id must be a positive integer, got %d", params.ID)
 	}
 
-	body := apigen.RegistryConfigureJSONRequestBody{Authentication: params.Authentication}
-	if params.Username != "" {
-		body.Username = &params.Username
+	tlsCACertFile, err := toTLSFileBytes(params.TLSCACertFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsCACertFile: %w", err)
 	}
-	if params.Password != "" {
-		body.Password = &params.Password
+	tlsCertFile, err := toTLSFileBytes(params.TLSCertFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsCertFile: %w", err)
 	}
-	if params.Region != "" {
-		body.Region = &params.Region
+	tlsKeyFile, err := toTLSFileBytes(params.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("registries configure: tlsKeyFile: %w", err)
+	}
+
+	body := apigen.RegistryConfigureJSONRequestBody{
+		Authentication: params.Authentication,
+		Username:       params.Username,
+		Password:       params.Password,
+		Region:         params.Region,
+		TLSCACertFile:  tlsCACertFile,
+		TLSCertFile:    tlsCertFile,
+		TLSKeyFile:     tlsKeyFile,
 	}
 	body.TLS = params.TLS
 	body.TLSSkipVerify = params.TLSSkipVerify
@@ -373,11 +489,6 @@ func registryConfigure(ctx context.Context, c *portainer.Client, input json.RawM
 		return nil, fmt.Errorf("registries configure: %w", err)
 	}
 	return map[string]any{"configured": true, "id": params.ID}, nil
-}
-
-// registryDeleteInput is the parameter shape for registries.delete.
-type registryDeleteInput struct {
-	ID int `json:"id"`
 }
 
 func registryDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -397,12 +508,6 @@ func registryDelete(ctx context.Context, c *portainer.Client, input json.RawMess
 		return nil, fmt.Errorf("registries delete: %w", err)
 	}
 	return map[string]any{"deleted": true, "id": params.ID}, nil
-}
-
-// ecrDeleteRepositoryInput is the parameter shape for registries.ecr_delete_repository.
-type ecrDeleteRepositoryInput struct {
-	ID             int    `json:"id"`
-	RepositoryName string `json:"repositoryName"`
 }
 
 func ecrDeleteRepository(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
@@ -427,18 +532,6 @@ func ecrDeleteRepository(ctx context.Context, c *portainer.Client, input json.Ra
 	return map[string]any{"deleted": true, "id": params.ID, "repositoryName": params.RepositoryName}, nil
 }
 
-// ecrDeleteTagsInput is the parameter shape for registries.ecr_delete_tags.
-//
-// RepositoryName is an integer here, not a string, because the generated
-// method's second parameter is typed int — matching the vendored EE
-// specification for this operation exactly, however unusual that looks next
-// to every other repositoryName in this domain.
-type ecrDeleteTagsInput struct {
-	ID             int      `json:"id"`
-	RepositoryName int      `json:"repositoryName"`
-	Tags           []string `json:"tags,omitempty"`
-}
-
 func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params ecrDeleteTagsInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -461,13 +554,6 @@ func ecrDeleteTags(ctx context.Context, c *portainer.Client, input json.RawMessa
 		return nil, fmt.Errorf("registries ecr_delete_tags: %w", err)
 	}
 	return map[string]any{"deleted": true, "id": params.ID, "repositoryName": params.RepositoryName}, nil
-}
-
-// repositoryTagsDeleteInput is the parameter shape for registries.repository_tags_delete.
-type repositoryTagsDeleteInput struct {
-	ID             int      `json:"id"`
-	RepositoryName string   `json:"repositoryName"`
-	Tags           []string `json:"tags,omitempty"`
 }
 
 func repositoryTagsDelete(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {

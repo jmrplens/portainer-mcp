@@ -55,7 +55,7 @@ const (
 	// provisioner verify that certificate instead of skipping verification.
 	k8sCAFileEnv = "PORTAINER_E2E_K8S_CA_FILE"
 
-	k8sEndpointName    = "k3d"
+	k8sEndpointName    = harness.EnvironmentK3D
 	k8sEndpointEdition = "Kubernetes"
 
 	// recoverURLEnv names the throwaway server's address that
@@ -121,15 +121,20 @@ func run(kubernetes, releaseLicence, recoverLicence bool) error {
 
 	// The agent is registered only against the Community Edition server: one
 	// second environment is enough to exercise the agent proxy code path, and
-	// Task 8's fixtures target this single endpoint.
+	// Task 8's fixtures target this single endpoint. Recorded under the name
+	// "agent" in ce.Environments (see harness.Server.WithEnvironment) rather
+	// than a dedicated Estate field, so a P3 action taking an environment id
+	// reads it by name instead of hardcoding the number order of creation
+	// happened to give it.
 	agentID, err := harness.CreateEndpoint(context.Background(), client, ceURL, ce.Creds.APIKey,
-		harness.AgentEndpoint("agent", agentHost))
+		harness.AgentEndpoint(harness.EnvironmentAgent, agentHost))
 	if err != nil {
 		return fmt.Errorf("register agent endpoint: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "CE: registered agent endpoint %d\n", agentID)
+	ce = ce.WithEnvironment(harness.EnvironmentAgent, agentID)
 
-	estate := harness.Estate{CE: ce, AgentID: agentID}
+	estate := harness.Estate{CE: ce}
 
 	if licence == "" {
 		fmt.Fprintln(os.Stderr, "no licence supplied: skipping Business Edition provisioning")
@@ -221,7 +226,7 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	}
 
 	endpointID, err := harness.CreateEndpoint(ctx, client, baseURL, creds.APIKey, harness.EndpointSpec{
-		Name:         "docker",
+		Name:         harness.EnvironmentDocker,
 		CreationType: 1,
 		URL:          dindDaemonURL,
 	})
@@ -230,7 +235,11 @@ func provisionServer(ctx context.Context, client *http.Client, edition, baseURL 
 	}
 	fmt.Fprintf(os.Stderr, "%s: registered docker endpoint %d\n", edition, endpointID)
 
-	return harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds, InstanceID: ready.InstanceID}, nil
+	server := harness.Server{Edition: edition, BaseURL: baseURL, Creds: creds, InstanceID: ready.InstanceID}
+	// Recorded under the name "docker" rather than logged and discarded: see
+	// the identical rationale on the agent endpoint in run(), above.
+	server = server.WithEnvironment(harness.EnvironmentDocker, endpointID)
+	return server, nil
 }
 
 // provisionBusinessEdition provisions the Business Edition server and applies
@@ -431,6 +440,18 @@ func runKubernetes(estatePath string) error {
 		return fmt.Errorf("register kubernetes endpoint: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Kubernetes: registered endpoint %d\n", endpointID)
+
+	// Recorded under the name "k3d" rather than logged and discarded, the
+	// same fix as the compose legs' docker endpoint above. Re-saved here,
+	// after the estate already carries the licence-critical fields from the
+	// MergeKubernetes call above: losing this second save to a crash would
+	// only cost re-deriving an id CreateEndpoint would report identically on
+	// a retry, unlike the licence key a crash before the first save could
+	// strand for good.
+	estate = estate.MergeKubernetes(estate.Kubernetes.WithEnvironment(k8sEndpointName, endpointID))
+	if err := estate.SaveTo(estatePath); err != nil {
+		return fmt.Errorf("save estate: %w", err)
+	}
 
 	fmt.Fprintf(os.Stderr, "provisioned kubernetes leg into %s\n", estatePath)
 	return nil
