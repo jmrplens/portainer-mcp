@@ -3,11 +3,14 @@
 // those operations the server does not actually serve.
 //
 // Portainer's specification has already been wrong about Portainer four
-// times in this project's own history — a required header the spec never
-// mentions, a feature the spec claims a deployment target gets for free and
-// does not, a documented mutation that silently does not persist, and a
-// field typed wrong for what it plainly holds — and all four were found by
-// accident. This command exists so the next one is found on purpose, and so
+// times in this project's own history — a header documented as optional that
+// is in fact mandatory (X-Setup-Token, required on an uninitialized instance;
+// an earlier revision of this comment said the spec "never mentions" it,
+// which is not so: both vendored documents declare it, they simply understate
+// it as optional), a feature the spec claims a deployment target gets for
+// free and does not, a documented mutation that silently does not persist,
+// and a field typed wrong for what it plainly holds — and all four were found
+// by accident. This command exists so the next one is found on purpose, and so
 // every one of P3's 46 domain waves checks for it the same way instead of
 // however that wave happens to remember to.
 //
@@ -24,21 +27,51 @@
 // # Why every probe here is safe
 //
 // This audit sends every request — GET, POST, PUT, PATCH, DELETE alike,
-// 441 documented operations including deletes, restores, backups and the
-// Community-to-Business upgrade — with a credential that is not, and will
-// never be, valid for any Portainer (see probeSentinelValue). Measured directly
-// against this project's own live estate before this command was written:
-// an invalid credential is rejected by Portainer's own auth check before any
-// handler's business logic runs, on every verb, including POST
-// /system/upgrade and POST /restore (see task-5-report.md for the full
-// transcript). A route that does not exist never reaches that check at all
-// — the request never resolves to a handler in the first place — so the
-// credential being wrong changes nothing about whether route-absence is
-// detected; it only guarantees that a route which *does* exist can never
-// act on the request. No operation is skipped as "cannot be made safe":
-// this technique covers all of them uniformly. auditLeg additionally proves
-// the mechanism against a route it manufactures and knows is absent
-// (selftestPath) before trusting anything it reports about a real one.
+// including deletes, restores, backups and the Community-to-Business upgrade
+// — with a credential that is not, and will never be, valid for any Portainer
+// (see probeSentinelValue). Two different things make that safe, and it
+// matters which one covers which route. An earlier revision of this comment
+// claimed a single uniform mechanism covered all of them; it does not, and
+// POST /restore — which that revision cited as a worked example — is one of
+// the routes it does not cover.
+//
+// Authenticated routes (the large majority). Measured directly against this
+// project's own live estate: an invalid credential is rejected by Portainer's
+// own auth check before any handler's business logic runs, on every verb.
+// A route that does not exist never reaches that check at all — the request
+// never resolves to a handler in the first place — so the credential being
+// wrong changes nothing about whether route-absence is detected; it only
+// guarantees that a route which *does* exist can never act on the request.
+//
+// PublicAccess routes. The vendored EE document declares 24 operations with
+// no security requirement at all, and CE 12 (see specOperation.Public, which
+// derives this from the document rather than from a list anyone maintains by
+// hand). POST /restore, POST /users/admin/init, POST /auth, POST /system/update,
+// PUT /edge_stacks/{id}/status, both webhook-invoke routes and POST
+// /webhooks/{id} are among them. For these there is no credential check to
+// reject anything: the sentinel is simply ignored and the handler runs. The
+// argument above does not apply to a single one of them.
+//
+// What actually keeps those safe is narrower and conditional: on an
+// *already-initialized* estate, Portainer refuses them for its own reasons —
+// /restore and /users/admin/init both return 400 rather than touching
+// anything, because Portainer will not restore over, or re-initialize, a
+// configured instance. On an uninitialized estate that guard does not exist
+// and a probe would reach real code. Nothing was ever harmed by this audit,
+// but that was a property of the estates it happened to be run against, not
+// of the technique.
+//
+// So the condition is now checked rather than assumed. auditLeg asks
+// GET /users/admin/check (204 when an administrator exists, 404 when none
+// does — the only credential-free, documented way to ask; there is no
+// "Initialized" field anywhere in either specification) and, unless the
+// answer is a clear yes, skips every PublicAccess operation with a named
+// warning on standard error and reports them as unmeasured rather than as
+// served. An unanswerable question counts as "not confirmed".
+//
+// auditLeg additionally proves the detector against a route it manufactures
+// and knows is absent (selftestPath) before trusting anything it reports
+// about a real one.
 //
 // # What this does not check
 //
@@ -130,7 +163,7 @@ func run(w io.Writer, estatePath, specsDir, specVersion string, timeout time.Dur
 	if err != nil {
 		return err
 	}
-	ceResult, err := auditLeg(ctx, "CE", apiBaseURL(estate.CE.BaseURL), ceOps, timeout)
+	ceResult, err := auditLeg(ctx, w, "CE", apiBaseURL(estate.CE.BaseURL), ceOps, timeout)
 	if err != nil {
 		return fmt.Errorf("audit CE leg: %w", err)
 	}
@@ -141,7 +174,7 @@ func run(w io.Writer, estatePath, specsDir, specVersion string, timeout time.Dur
 		if err != nil {
 			return err
 		}
-		eeResult, err := auditLeg(ctx, "EE", apiBaseURL(estate.EE.BaseURL), eeOps, timeout)
+		eeResult, err := auditLeg(ctx, w, "EE", apiBaseURL(estate.EE.BaseURL), eeOps, timeout)
 		if err != nil {
 			return fmt.Errorf("audit EE leg: %w", err)
 		}

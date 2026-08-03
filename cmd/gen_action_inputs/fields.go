@@ -64,36 +64,98 @@ type fieldSpec struct {
 }
 
 // isIdentifierPathParam reports whether name — a path parameter's own OpenAPI
-// name, not yet through goFieldName/bodyJSONTag — looks like a Portainer
+// name, not yet through goFieldName/bodyJSONTag — is shaped like a Portainer
 // resource identifier: it matches case-insensitively on the suffix "id"
 // ("id", "environmentId", "credentialID", "endpoint_id", "containerId",
 // "taskID", "endpointId", "registryId", "endpointID", "serviceId",
-// "stackId", "jobID", "keyID", "repositoryID" — every one of the 285
-// integer path parameters the vendored EE specification declares except
-// three: "state", "rpn" and "repositoryName").
+// "stackId", "jobID", "keyID", "repositoryID").
 //
-// "repositoryName" deliberately does not match despite being declared
-// "integer": EcrDeleteTags's repositoryName is Portainer's own known
-// upstream defect (a resource *name* typed as an integer, not a
-// resource identifier — see registries.go's own doc comment on
-// ecrDeleteTagsInput), so this generator refuses to assume anything about
-// its range rather than mislabel a defect as a guarantee. "state" and "rpn"
-// are ordinary non-identifier integers (a Docker task state code, and Quay's
-// "rpn" toggle) that legitimately accept zero — see
-// TestUnit_IsIdentifierPathParam_AcceptsIdentifiersRejectsCounterexamples,
-// which pins all three exclusions by name, not just the identifiers this
-// matches.
+// This is a general rule about the *name*, and it is only half the decision.
+// It deliberately guarantees nothing on its own about any particular
+// operation: three names never match it at all, and a further four
+// (operationId, parameter) pairs match it but must not carry the lower bound
+// anyway. Those live in pathParamMinimumExceptions below — the single place
+// any carve-out is recorded — and assembleOperationFields consults both. An
+// earlier revision of this comment asserted a positivity guarantee over
+// "every one of the 285 integer path parameters ... except three"; that count
+// was never audited against the containerId trio the exception table now
+// names, so the claim is not restated here. The two tables, not a headline
+// number, are what is actually checked by
+// TestUnit_IsIdentifierPathParam_AcceptsIdentifiersRejectsCounterexamples and
+// the real-operation tests in minimum_test.go.
 //
-// This constraint is this project's own addition, not the specification's:
-// Portainer resource identifiers are always positive integers, a zero or
-// negative one is never a valid route for any of them, and the vendored
-// specification simply never says so — checked against every one of the 285.
-// Refusing a non-positive identifier once, in the published schema (which
-// tools.Execute validates against before any handler runs and before any
-// network call), is both earlier and more uniform than the same guard clause
-// hand-written into every handler that takes one.
+// Three names never match the suffix rule and so need no entry anywhere:
+// "repositoryName" (EcrDeleteTags's — Portainer's own known upstream defect,
+// a resource *name* declared "integer"; see registries.go's doc comment on
+// ecrDeleteTagsInput), and "state" and "rpn", ordinary non-identifier
+// integers (a Docker task state code, and Quay's "rpn" toggle) that
+// legitimately accept zero.
+//
+// The lower bound itself is this project's own addition, not the
+// specification's: a Portainer resource identifier is a positive integer, a
+// zero or negative one is never a valid route for one, and the vendored
+// specification simply never says so. Refusing a non-positive identifier once,
+// in the published schema (which tools.Execute validates against before any
+// handler runs and before any network call), is both earlier and more uniform
+// than the same guard clause hand-written into every handler that takes one.
 func isIdentifierPathParam(name string) bool {
 	return len(name) >= 2 && strings.EqualFold(name[len(name)-2:], "id")
+}
+
+// pathParamKey identifies one path parameter of one operation. A carve-out
+// must be this specific: every name below also occurs on *other* operations
+// where the suffix rule is exactly right, so excluding by name alone would
+// silently drop a real constraint from unrelated routes.
+type pathParamKey struct {
+	OperationID string
+	ParamName   string
+}
+
+// pathParamMinimumExceptions are the (operationId, path parameter) pairs where
+// isIdentifierPathParam's name rule matches but stamping "minimum": 1 would
+// make the published JSON Schema refuse a value the real server accepts — or
+// assert a numeric range over something that is not a number at all. The value
+// is the reason, kept next to the entry so the next reader does not have to
+// re-derive the argument, exactly as actionNameOverrides' Reason field does.
+//
+// Two distinct defects, one mechanism, because they need the identical
+// carve-out at the identical decision point:
+//
+//   - endpointDockerhubStatus's registryId: zero is Portainer's documented
+//     sentinel for the anonymous, unauthenticated DockerHub registry, not an
+//     absent identifier. Portainer's own handler reads
+//     `if registryID == 0 { registry = &portainer.Registry{} }` before any
+//     lookup. Confirmed live: GET /endpoints/1/dockerhub/0 succeeds past the
+//     lookup, while GET /endpoints/1/dockerhub/1 returns "Unable to find a
+//     registry". Zero is the value guaranteed to work, so "minimum": 1 would
+//     refuse the one call that always succeeds. registryId keeps the bound
+//     everywhere else it appears (endpointRegistryAccess, and the registries
+//     domain's own routes), where zero really is invalid.
+//
+//   - containerId on the three operations below: declared "integer" in the
+//     vendored spec, but Portainer reads it as a string and passes it
+//     straight through to Docker as a hex container ID. This is the same
+//     documented-wrong-type defect "repositoryName" is excluded for, and it
+//     was simply never examined when the suffix rule was written. A hex ID is
+//     not reliably parseable as an integer at all, so a numeric lower bound
+//     asserts a guarantee about a value that is not a number; this generator
+//     refuses to mislabel an upstream defect as a constraint.
+var pathParamMinimumExceptions = map[pathParamKey]string{
+	{OperationID: "EndpointDockerhubStatus", ParamName: "registryId"}:     "registryId 0 is Portainer's sentinel for the anonymous DockerHub registry (GET /endpoints/{id}/dockerhub/{registryId}); a positive lower bound would refuse the one value guaranteed to resolve",
+	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/gpus); no numeric bound is meaningful",
+	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/image_status); no numeric bound is meaningful",
+	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/snapshot/containers/{containerId}); no numeric bound is meaningful",
+}
+
+// pathParamTakesMinimum decides whether this generator stamps a positive lower
+// bound on one integer path parameter of one operation: the general name rule,
+// minus any per-operation carve-out recorded above.
+func pathParamTakesMinimum(operationID, paramName string) bool {
+	if !isIdentifierPathParam(paramName) {
+		return false
+	}
+	_, excepted := pathParamMinimumExceptions[pathParamKey{OperationID: operationID, ParamName: paramName}]
+	return !excepted
 }
 
 // jsonTag renders one field's struct tag. required decides omitempty, and
@@ -140,6 +202,16 @@ func isEnumScalar(t string) bool {
 // so wrapping either in a second pointer buys no information and only adds
 // an extra indirection a handler must peel off.
 func typeOf(node *schemaNode, required bool, namePrefix string, structs *[]structSpec) (string, error) {
+	// A node the resolver truncated stands for the cut edge of a genuine $ref
+	// cycle (see resolve's doc comment). There is no Go type for it: emitting
+	// the empty struct its zero properties would otherwise produce would
+	// silently drop every field beyond the cut. No request body in either
+	// vendored spec is cyclic today, so this refuses rather than models it.
+	if node.TruncatedRef != "" {
+		return "", fmt.Errorf(
+			"schema is cyclic through %s: a request-shaped Go type cannot represent it, and truncating would silently drop every property past the cycle",
+			node.TruncatedRef)
+	}
 	switch node.Type {
 	case "string":
 		if required {
@@ -388,7 +460,7 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			f.Enum = node.Enum
 			f.EnumScalarType = node.Type
 		}
-		if in == "path" && node.Type == "integer" && isIdentifierPathParam(name) {
+		if in == "path" && node.Type == "integer" && pathParamTakesMinimum(op.OperationID, name) {
 			one := 1
 			f.Minimum = &one
 		}

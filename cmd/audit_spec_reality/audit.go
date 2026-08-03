@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"sync"
@@ -51,6 +52,13 @@ type legResult struct {
 	// Divergent lists every operation classified as an absent route, sorted
 	// by OperationID for a deterministic report.
 	Divergent []legDivergence
+	// SkippedPublic lists the public (PublicAccess) operations this leg
+	// refused to probe because it could not confirm the estate is already
+	// initialized. Reported distinctly from Divergent and ProbeErrors: an
+	// operation that was never probed is not evidence of anything, and
+	// counting it as "served" would silently understate the divergence
+	// total.
+	SkippedPublic []string
 	// ProbeErrors lists operations whose probe could not complete at all
 	// (a transport failure — a closed connection, a timeout). These are
 	// reported distinctly from Divergent: a probe that never got an answer
@@ -67,7 +75,7 @@ type legResult struct {
 // as an absent route: see selftestPath's own doc comment for why. This is
 // the same order cmd/audit_1to1 uses for its allow-list validation — verify
 // the mechanism itself is trustworthy before trusting anything it reports.
-func auditLeg(ctx context.Context, legName, baseURL string, ops map[string]specOperation, timeout time.Duration) (legResult, error) {
+func auditLeg(ctx context.Context, warnings io.Writer, legName, baseURL string, ops map[string]specOperation, timeout time.Duration) (legResult, error) {
 	client := &http.Client{}
 
 	selftest, err := probe(ctx, client, timeout, http.MethodGet, baseURL, selftestPath)
@@ -80,6 +88,26 @@ func auditLeg(ctx context.Context, legName, baseURL string, ops map[string]specO
 			legName, selftestPath, selftest.StatusCode, len(ops))
 	}
 
+	// The safety pre-check. Most routes are safe to probe because Portainer
+	// rejects the sentinel credential before any handler runs; a PublicAccess
+	// route has no credential check to reject it with, so that argument does
+	// not cover it (see this command's package doc). What makes probing those
+	// safe today is that an already-initialized Portainer refuses them for its
+	// own reasons — /restore and /users/admin/init both return 400 rather than
+	// touching anything. On an uninitialized instance neither guard exists, so
+	// unless initialization is positively confirmed, the public routes are not
+	// probed at all.
+	//
+	// "Not confirmed" covers both a clear no and an unanswerable question: an
+	// audit that cannot establish the estate is safe to probe must not probe
+	// it and hope.
+	initialized, initErr := estateInitialized(ctx, client, timeout, baseURL)
+	if initErr != nil {
+		_, _ = fmt.Fprintf(warnings, "%s: WARNING: could not confirm this estate is initialized (%v); skipping every PublicAccess route\n", legName, initErr)
+	} else if !initialized {
+		_, _ = fmt.Fprintf(warnings, "%s: WARNING: this estate reports no administrator account, so it is not initialized; skipping every PublicAccess route\n", legName)
+	}
+
 	names := make([]string, 0, len(ops))
 	for name := range ops {
 		names = append(names, name)
@@ -87,6 +115,22 @@ func auditLeg(ctx context.Context, legName, baseURL string, ops map[string]specO
 	sort.Strings(names)
 
 	result := legResult{Leg: legName, Total: len(ops)}
+	if !initialized {
+		var probeable []string
+		for _, name := range names {
+			if ops[name].Public {
+				op := ops[name]
+				result.SkippedPublic = append(result.SkippedPublic,
+					fmt.Sprintf("%s (%s %s)", op.OperationID, op.Method, op.Path))
+				continue
+			}
+			probeable = append(probeable, name)
+		}
+		names = probeable
+		if len(result.SkippedPublic) > 0 {
+			_, _ = fmt.Fprintf(warnings, "%s: %d PublicAccess operation(s) were not probed\n", legName, len(result.SkippedPublic))
+		}
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, probeConcurrency)
@@ -125,6 +169,7 @@ func auditLeg(ctx context.Context, legName, baseURL string, ops map[string]specO
 		return result.Divergent[i].OperationID < result.Divergent[j].OperationID
 	})
 	sort.Strings(result.ProbeErrors)
+	sort.Strings(result.SkippedPublic)
 
 	return result, nil
 }

@@ -115,3 +115,48 @@ func probe(ctx context.Context, client *http.Client, timeout time.Duration, meth
 		RouteAbsent: isRouteAbsent(resp.StatusCode, data),
 	}, nil
 }
+
+// adminCheckPath is the one route this audit calls for a reason other than
+// probing: Portainer answers it 204 when an administrator account already
+// exists and 404 when none does. There is no "Initialized" field anywhere in
+// either vendored specification — GET /system/status returns only Version and
+// InstanceID — so this status-only route is the sole documented, credential-
+// free way to ask whether an instance has been set up.
+const adminCheckPath = "/users/admin/check"
+
+// estateInitialized reports whether the server at baseURL already has an
+// administrator account.
+//
+// It is deliberately three-valued in effect: (true, nil) when the server said
+// 204, (false, nil) when it said 404, and (false, err) when the question could
+// not be answered at all. A caller must treat the error case as "not
+// confirmed", never as "initialized" — see auditLeg, which skips the public
+// routes on anything but a clear yes.
+//
+// Unlike every other request this command makes, this one carries no
+// credential: the route is itself public, and sending the sentinel would only
+// invite Portainer to reject the request before answering the question.
+func estateInitialized(ctx context.Context, client *http.Client, timeout time.Duration, baseURL string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+adminCheckPath, nil)
+	if err != nil {
+		return false, fmt.Errorf("build admin-check request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("admin-check request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("admin-check returned status %d, which answers neither yes nor no", resp.StatusCode)
+	}
+}

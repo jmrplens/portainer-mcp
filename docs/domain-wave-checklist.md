@@ -10,6 +10,10 @@ not saving time; it is choosing not to look for the next one.
 Nothing in Steps 1-5 is optional. Step 6 (moving the coverage ratchet) is
 mechanical but must land in the same commit as the domain, never a follow-up.
 
+Every divergence found so far is catalogued in `docs/api-divergences.md`.
+Read your domain's entries there before Step 1; that is also where this
+wave's own findings are recorded, in Step 6.
+
 ## Step 1 — Generate
 
 1. Create `internal/tools/<domain>/<domain>.go` if the domain package does
@@ -103,9 +107,10 @@ Portainer, not a defect in this project's code, so a clean `make check` next
 to a non-empty divergence list is the expected, correct outcome. Read the
 report anyway, every wave, not only the first time — a divergence
 `audit_spec_reality` finds for an operation this wave is about to expose as
-an action is exactly the kind of thing to record in Step 5's carry-forward
-entry and reflect in the action's own narrative, rather than discover only
-once a user reports the tool call is "broken".
+an action is exactly the kind of thing to record in
+`docs/api-divergences.md` (Step 6) and reflect in the action's own
+narrative, rather than discover only once a user reports the tool call is
+"broken".
 
 ## Step 5 — Exercise every new action on all three surfaces
 
@@ -128,12 +133,33 @@ unreferenced is a real gap in this step, not a tool defect).
 
 ## Step 6 — Record divergences and move the ratchet, in the same commit
 
-1. Append a dated entry to `plan/carry-forward.md` for anything this wave's
-   Steps 2-5 found and did not fully resolve on the spot: an
-   `audit_spec_reality` divergence touching this wave's domain, a generated
-   vs. hand-written disagreement whose resolution future waves should know
-   about, an override this wave added and why. Follow the existing entries'
-   shape — dated, specific, reasoned — not a bare bullet list.
+1. Record what this wave's Steps 2-5 found, in whichever of two files it
+   belongs to. The division of labour is fixed, not a matter of taste:
+
+   - **`docs/api-divergences.md` — committed, permanent, the destination.**
+     Every settled fact about Portainer disagreeing with the documents that
+     describe it goes here: an `audit_spec_reality` divergence touching this
+     wave's domain, a documented route that answers but does not behave as
+     documented, an undocumented or understated required header or field, a
+     response that leaks a secret, a defect in the vendored specification
+     itself. Follow that file's own conventions — an evidence label on
+     every claim (probed live / vendored spec / diagnosed), and an entry in
+     its "Open questions" section for anything measured but not explained,
+     rather than a guess written as fact. The test is simple: if a
+     contributor implementing a different domain later would need the fact
+     and could not derive it themselves, it goes here, in this wave's own
+     commit.
+   - **`plan/carry-forward.md` — gitignored, a working scratch pad, never a
+     destination.** In-progress reasoning that is not yet settled enough to
+     distil: raw probe transcripts, hypotheses still being tested, a
+     generated vs. hand-written disagreement whose resolution is still open,
+     an override this wave added and why, decisions deferred to a later
+     phase, notes about this project's own code rather than about Portainer.
+     Follow the existing entries' shape — dated, specific, reasoned — not a
+     bare bullet list. Before the wave ends, anything here that a later wave
+     would need must be distilled into `docs/api-divergences.md`: this file
+     is gitignored, cannot be committed, and should be assumed to be one
+     fresh clone away from not existing.
 2. Update `api/coverage-baseline.yaml`'s `ce_covered`/`ee_covered` to the new
    counts `make audit-1to1` (or `make audit-1to1-ratchet`) reports. Never
    lower either number — that would hide a regression instead of catching
@@ -144,7 +170,10 @@ unreferenced is a real gap in this step, not a tool defect).
 3. Confirm `make audit-1to1-ratchet` (what CI actually gates on) and
    `make check` are both green before committing.
 
-Commit the domain's hand-written file(s), its `*.gen.go` output, the
-carry-forward entry and the ratchet update together. A wave that splits
-these across commits makes it possible for the ratchet to move without the
-carry-forward entry that explains what changed, or vice versa.
+Commit the domain's hand-written file(s), its `*.gen.go` output, any
+`docs/api-divergences.md` entry and the ratchet update together. A wave that
+splits these across commits makes it possible for the ratchet to move
+without the divergence entry that explains what changed, or vice versa.
+(`plan/carry-forward.md` is gitignored and is never part of this commit —
+that is precisely why anything permanent has to be distilled out of it
+first.)

@@ -62,7 +62,7 @@ func TestUnit_ResponseCredentialFields_TagList_FindsNone(t *testing.T) {
 func TestUnit_CheckCredentialRedaction_NoWrapperDeclared_RefusesNamingOperationAndField(t *testing.T) {
 	t.Parallel()
 	op, _, res := realOperation(t, "RegistryCreate")
-	_, err := checkCredentialRedaction(op, res, map[string]bool{})
+	_, err := checkCredentialRedaction(op, res, map[string]bool{}, false)
 	if err == nil {
 		t.Fatal("checkCredentialRedaction() = nil error, want a refusal: RegistryCreate's response can carry a credential and no wrapper is declared")
 	}
@@ -82,7 +82,7 @@ func TestUnit_CheckCredentialRedaction_WrapperDeclared_ReturnsItsName(t *testing
 	t.Parallel()
 	op, _, res := realOperation(t, "RegistryCreate")
 	funcNames := map[string]bool{"redactRegistryCreate": true}
-	wrapper, err := checkCredentialRedaction(op, res, funcNames)
+	wrapper, err := checkCredentialRedaction(op, res, funcNames, false)
 	if err != nil {
 		t.Fatalf("checkCredentialRedaction() error = %v, want nil once the wrapper is declared", err)
 	}
@@ -97,7 +97,7 @@ func TestUnit_CheckCredentialRedaction_ResponseHasNoCredential_NeedsNoWrapper(t 
 	// funcNames map must not be treated as "missing a required wrapper" for
 	// an operation that never needed one.
 	op, _, res := realOperation(t, "TagList")
-	wrapper, err := checkCredentialRedaction(op, res, map[string]bool{})
+	wrapper, err := checkCredentialRedaction(op, res, map[string]bool{}, false)
 	if err != nil {
 		t.Fatalf("checkCredentialRedaction() error = %v, want nil: TagList's response carries nothing credential-shaped", err)
 	}
@@ -237,7 +237,7 @@ func TestUnit_GeneratedHandler_CredentialResponse_CallsRedactionWrapper(t *testi
 	if err != nil {
 		t.Fatalf("assembleOperationFields() error = %v", err)
 	}
-	redactWith, err := checkCredentialRedaction(op, res, map[string]bool{"redactRegistryCreate": true})
+	redactWith, err := checkCredentialRedaction(op, res, map[string]bool{"redactRegistryCreate": true}, false)
 	if err != nil {
 		t.Fatalf("checkCredentialRedaction() error = %v", err)
 	}
@@ -265,5 +265,49 @@ func TestUnit_GeneratedHandler_CredentialResponse_CallsRedactionWrapper(t *testi
 	}
 	if !strings.Contains(got, "my-registry") {
 		t.Errorf("generated handler result = %s, want the non-credential field preserved", got)
+	}
+}
+
+// TestUnit_ResponseCredentialFields_AuthOperationsFlagTheirJWT is C2's
+// evidence, taken against the real vendored specification rather than a
+// fixture.
+//
+// AuthenticateUser (POST /auth) and ValidateOAuth (POST /auth/oauth/validate)
+// both answer {"jwt": "..."} on success — a session bearer token. Before "jwt"
+// joined toolutil.credentialFieldMarkers, neither operation flagged anything
+// at all: none of "password", "token", "secret", "key", "credential" or
+// "cert" appears in the property name, so a generated handler for either
+// would have been emitted bare and handed the token straight to a model.
+//
+// The auth domain has no package under internal/tools yet — P3's later waves
+// own that — so this deliberately checks the resolved response schema
+// directly rather than building a domain, which is the earliest point the
+// defect is observable.
+func TestUnit_ResponseCredentialFields_AuthOperationsFlagTheirJWT(t *testing.T) {
+	t.Parallel()
+	for _, operationID := range []string{"AuthenticateUser", "ValidateOAuth"} {
+		t.Run(operationID, func(t *testing.T) {
+			t.Parallel()
+			op, _, res := realOperation(t, operationID)
+			fields, err := responseCredentialFields(op, res)
+			if err != nil {
+				t.Fatalf("responseCredentialFields(%s) error = %v", operationID, err)
+			}
+			var found bool
+			for _, f := range fields {
+				if strings.HasSuffix(f, ".jwt") {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("responseCredentialFields(%s) = %v, want it to flag the \"jwt\" session token", operationID, fields)
+			}
+
+			// And the guard that follows from it: with no redaction wrapper
+			// declared, generation must refuse rather than emit a bare handler.
+			if _, err := checkCredentialRedaction(op, res, map[string]bool{}, false); err == nil {
+				t.Errorf("checkCredentialRedaction(%s) = nil error, want a refusal naming redact%s", operationID, operationID)
+			}
+		})
 	}
 }

@@ -737,3 +737,70 @@ func TestUnit_PathOrder_MatchesDeclarationOrderNotAlphabeticalOrder(t *testing.T
 		t.Errorf("pathOrder = %q, want %q (URL declaration order, not alphabetical)", got, want)
 	}
 }
+
+// pathTemplateParams returns the path parameter names in the order the path
+// template itself declares them, e.g. "/endpoints/{id}/dockerhub/{registryId}"
+// -> ["id", "registryId"]. Derived from the path string, entirely
+// independently of assembleOperationFields, which reads op.Parameters instead.
+func pathTemplateParams(path string) []string {
+	var out []string
+	for {
+		open := strings.Index(path, "{")
+		if open < 0 {
+			return out
+		}
+		closeIdx := strings.Index(path[open:], "}")
+		if closeIdx < 0 {
+			return out
+		}
+		out = append(out, path[open+1:open+closeIdx])
+		path = path[open+closeIdx:]
+	}
+}
+
+// TestUnit_AssembleOperationFields_PathOrderMatchesTheRouteAcrossTheWholeSpec
+// pins the invariant every generated handler silently depends on: pathOrder
+// drives buildHandlerSpec's positional arguments to the generated client, so
+// if it ever disagreed with the order the route actually declares its
+// segments in, two same-typed identifiers would be passed to the wrong
+// positions — a request to the wrong resource, with no type error and no
+// runtime error, only the wrong answer.
+//
+// assembleOperationFields builds pathOrder by walking op.Parameters in
+// declaration order, which is a different source from the path template this
+// test parses. They agree for all 441 operations today; nothing enforced that
+// until now.
+func TestUnit_AssembleOperationFields_PathOrderMatchesTheRouteAcrossTheWholeSpec(t *testing.T) {
+	t.Parallel()
+	doc, paths, err := loadDocument("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("loadDocument() error = %v", err)
+	}
+	byTag, err := operationsByDomain(paths)
+	if err != nil {
+		t.Fatalf("operationsByDomain() error = %v", err)
+	}
+	res := &resolver{doc: doc}
+
+	checked := 0
+	for _, ops := range byTag {
+		for _, op := range ops {
+			var nested []structSpec
+			_, pathOrder, err := assembleOperationFields(op, res, doc, "probe", &nested)
+			if err != nil {
+				// A refusal is this generator's documented behaviour for the
+				// shapes it will not guess at; it says nothing about ordering.
+				continue
+			}
+			want := pathTemplateParams(op.Path)
+			if strings.Join(pathOrder, ",") != strings.Join(want, ",") {
+				t.Errorf("%s %s (operationId %s): pathOrder = %v, want %v (the order the route declares)",
+					op.Method, op.Path, op.OperationID, pathOrder, want)
+			}
+			checked++
+		}
+	}
+	if checked < 400 {
+		t.Errorf("only %d operations were checked; the assertion is not covering the specification", checked)
+	}
+}

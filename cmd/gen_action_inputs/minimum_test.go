@@ -78,6 +78,147 @@ func TestUnit_AssembleOperationFields_EdgeConfigState_MarksIDNotState(t *testing
 	}
 }
 
+// minimumByJSONName runs assembleOperationFields against a real operation from
+// the vendored spec and returns each field's Minimum by wire name, so the
+// per-operation carve-out tests below read as one assertion per parameter
+// rather than repeating the same six lines of setup.
+func minimumByJSONName(t *testing.T, operationID string) map[string]*int {
+	t.Helper()
+	op, doc, res := realOperation(t, operationID)
+	var nested []structSpec
+	fields, _, err := assembleOperationFields(op, res, doc, operationID+"Input", &nested)
+	if err != nil {
+		t.Fatalf("assembleOperationFields(%s) error = %v", operationID, err)
+	}
+	out := make(map[string]*int, len(fields))
+	for _, f := range fields {
+		out[f.JSONName] = f.Minimum
+	}
+	return out
+}
+
+// TestUnit_AssembleOperationFields_DockerhubStatus_RegistryIDKeepsNoMinimum is
+// I3's real-operation proof. registryId matches isIdentifierPathParam's suffix
+// rule, and on every other operation that is correct — but on
+// endpointDockerhubStatus, zero is Portainer's documented sentinel for the
+// anonymous DockerHub registry and is the one value guaranteed to resolve.
+// The endpoint "id" alongside it must still carry the bound, so this fails
+// whichever way the carve-out is got wrong: too broad (id loses its minimum)
+// or too narrow (registryId keeps one).
+func TestUnit_AssembleOperationFields_DockerhubStatus_RegistryIDKeepsNoMinimum(t *testing.T) {
+	t.Parallel()
+	minimums := minimumByJSONName(t, "EndpointDockerhubStatus")
+
+	registryID, ok := minimums["registryId"]
+	if !ok {
+		t.Fatal(`field "registryId" not found`)
+	}
+	if registryID != nil {
+		t.Errorf(`"registryId".Minimum = %d, want nil: 0 is the anonymous-DockerHub sentinel and must stay callable`, *registryID)
+	}
+
+	id, ok := minimums["id"]
+	if !ok {
+		t.Fatal(`field "id" not found`)
+	}
+	if id == nil || *id != 1 {
+		t.Errorf(`"id".Minimum = %v, want a pointer to 1: the environment identifier is unaffected by registryId's carve-out`, id)
+	}
+}
+
+// TestUnit_AssembleOperationFields_RegistryIDKeepsItsMinimumElsewhere is the
+// control for the test above: the carve-out is keyed by (operationId,
+// parameter), not by parameter name, so the very same "registryId" on a
+// different operation must still be refused at zero. Without this, deleting
+// the operationId from the exception key and excluding registryId everywhere
+// would pass the test above unnoticed.
+func TestUnit_AssembleOperationFields_RegistryIDKeepsItsMinimumElsewhere(t *testing.T) {
+	t.Parallel()
+	minimums := minimumByJSONName(t, "EndpointRegistryAccess")
+
+	registryID, ok := minimums["registryId"]
+	if !ok {
+		t.Fatal(`field "registryId" not found`)
+	}
+	if registryID == nil || *registryID != 1 {
+		t.Errorf(`"registryId".Minimum = %v, want a pointer to 1: only endpointDockerhubStatus's registryId is excepted`, registryID)
+	}
+}
+
+// TestUnit_AssembleOperationFields_ContainerID_TakesNoMinimum is I4's
+// real-operation proof, across all three operations that declare a Docker hex
+// container ID as "integer". environmentId sits next to containerId on every
+// one of them and must keep its bound, so each case checks both directions on
+// the same operation.
+func TestUnit_AssembleOperationFields_ContainerID_TakesNoMinimum(t *testing.T) {
+	t.Parallel()
+	for _, operationID := range []string{
+		"DockerContainerGpusInspect",
+		"ContainerImageStatus",
+		"SnapshotContainerInspect",
+	} {
+		t.Run(operationID, func(t *testing.T) {
+			t.Parallel()
+			minimums := minimumByJSONName(t, operationID)
+
+			containerID, ok := minimums["containerId"]
+			if !ok {
+				t.Fatal(`field "containerId" not found`)
+			}
+			if containerID != nil {
+				t.Errorf(`"containerId".Minimum = %d, want nil: Portainer passes this through to Docker as a hex string, so no numeric bound is meaningful`, *containerID)
+			}
+
+			environmentID, ok := minimums["environmentId"]
+			if !ok {
+				t.Fatal(`field "environmentId" not found`)
+			}
+			if environmentID == nil || *environmentID != 1 {
+				t.Errorf(`"environmentId".Minimum = %v, want a pointer to 1: only containerId is excepted on this operation`, environmentID)
+			}
+		})
+	}
+}
+
+// TestUnit_PathParamMinimumExceptions_EveryEntryMatchesARealOperation keeps the
+// carve-out table honest against the vendored spec, the same way
+// TestUnit_ActionNameOverrides_EveryEntryMatchesARealOperation keeps
+// actionNameOverrides honest. An entry naming an operationId the spec does not
+// have, or a parameter that operation does not declare as an integer path
+// parameter, is a carve-out protecting nothing — and it would silently outlive
+// whatever respec made it stale.
+func TestUnit_PathParamMinimumExceptions_EveryEntryMatchesARealOperation(t *testing.T) {
+	t.Parallel()
+	for key, reason := range pathParamMinimumExceptions {
+		if reason == "" {
+			t.Errorf("%s/%s: exception has no reason recorded", key.OperationID, key.ParamName)
+		}
+		if !isIdentifierPathParam(key.ParamName) {
+			t.Errorf("%s/%s: parameter does not match isIdentifierPathParam, so it would never have taken a minimum and needs no exception",
+				key.OperationID, key.ParamName)
+		}
+
+		op, _, _ := realOperation(t, key.OperationID)
+		var found bool
+		for _, param := range op.Parameters {
+			name, _ := param["name"].(string)
+			in, _ := param["in"].(string)
+			if name != key.ParamName || in != "path" {
+				continue
+			}
+			found = true
+			schema, _ := param["schema"].(map[string]any)
+			if schema == nil || schema["type"] != "integer" {
+				t.Errorf("%s/%s: path parameter is not declared \"integer\" (schema %v), so no minimum would be stamped and the exception is dead",
+					key.OperationID, key.ParamName, schema)
+			}
+		}
+		if !found {
+			t.Errorf("%s/%s: operation declares no path parameter by that name; remove this stale entry", key.OperationID, key.ParamName)
+		}
+	}
+}
+
 // --- two-direction proof at the schema/validation level: a generator that
 // stamped "minimum": 1 on every integer path parameter, identifier or not,
 // would still pass a test that only checked the identifier is refused at

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
@@ -92,7 +93,15 @@ func credentialShapedFieldPaths(node *schemaNode, path string, depth int) []stri
 	var out []string
 	for _, p := range node.Properties {
 		fieldPath := path + "." + p.Name
-		if toolutil.IsCredentialShapedName(p.Name) {
+		// Shape-aware: the resolved node carries the property's own JSON
+		// Schema type, which is what rules out a boolean toggle or a
+		// timestamp whose name happens to contain a marker word. See
+		// toolutil.IsCredentialShapedField for the measured justification.
+		shape := toolutil.ShapeUnknown
+		if p.Schema != nil {
+			shape = toolutil.FieldShapeOfJSONType(p.Schema.Type)
+		}
+		if toolutil.IsCredentialShapedField(p.Name, shape) {
 			out = append(out, fieldPath)
 		}
 		out = append(out, credentialShapedFieldPaths(p.Schema, fieldPath, depth+1)...)
@@ -106,6 +115,21 @@ func credentialShapedFieldPaths(node *schemaNode, path string, depth int) []stri
 	return out
 }
 
+// errResponseSchemaUnresolvable marks the one failure mode that must not
+// abort the whole run: op's success-response schema could not be resolved at
+// all, so whether it carries a credential is unknown.
+//
+// "Unknown" is still a refusal — this generator never emits a handler it
+// cannot prove is safe — but it is a refusal about *one operation*, and
+// run()'s domain loop treats it as such: the domain containing it is left
+// unwritten and named, every other domain is generated normally, and the
+// command still exits non-zero. Before this distinction existed, a single
+// unresolvable schema returned a plain error that run() propagated
+// immediately, so one defect in one operation stopped all 46 domain
+// directories from regenerating and turned CI's regeneration-freshness check
+// red for the entire repository.
+var errResponseSchemaUnresolvable = errors.New("success response schema could not be resolved")
+
 // responseCredentialFields resolves every success-response schema op
 // declares and returns the sorted, de-duplicated union of every
 // credential-shaped field path reachable in any of them, or nil when none
@@ -116,7 +140,7 @@ func responseCredentialFields(op operation, res *resolver) ([]string, error) {
 	for _, raw := range successResponseSchemas(op) {
 		node, err := res.resolve(raw, 0)
 		if err != nil {
-			return nil, fmt.Errorf("response schema: %w", err)
+			return nil, fmt.Errorf("%w: %w", errResponseSchemaUnresolvable, err)
 		}
 		for _, path := range credentialShapedFieldPaths(node, op.OperationID, 0) {
 			if !seen[path] {
@@ -163,9 +187,32 @@ func redactionWrapperName(operationID string) string {
 // registries.go's own redact, which also drops TLSConfig wholesale rather
 // than field by field), not something this generator can decide from a
 // schema alone.
-func checkCredentialRedaction(op operation, res *resolver, funcNames map[string]bool) (string, error) {
+// # Overridden operations
+//
+// This check runs for every operation, including one a domain already covers
+// with its own hand-written handler. It used to run only for operations this
+// generator was about to emit code for, because run()'s loop skipped past it
+// the moment overrideReason reported a hand-written handler — which meant the
+// one escape hatch from generation was also an escape hatch from the guard,
+// reproducing P2's original defect (registries' hand-written create/inspect/
+// update returning Password and AccessToken unredacted) in the exact code path
+// built to make it impossible.
+//
+// The generator cannot inspect arbitrary hand-written code to confirm it
+// scrubs anything, so it requires the domain to *state* that it does, using
+// the same convention a generated handler already follows: a function named
+// redactionWrapperName(op.OperationID). For an overridden operation that
+// function is not dead weight — the hand-written handler is expected to call
+// it, which is what makes the statement true rather than merely present. The
+// generated reflective-guard test (see render.go) is what then checks the
+// wrapper actually removes the fields, so a pass-through cannot satisfy this
+// by name alone.
+func checkCredentialRedaction(op operation, res *resolver, funcNames map[string]bool, overridden bool) (string, error) {
 	fields, err := responseCredentialFields(op, res)
 	if err != nil {
+		// Wrapped, not reformatted: run() distinguishes
+		// errResponseSchemaUnresolvable from an ordinary refusal and must
+		// still be able to see it through this layer.
 		return "", fmt.Errorf("%s: %w", op.OperationID, err)
 	}
 	if len(fields) == 0 {
@@ -173,6 +220,13 @@ func checkCredentialRedaction(op operation, res *resolver, funcNames map[string]
 	}
 	wrapper := redactionWrapperName(op.OperationID)
 	if !funcNames[wrapper] {
+		if overridden {
+			return "", fmt.Errorf(
+				"%s: success response can carry credential-shaped field(s) %v, and this operation is covered by a hand-written handler this generator cannot inspect; "+
+					"declare func %s(<the response's success-field type>) any in this domain's own hand-written file and call it from that handler, "+
+					"which is how a hand-written handler states that it redacts (see internal/tools/registries's redact/redactList for the pattern)",
+				op.OperationID, fields, wrapper)
+		}
 		return "", fmt.Errorf(
 			"%s: success response can carry credential-shaped field(s) %v; "+
 				"declare func %s(<the response's success-field type>) any in this domain's own hand-written file before generating "+

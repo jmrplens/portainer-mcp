@@ -162,6 +162,101 @@ func TestActionName_NoCollisionAcrossTheEntireSpecification(t *testing.T) {
 	}
 }
 
+// actionNameCollisions resolves every operation in ops through the same
+// override-first-then-mechanical rule ResolveActionName applies, against the
+// supplied override table, and returns one message per name produced by more
+// than one operationId.
+//
+// Taking the table as a parameter is what makes the test below discriminating
+// rather than vacuous: the same scan runs over the real table (which must be
+// clean) and over a synthetic table that reintroduces a known collision (which
+// must be caught). A scan that could only ever see the real table would report
+// "no collisions" just as convincingly if it compared nothing at all.
+func actionNameCollisions(t *testing.T, overrides map[string]actionNameOverride, ops []namedOperation) []string {
+	t.Helper()
+	type source struct {
+		domain, operationID string
+		overridden          bool
+	}
+	seen := make(map[string]source, len(ops))
+	var collisions []string
+	for _, op := range ops {
+		name, err := resolveActionName(overrides, op.Domain, op.OperationID)
+		if err != nil {
+			// Still a refusal for a same-as-prefix operationId with no
+			// override yet — expected, and not a collision. Unlike the
+			// ActionName-only test this one cannot quietly excuse an
+			// *overridden* operation, because an override always resolves.
+			continue
+		}
+		_, overridden := overrides[op.OperationID]
+		if prior, dup := seen[name]; dup {
+			collisions = append(collisions, fmt.Sprintf(
+				"%q is produced by both %s.%s (overridden=%t) and %s.%s (overridden=%t)",
+				name, op.Domain, op.OperationID, overridden,
+				prior.domain, prior.operationID, prior.overridden))
+			continue
+		}
+		seen[name] = source{domain: op.Domain, operationID: op.OperationID, overridden: overridden}
+	}
+	sort.Strings(collisions)
+	return collisions
+}
+
+// TestUnit_ResolveActionName_NoCollisionAcrossTheEntireSpecification is the
+// check TestActionName_NoCollisionAcrossTheEntireSpecification above
+// structurally cannot make. That test calls ActionName directly, so an
+// entry in actionNameOverrides is invisible to it twice over: the override's
+// *produced* name is never computed, and the override's *source* operationId
+// is exactly one of the same-as-prefix refusals it skips with a t.Logf. Every
+// domain generator calls ResolveActionName, not ActionName, so the names that
+// actually reach actioncatalog.Build were going unchecked.
+//
+// That was not hypothetical. The "TeamMemberships" override (GET
+// /teams/{id}/memberships) was hand-picked as "team_memberships.list", which
+// is byte-identical to the name ActionName mechanically mints for the
+// different operationId TeamMembershipList (GET /team_memberships). Two
+// actions, one name, and actioncatalog.Build refuses duplicates — a build
+// failure at wave time naming neither culprit.
+func TestUnit_ResolveActionName_NoCollisionAcrossTheEntireSpecification(t *testing.T) {
+	t.Parallel()
+	ops := allOperations(t)
+	if len(ops) != 441 {
+		t.Fatalf("allOperations() returned %d operations, want 441 (the vendored EE spec's real total)", len(ops))
+	}
+	for _, collision := range actionNameCollisions(t, actionNameOverrides, ops) {
+		t.Error(collision)
+	}
+}
+
+// TestUnit_ResolveActionName_CollisionCheckCatchesAnOverrideShadowingAMechanicalName
+// is the other half of the proof: it reintroduces the exact defect described
+// above in a synthetic override table and requires the scan to catch it. Both
+// tests are needed. The first alone would pass against a scan with the very
+// blind spot this pair exists to close; this one alone would pass against a
+// real table that still collides.
+func TestUnit_ResolveActionName_CollisionCheckCatchesAnOverrideShadowingAMechanicalName(t *testing.T) {
+	t.Parallel()
+	ops := allOperations(t)
+
+	synthetic := map[string]actionNameOverride{
+		"TeamMemberships": {
+			Domain: "team_memberships",
+			Name:   "team_memberships.list", // the pre-fix name: collides with TeamMembershipList's mechanical one
+			Reason: "synthetic: reproduces the collision C1 found, so the scan above is proven to detect it",
+		},
+	}
+	collisions := actionNameCollisions(t, synthetic, ops)
+	if len(collisions) == 0 {
+		t.Fatal("actionNameCollisions() found nothing against a table that reintroduces the TeamMemberships/TeamMembershipList collision; the scan is not comparing override names against mechanical ones")
+	}
+	for _, c := range collisions {
+		if !strings.Contains(c, "team_memberships.list") {
+			t.Errorf("unexpected collision %q; want the synthetic TeamMemberships one", c)
+		}
+	}
+}
+
 // TestActionName_LocalPartIsNeverEmpty is the synthetic edge the brief
 // specifies directly: an operationID identical to its domain's own prefix
 // leaves nothing after stripping. ActionSpec.Validate would refuse an empty

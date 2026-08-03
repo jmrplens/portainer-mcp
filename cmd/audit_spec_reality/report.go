@@ -23,6 +23,15 @@ func buildReport(results []legResult) string {
 
 		fmt.Fprintf(&b, "\n%s leg: %d documented operation(s) probed\n", r.Leg, r.Total)
 
+		if len(r.SkippedPublic) > 0 {
+			fmt.Fprintf(&b, "  %d PublicAccess operation(s) were NOT probed: this estate could not be confirmed\n", len(r.SkippedPublic))
+			fmt.Fprintln(&b, "  initialized, and a public route has no credential check to make probing it safe.")
+			fmt.Fprintln(&b, "  These are neither served nor divergent — they are unmeasured:")
+			for _, s := range r.SkippedPublic {
+				fmt.Fprintf(&b, "    - %s\n", s)
+			}
+		}
+
 		if len(r.ProbeErrors) > 0 {
 			fmt.Fprintf(&b, "  %d probe(s) could not run at all (transport error, not a divergence):\n", len(r.ProbeErrors))
 			for _, e := range r.ProbeErrors {

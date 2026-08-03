@@ -584,8 +584,10 @@ var actionNameOverrides = map[string]actionNameOverride{
 	},
 	"TeamMemberships": {
 		Domain: "team_memberships",
-		Name:   "team_memberships.list",
-		Reason: "operationId equals domain \"team_memberships\"'s own prefix exactly (GET /team_memberships, alongside the singular TeamMembership* actions); ActionName refuses rather than emit \"team_memberships.team_memberships\"",
+		Name:   "team_memberships.list_for_team",
+		Reason: "operationId equals domain \"team_memberships\"'s own prefix exactly (GET /teams/{id}/memberships, the memberships of one team); ActionName refuses rather than emit \"team_memberships.team_memberships\". " +
+			"The name is \"list_for_team\", not the shorter \"list\", because \"team_memberships.list\" is already the name ActionName mechanically mints for the *different* operationId TeamMembershipList (GET /team_memberships, every membership on the server). " +
+			"Those two are a real collision — TestUnit_ResolveActionName_NoCollisionAcrossTheEntireSpecification is what now proves no override shadows a mechanical name, a check the older ActionName-only collision test structurally could not make",
 	},
 	"Generate": {
 		Domain: "cloud",
@@ -601,7 +603,20 @@ var actionNameOverrides = map[string]actionNameOverride{
 // remember, while writing the 423rd action, that this one table needs
 // consulting before ActionName does.
 func ResolveActionName(domain, operationID string) (string, error) {
-	if override, ok := actionNameOverrides[operationID]; ok {
+	return resolveActionName(actionNameOverrides, domain, operationID)
+}
+
+// resolveActionName is ResolveActionName with the override table as a
+// parameter rather than read from the package variable. Production code always
+// calls ResolveActionName; this exists so the collision check over the whole
+// specification can be driven with a *synthetic* table as well as the real
+// one. Without that, a test asserting "the real table collides with nothing"
+// would pass just as happily against a check that never compares overrides at
+// all — which is precisely how the defect this split was introduced for
+// survived: the previous collision test called ActionName directly, so an
+// override's produced name was never compared against anything.
+func resolveActionName(overrides map[string]actionNameOverride, domain, operationID string) (string, error) {
+	if override, ok := overrides[operationID]; ok {
 		if override.Domain != domain {
 			return "", fmt.Errorf(
 				"gen_action_inputs: ResolveActionName: operationID %q is overridden for domain %q, called with domain %q",

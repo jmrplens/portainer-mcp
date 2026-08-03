@@ -17,6 +17,19 @@ type specOperation struct {
 	// Domain is the operation's first declared tag, or "" if it carries
 	// none. Descriptive only, for the report.
 	Domain string
+	// Public is true when the operation declares no security requirement at
+	// all — neither the document nor the operation names one, so nothing
+	// checks a credential before the handler runs. Portainer's own router
+	// calls these PublicAccess routes.
+	//
+	// This is derived from the document rather than from a hand-written list
+	// of paths, deliberately. A list would be a second declaration of a fact
+	// the specification already states, and it would go stale silently the
+	// next time Portainer publishes a spec that makes a route public — which
+	// is exactly the class of drift this project has already been caught by.
+	// The vendored EE 2.44.0 document declares 24 such operations and CE 12;
+	// see auditLeg for what the audit does about them.
+	Public bool
 }
 
 // httpMethods are the OpenAPI verbs that name an operation. A path item can
@@ -57,8 +70,9 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 				continue
 			}
 			var op struct {
-				OperationID string   `json:"operationId"`
-				Tags        []string `json:"tags"`
+				OperationID string                 `json:"operationId"`
+				Tags        []string               `json:"tags"`
+				Security    *[]map[string][]string `json:"security"`
 			}
 			if err := json.Unmarshal(raw, &op); err != nil {
 				return nil, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
@@ -81,6 +95,9 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 				Method:      strings.ToUpper(method),
 				Path:        path,
 				Domain:      domain,
+				// Public is derived from the document, never from a
+				// hand-maintained list of paths: see specOperation.Public.
+				Public: op.Security == nil || len(*op.Security) == 0,
 			}
 		}
 	}

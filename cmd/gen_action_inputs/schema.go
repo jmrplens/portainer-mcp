@@ -6,9 +6,11 @@ import (
 	"strings"
 )
 
-// maxSchemaDepth bounds $ref/allOf resolution recursion. It exists to catch a
-// genuine reference cycle (jsonschema-go's own reflector refuses cycles for
-// the same reason — see internal/toolutil), not to cap legitimate nesting:
+// maxSchemaDepth bounds $ref/allOf resolution recursion. Since resolve()
+// detects genuine $ref cycles directly (see the resolving stack below), this
+// is no longer the mechanism that terminates a cycle — it is a backstop
+// against unbounded nesting from some shape cycle detection does not model,
+// and it is not expected to fire. It does not cap legitimate nesting:
 // registries.registryUpdatePayload's RegistryAccesses property alone is four
 // $ref/map hops deep (RegistryAccesses -> map of RegistryAccessPolicies ->
 // map of AccessPolicy, with an allOf hop at one level), and each hop costs
@@ -32,6 +34,14 @@ type schemaNode struct {
 	Properties  []schemaProperty // ordered by property name, for deterministic output
 	Items       *schemaNode      // set when Type == "array"
 	MapValue    *schemaNode      // set when Type == "object" with a schema-typed additionalProperties and no declared properties
+	// TruncatedRef is non-empty when this node stands in for a $ref that was
+	// already being resolved further up the current resolution stack — a
+	// genuine cycle in the vendored document, not deep nesting. The node
+	// carries no properties of its own: it is a marker, and every consumer
+	// must decide explicitly what to do with one rather than mistake it for a
+	// legitimately empty object. See resolve's doc comment for why truncating
+	// is sound for a response walk and refused for a request body.
+	TruncatedRef string
 }
 
 type schemaProperty struct {
@@ -44,6 +54,14 @@ type schemaProperty struct {
 // components.schemas.
 type resolver struct {
 	doc *document
+	// resolving counts how many times each $ref is currently open on the
+	// resolution stack. Resolution is depth-first and single-threaded, so
+	// incrementing before recursing and decrementing after is exact: a ref
+	// found with a non-zero count is, by construction, one the current branch
+	// is already inside. Reference-counted rather than a plain set because the
+	// same component can legitimately appear twice in one branch through
+	// different parents without that being a cycle in the branch itself.
+	resolving map[string]int
 }
 
 // resolve turns a raw schema node (as decoded from the vendored spec) into a
@@ -52,6 +70,31 @@ type resolver struct {
 // of those compose into a single Go type without arbitrarily picking one
 // branch, and picking one silently is exactly the kind of guess this
 // generator exists to avoid.
+//
+// # Cycles
+//
+// The vendored Business Edition document contains at least one genuine
+// self-reference: portaineree.EdgeConfig declares a "prev" property that is a
+// $ref back to portaineree.EdgeConfig itself, so the graph is infinite, not
+// merely deep. Before cycle detection existed, the only thing that terminated
+// that recursion was maxSchemaDepth, which meant EdgeConfigInspect and
+// EdgeConfigList could not be resolved at all: every attempt returned "schema
+// nesting exceeds depth 40". Raising the bound cannot fix an infinite graph —
+// it only buys more recursion before the same error — so resolve detects the
+// cycle directly instead. A $ref already open on the current resolution stack
+// yields a marker node carrying TruncatedRef and no properties.
+//
+// Truncating is sound for the consumer that walks a *response* schema looking
+// for credential-shaped property names (credentialShapedFieldPaths): a cycle
+// repeats the identical schema, so every property name reachable through the
+// second lap is, by construction, already reachable on the first. The set of
+// distinct names — which is all that walk collects — is unchanged.
+//
+// Truncating is *not* sound for building a Go type, because a struct field
+// standing for the cut edge has no type to be given. typeOf therefore refuses
+// a truncated node by name rather than silently emitting an empty struct; see
+// its own doc comment. In practice no request body in either vendored spec is
+// cyclic, so that refusal is a guard, not a limitation anything hits today.
 func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 	if depth > maxSchemaDepth {
 		return nil, fmt.Errorf("schema nesting exceeds depth %d (possible cycle)", maxSchemaDepth)
@@ -63,11 +106,23 @@ func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 	}
 
 	if ref, ok := raw["$ref"].(string); ok {
+		if r.resolving[ref] > 0 {
+			return &schemaNode{Type: "object", TruncatedRef: ref}, nil
+		}
 		target, err := r.lookupSchema(ref)
 		if err != nil {
 			return nil, err
 		}
-		return r.resolve(target, depth+1)
+		if r.resolving == nil {
+			r.resolving = map[string]int{}
+		}
+		r.resolving[ref]++
+		node, err := r.resolve(target, depth+1)
+		r.resolving[ref]--
+		if r.resolving[ref] == 0 {
+			delete(r.resolving, ref)
+		}
+		return node, err
 	}
 
 	node := &schemaNode{}
