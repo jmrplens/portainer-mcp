@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -309,9 +311,10 @@ func TestUnit_AuditLeg_InitializedEstate_ProbesPublicRoutes(t *testing.T) {
 // point of deriving this from the document is that it tracks the document.
 func TestUnit_ParseSpecOperations_DerivesPublicFromTheDocument(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+	specPath := filepath.Join("..", "..", specsDir, fmt.Sprintf("ee-%s.json", defaultSpecVer))
+	data, err := os.ReadFile(specPath)
 	if err != nil {
-		t.Fatalf("read spec: %v", err)
+		t.Fatalf("read %s: %v", specPath, err)
 	}
 	ops, err := parseSpecOperations(data)
 	if err != nil {

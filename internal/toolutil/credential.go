@@ -354,7 +354,7 @@ const auditFillSentinel = "AUDIT-FILL-SENTINEL"
 const maxPopulateDepth = 12
 
 // PopulateForCredentialAudit fills every settable field reachable from v with
-// a non-zero value: strings get credentialAuditSentinel, numbers 1, booleans
+// a non-zero value: strings get auditFillSentinel, numbers 1, booleans
 // true, pointers a freshly allocated target, maps and slices exactly one
 // populated entry.
 //

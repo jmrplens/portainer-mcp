@@ -99,13 +99,17 @@ func Specs() []toolutil.ActionSpec {
 	)
 }
 
-// narrative supplies registries.list/create/ping's ActionSpec narrative
-// fields to generatedSpecs() (see actions.gen.go): Title/Description only,
-// preserving the exact wording this domain hand-authored before the swap to
+// narrative supplies ActionSpec narrative fields to generatedSpecs() (see
+// actions.gen.go) for all seven generated operations — RegistryList,
+// RegistryCreate, RegistryPing, RegistryInspect, RegistryUpdate,
+// RegistryDelete and EcrDeleteRepository: Title/Description only, preserving
+// the exact wording this domain hand-authored before each's swap to
 // generated code, rather than letting it silently degrade to the vendored
-// specification's own terser summary/description. Every other operationId in
-// this domain returns the zero toolutil.ActionNarrative — nothing else here
-// is generated.
+// specification's own terser summary/description. Every other operationId
+// returns the zero toolutil.ActionNarrative, including the three hand-written
+// overrides (RegistryConfigure, EcrDeleteTags, RepositoryTagsDelete), which
+// declare their own Title/Description directly in their ActionSpec literal
+// rather than through this hook.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "RegistryList":

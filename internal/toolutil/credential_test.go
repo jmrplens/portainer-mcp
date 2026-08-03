@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces
+// TestUnit_WalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces
 // proves the walk actually descends into maps, slices and interfaces, not
 // merely that it does not crash on them.
 //
@@ -14,7 +14,7 @@ import (
 // field behind each shape, run through the exact WalkForCredentialShapedFields
 // every domain (registries today, more once cmd/gen_action_inputs's generator
 // starts requiring redaction wrappers elsewhere) now shares.
-func TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces(t *testing.T) {
+func TestUnit_WalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces(t *testing.T) {
 	t.Parallel()
 
 	type viaMap struct{ Password *string }
@@ -55,12 +55,12 @@ func TestWalkForCredentialShapedFields_DescendsThroughMapsSlicesAndInterfaces(t 
 	}
 }
 
-// TestIsCredentialShapedName_MatchesKnownMarkersCaseInsensitively pins the
-// shared derivation both cmd/gen_action_inputs (static schema walk) and this
-// package's own WalkForCredentialShapedFields (runtime reflective walk) call,
-// so a change here is felt by both rather than by whichever one happens to
-// keep its own copy in sync.
-func TestIsCredentialShapedName_MatchesKnownMarkersCaseInsensitively(t *testing.T) {
+// TestUnit_IsCredentialShapedName_MatchesKnownMarkersCaseInsensitively pins
+// the shared derivation both cmd/gen_action_inputs (static schema walk) and
+// this package's own WalkForCredentialShapedFields (runtime reflective walk)
+// call, so a change here is felt by both rather than by whichever one
+// happens to keep its own copy in sync.
+func TestUnit_IsCredentialShapedName_MatchesKnownMarkersCaseInsensitively(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"Password", "AccessToken", "SecretAccessKey", "APICredential", "TLSCert", "password", "TOKEN"} {
 		if !IsCredentialShapedName(name) {

@@ -67,6 +67,15 @@ type probeResult struct {
 	RouteAbsent bool
 }
 
+// maxProbeBodyBytes caps how much of a probed response this command reads.
+// isRouteAbsent only ever compares against a 19-byte literal ("404 page not
+// found"), but a probed route may stream an arbitrarily large body — an
+// archive download, a backup, or a log tail — and auditLeg runs
+// probeConcurrency probes at once across 441 operations, so several such
+// bodies can be resident in memory at the same time. 4KiB is generous
+// headroom over the 19 bytes actually needed.
+const maxProbeBodyBytes = 4 << 10
+
 // isRouteAbsent reports whether statusCode/body is Go's default mux's
 // literal answer to a path with no registered handler ("404 page not
 // found", as plain text), as opposed to any response a matched route's own
@@ -105,7 +114,9 @@ func probe(ctx context.Context, client *http.Client, timeout time.Duration, meth
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	data, err := io.ReadAll(resp.Body)
+	// A bounded read is enough: isRouteAbsent compares against a 19-byte
+	// literal, and a probed route may stream an arbitrarily large body.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProbeBodyBytes))
 	if err != nil {
 		return probeResult{}, fmt.Errorf("%s %s: read response: %w", method, path, err)
 	}
@@ -128,10 +139,11 @@ const adminCheckPath = "/users/admin/check"
 // administrator account.
 //
 // It is deliberately three-valued in effect: (true, nil) when the server said
-// 204, (false, nil) when it said 404, and (false, err) when the question could
-// not be answered at all. A caller must treat the error case as "not
-// confirmed", never as "initialized" — see auditLeg, which skips the public
-// routes on anything but a clear yes.
+// 204 (or 200, which some Portainer versions answer this route with — both
+// mean an administrator already exists), (false, nil) when it said 404, and
+// (false, err) when the question could not be answered at all. A caller must
+// treat the error case as "not confirmed", never as "initialized" — see
+// auditLeg, which skips the public routes on anything but a clear yes.
 //
 // Unlike every other request this command makes, this one carries no
 // credential: the route is itself public, and sending the sentinel would only

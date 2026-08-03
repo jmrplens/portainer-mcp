@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -80,16 +83,18 @@ func TestUnit_IsRouteAbsent_NotFoundButDifferentText_ReturnsFalse(t *testing.T) 
 func TestUnit_BodyFor_MutatingVerbs_CarryEmptyJSONObject(t *testing.T) {
 	t.Parallel()
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
-		body := bodyFor(method)
-		if body == nil {
-			t.Errorf("bodyFor(%s) = nil, want a body", method)
-			continue
-		}
-		buf := make([]byte, 8)
-		n, _ := body.Read(buf)
-		if string(buf[:n]) != "{}" {
-			t.Errorf("bodyFor(%s) = %q, want \"{}\"", method, buf[:n])
-		}
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			body := bodyFor(method)
+			if body == nil {
+				t.Fatalf("bodyFor(%s) = nil, want a body", method)
+			}
+			buf := make([]byte, 8)
+			n, _ := body.Read(buf)
+			if string(buf[:n]) != "{}" {
+				t.Errorf("bodyFor(%s) = %q, want \"{}\"", method, buf[:n])
+			}
+		})
 	}
 }
 
@@ -99,9 +104,12 @@ func TestUnit_BodyFor_MutatingVerbs_CarryEmptyJSONObject(t *testing.T) {
 func TestUnit_BodyFor_ReadOnlyVerbs_CarryNoBody(t *testing.T) {
 	t.Parallel()
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodDelete, http.MethodOptions} {
-		if body := bodyFor(method); body != nil {
-			t.Errorf("bodyFor(%s) = non-nil, want nil", method)
-		}
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			if body := bodyFor(method); body != nil {
+				t.Errorf("bodyFor(%s) = non-nil, want nil", method)
+			}
+		})
 	}
 }
 
@@ -181,13 +189,19 @@ func TestUnit_Probe_AgainstRealDefaultServeMux_RegisteredRoute_ClassifiesAsPrese
 func TestUnit_Probe_TransportFailure_ReturnsError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// t.Fatal/t.Fatalf here would call runtime.Goexit in this handler's
+		// own goroutine (the httptest.Server's), not the test goroutine —
+		// that stops the handler but leaves the test running and could mask
+		// a real failure. Use t.Error/t.Errorf with an explicit return.
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			t.Fatal("test server does not support hijacking")
+			t.Error("test server does not support hijacking")
+			return
 		}
 		conn, _, err := hj.Hijack()
 		if err != nil {
-			t.Fatalf("hijack: %v", err)
+			t.Errorf("hijack: %v", err)
+			return
 		}
 		_ = conn.Close()
 	}))
@@ -196,5 +210,79 @@ func TestUnit_Probe_TransportFailure_ReturnsError(t *testing.T) {
 	_, err := probe(context.Background(), &http.Client{}, time.Second, http.MethodGet, srv.URL, "/anything")
 	if err == nil {
 		t.Fatal("probe() error = nil, want an error: the server closed the connection with no response")
+	}
+}
+
+// countingReadCloser counts every byte actually read from the underlying
+// reader, so a test can observe how much of a response body probe() pulled
+// off the wire, regardless of how much the server offered.
+type countingReadCloser struct {
+	io.ReadCloser
+	n *int64
+}
+
+func (c countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	atomic.AddInt64(c.n, int64(n))
+	return n, err
+}
+
+// countingRoundTripper wraps every response body in a countingReadCloser
+// sharing the same counter, without altering anything else about the
+// response.
+type countingRoundTripper struct {
+	base http.RoundTripper
+	n    *int64
+}
+
+func (rt countingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := rt.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = countingReadCloser{ReadCloser: resp.Body, n: rt.n}
+	return resp, nil
+}
+
+// TestUnit_Probe_LargeResponseBody_ReadIsBoundedByMaxProbeBodyBytes is the
+// mutation-evidence test for the bounded read: it proves probe() never pulls
+// more than maxProbeBodyBytes off the wire, however much a server sends. The
+// defect this guards against is real — the audit probes all 441 documented
+// operations with probeConcurrency in flight at once, and some routes stream
+// archives, backups or log tails, so several large bodies could be resident
+// in memory simultaneously with an unbounded read.
+func TestUnit_Probe_LargeResponseBody_ReadIsBoundedByMaxProbeBodyBytes(t *testing.T) {
+	t.Parallel()
+	const streamed = 64 * maxProbeBodyBytes // 256KiB: far larger than the 4KiB bound
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, _ := w.(http.Flusher)
+		chunk := bytes.Repeat([]byte{'x'}, 4096)
+		written := 0
+		for written < streamed {
+			n, err := w.Write(chunk)
+			written += n
+			if flusher != nil {
+				flusher.Flush()
+			}
+			if err != nil {
+				// The client (probe's bounded reader) stopped reading once
+				// it had enough and closed the connection. Expected once
+				// the fix is in place; nothing left to do.
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	var bytesRead int64
+	client := &http.Client{Transport: countingRoundTripper{base: http.DefaultTransport, n: &bytesRead}}
+
+	if _, err := probe(context.Background(), client, 5*time.Second, http.MethodGet, srv.URL, "/anything"); err != nil {
+		t.Fatalf("probe() error = %v", err)
+	}
+	if bytesRead > maxProbeBodyBytes {
+		t.Errorf("probe() read %d bytes off the wire, want at most maxProbeBodyBytes (%d): the server offered %d bytes total",
+			bytesRead, maxProbeBodyBytes, streamed)
 	}
 }

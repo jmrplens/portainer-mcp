@@ -3,9 +3,17 @@
 This is the procedure every P3 wave follows to add one or more domains to the
 action catalog. It exists because the thing it guards against — the vendored
 specification disagreeing with the Portainer server it describes — has
-already happened four times in this project's history, was found by accident
-every time, and does not announce itself. A wave that skips a step here is
-not saving time; it is choosing not to look for the next one.
+already happened four times in this project's history before
+`cmd/audit_spec_reality` existed to look for it systematically (see that
+command's own package doc for the four: an optional-looking header that is
+actually mandatory, a feature claimed for free that is not delivered, a
+documented mutation that silently does not persist, and a field typed wrong
+for what it plainly holds), was found by accident every time, and does not
+announce itself. `docs/api-divergences.md` catalogues six broader categories
+of divergence — a wider scope than just this historical, found-by-accident
+count, since it also covers what the systematic route-existence audit itself
+now finds. A wave that skips a step here is not saving time; it is choosing
+not to look for the next one.
 
 Nothing in Steps 1-5 is optional. Step 6 (moving the coverage ratchet) is
 mechanical but must land in the same commit as the domain, never a follow-up.
@@ -30,7 +38,7 @@ wave's own findings are recorded, in Step 6.
    next step raises, not a silently empty generated file.
 3. Run:
 
-   ```
+   ```sh
    make gen-action-inputs
    ```
 
@@ -94,7 +102,7 @@ have reason to think its route table could differ by deployment target —
 see `cmd/audit_spec_reality`'s own package doc for why the first run found no
 such reason):
 
-```
+```sh
 make audit-spec-reality
 ```
 
@@ -123,7 +131,7 @@ action additionally needs its safe-mode and (where the action requires
 Business Edition) safe-mode-EE coverage, proving `tools.Execute` intercepts
 it before its handler ever runs.
 
-```
+```sh
 make test-e2e
 ```
 

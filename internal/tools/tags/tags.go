@@ -37,13 +37,13 @@ func Specs() []toolutil.ActionSpec {
 	return generatedSpecs()
 }
 
-// narrative supplies TagList's and TagCreate's ActionSpec narrative fields to
-// generatedSpecs() (see actions.gen.go): only Title/Description, preserving
-// the exact wording this domain hand-authored before each's swap to
-// generated code, rather than letting it silently degrade to the vendored
-// specification's own terser summary/description. Every other operationId
-// returns the zero toolutil.ActionNarrative — nothing else in this domain is
-// generated today.
+// narrative supplies TagList's, TagCreate's and TagDelete's ActionSpec
+// narrative fields to generatedSpecs() (see actions.gen.go): only
+// Title/Description, preserving the exact wording this domain hand-authored
+// before each's swap to generated code, rather than letting it silently
+// degrade to the vendored specification's own terser summary/description.
+// Every other operationId returns the zero toolutil.ActionNarrative —
+// nothing else in this domain is generated today.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "TagList":

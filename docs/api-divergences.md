@@ -3,10 +3,18 @@
 This is the committed record of every measured way in which the Portainer
 server disagrees with the documents that describe it — the vendored OpenAPI
 specifications under `api/specs/`, and this project's own design
-specification. It exists because that disagreement is not hypothetical: it
-has been found six times so far, and every time before `cmd/audit_spec_reality`
-existed it was found by accident, usually by someone who had already spent
-hours suspecting their own handler.
+specification. It exists because that disagreement is not hypothetical: this
+file catalogues six broad categories of it (§1-§6 below — route existence,
+behavioural divergence, understated requirements, secret-leaking responses,
+edition asymmetry, and defects in the document itself). That is a wider
+scope than `docs/domain-wave-checklist.md`'s "four times": that count is
+specifically the spec-vs-server mismatches found by accident, one at a time,
+before `cmd/audit_spec_reality` existed to look systematically (see that
+command's own package doc for the four). Every one of those four is folded
+into this file's broader six-category record; the two counts are not in
+tension, they answer different questions. Before this tool existed, every
+discovery was by accident, usually by someone who had already spent hours
+suspecting their own handler.
 
 Read this before implementing a new domain, not after. If your domain
 appears below, the finding tells you what to expect from the live server
@@ -77,7 +85,7 @@ document. The 251/441 figures are the operations that carry an `operationId`
 — the Community document has 265 path-item operations of which 14 are
 unnamed, the Business document 442 of which 1 is unnamed; unnamed operations
 are skipped because there is nothing to look up for them. Re-verified
-against the committed specs on 2026-08-04; the counts reconcile exactly.
+against the committed specs on 2026-08-03; the counts reconcile exactly.
 
 ### 1.2 The full list, by domain
 
@@ -122,7 +130,7 @@ routes a **snake_case** path where the specification documents a
 **concatenated-word** one. These are not absent features. Probed by hand
 with the estate's real API key, so credential choice is not a confound:
 
-```
+```text
 GET /kubernetes/1/clusterrolebindings   -> 404 page not found          (documented)
 GET /kubernetes/1/cluster_role_bindings -> 500 {"message":"Unable to fetch
                                             cluster role bindings.",...}  (real)
@@ -238,7 +246,7 @@ The design specification states that a Portainer deployed inside a cluster
 After provisioning, `GET /endpoints` returns an empty list. The environment
 must be created explicitly:
 
-```
+```text
 POST /endpoints -F Name=k3d -F EndpointCreationType=5     (Local Kubernetes)
 ```
 
@@ -265,12 +273,12 @@ Only `system.version` and `system.status` carry `ServerVersion`.
 ### 3.1 `X-Setup-Token` on `POST /users/admin/init`
 
 **Evidence: probed live** for the behaviour; **vendored spec** for what is
-documented, re-verified 2026-08-04.
+documented, re-verified 2026-08-03.
 
 Against an uninitialized Portainer 2.44.0, `POST /users/admin/init` without
 the header returns:
 
-```
+```text
 403 {"message":"Invalid or missing setup token. Provide the X-Setup-Token
      header with the token printed in the server logs at startup."}
 ```
@@ -313,7 +321,7 @@ self-signed certificate valid only for `localhost`, so it cannot be
 registered by hostname without skipping verification. The two obvious
 attempts both fail with a 400:
 
-```
+```text
 -F TLS=true -F TLSSkipVerify=true
   -> 400 "Invalid certificate file. Ensure that the file is uploaded correctly"
 no TLS / TLS=false
@@ -323,7 +331,7 @@ no TLS / TLS=false
 
 What works is the third, non-obvious flag:
 
-```
+```text
 POST /endpoints -F Name=agent -F EndpointCreationType=2 -F URL=tcp://<agent>:9001 \
                 -F TLS=true -F TLSSkipVerify=true -F TLSSkipClientVerify=true
   -> 200, Status=1
@@ -350,7 +358,7 @@ id, and `EdgeID`, a UUID minted for that environment's edge identity. The
 agent's `EDGE_ID` variable wants the UUID. Passing the numeric one does not
 fail silently, but the error names a numeric id and so points the wrong way:
 
-```
+```text
 "Permission denied to access environment. The device has not been trusted yet:
  Unauthorized Edge endpoint operation: invalid Edge identifier. Environment ID: 2"
 ```
@@ -372,7 +380,7 @@ topology the symptom is an opaque 500 on registration
 combination of TLS flags fixes, and the real error only appears in the
 agent's debug log:
 
-```
+```text
 msg="Unable to proxy the request via the Docker socket"
 error="dial unix /var/run/docker.sock: connect: no such file or directory"
 ```
@@ -420,7 +428,7 @@ declared `redact<OperationID>` wrapper.
 ## 5. Edition asymmetry: Business Edition is not a superset of Community
 
 **Evidence: vendored spec**, measured across both committed documents during
-the P2 pre-scan, re-verified 2026-08-04.
+the P2 pre-scan, re-verified 2026-08-03.
 
 The client is generated from the Business Edition document alone. That is a
 deliberate decision, but it is only sound because the gaps are known and
@@ -458,7 +466,7 @@ which is harmless when decoding.
 
 ## 6. Defects in the vendored document itself
 
-**Evidence: vendored spec**, re-verified 2026-08-04.
+**Evidence: vendored spec**, re-verified 2026-08-03.
 
 ### 6.1 A content type with a leading space
 

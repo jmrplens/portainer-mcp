@@ -284,4 +284,12 @@ func mergeSchema(dst, src *schemaNode) {
 	if src.MapValue != nil {
 		dst.MapValue = src.MapValue
 	}
+	if src.TruncatedRef != "" {
+		// An allOf branch that is itself a recycled $ref (a cycle already
+		// open on this branch, see resolve's $ref case) carries no
+		// properties of its own to merge — only this marker. Dropping it
+		// here would silently discard the cut-edge, leaving typeOf and
+		// credentialShapedFieldPaths unable to recognise the truncation.
+		dst.TruncatedRef = src.TruncatedRef
+	}
 }

@@ -14,8 +14,8 @@ func TestUnit_BuildReport_NoDivergence_StatesSoPlainly(t *testing.T) {
 	if !strings.Contains(report, "No divergence") {
 		t.Errorf("buildReport() = %q, want it to state plainly that nothing diverged", report)
 	}
-	if !strings.Contains(report, "CE leg: 3 documented operation(s) probed") {
-		t.Errorf("buildReport() = %q, want the CE total stated", report)
+	if !strings.Contains(report, "CE leg: 3 documented operation(s), 3 probed") {
+		t.Errorf("buildReport() = %q, want the CE total and probed count stated", report)
 	}
 }
 
@@ -58,6 +58,29 @@ func TestUnit_BuildReport_ProbeErrorsListedSeparatelyFromDivergence(t *testing.T
 	}
 	if !strings.Contains(report, "No divergence") {
 		t.Errorf("buildReport() = %q, want it to still state no divergence was found", report)
+	}
+}
+
+// TestUnit_BuildReport_SkippedPublicRoutesReportedAsUnmeasured proves a route
+// that was never probed is presented as unmeasured, distinct from both
+// "served" and "divergent" — and that it is excluded from the probed count.
+func TestUnit_BuildReport_SkippedPublicRoutesReportedAsUnmeasured(t *testing.T) {
+	t.Parallel()
+	report := buildReport([]legResult{{
+		Leg:           "CE",
+		Total:         2,
+		SkippedPublic: []string{"Restore (POST /restore)"},
+	}})
+	for _, want := range []string{"NOT probed", "unmeasured", "Restore (POST /restore)"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("buildReport() = %q, want it to contain %q", report, want)
+		}
+	}
+	if !strings.Contains(report, "CE leg: 2 documented operation(s), 1 probed") {
+		t.Errorf("buildReport() = %q, want the probed count (2 total - 1 skipped = 1) stated, not the raw total", report)
+	}
+	if strings.Contains(report, "every documented operation is served by a real route") {
+		t.Errorf("buildReport() = %q, want it to never claim full coverage when a route was skipped, not probed", report)
 	}
 }
 

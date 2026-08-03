@@ -95,6 +95,48 @@ func TestUnit_ResponseCredentialFields_EdgeConfigResolvesDespiteItsSelfReference
 	}
 }
 
+// TestUnit_Resolve_AllOfBranchThatIsARecycledRefKeepsItsTruncatedRefMark
+// proves mergeSchema does not drop a cut-edge marker on the way through an
+// allOf: an operation whose response schema composes an already-open $ref
+// via allOf (rather than referencing it directly, the shape
+// TestUnit_Resolve_SelfReferentialRefTruncatesRatherThanRecursing covers)
+// must still come out marked as truncated, not silently as an empty object
+// indistinguishable from a real one.
+func TestUnit_Resolve_AllOfBranchThatIsARecycledRefKeepsItsTruncatedRefMark(t *testing.T) {
+	t.Parallel()
+	res := &resolver{doc: &document{schemas: map[string]any{
+		"Node": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"prev": map[string]any{
+					"allOf": []any{
+						map[string]any{"$ref": "#/components/schemas/Node"},
+					},
+				},
+			},
+		},
+	}}}
+
+	node, err := res.resolve(map[string]any{"$ref": "#/components/schemas/Node"}, 0)
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+
+	var prev *schemaNode
+	for _, p := range node.Properties {
+		if p.Name == "prev" {
+			prev = p.Schema
+		}
+	}
+	if prev == nil {
+		t.Fatal(`property "prev" not resolved at all`)
+	}
+	if prev.TruncatedRef != "#/components/schemas/Node" {
+		t.Errorf("prev.TruncatedRef = %q, want the cycling ref preserved through the allOf merge, not dropped as an empty object", prev.TruncatedRef)
+	}
+}
+
 // TestUnit_TypeOf_RefusesACyclicSchema is the other half of the truncation
 // contract. Truncating is sound for a response walk (a cycle repeats the same
 // property names, so the set of distinct names is unchanged) but never for

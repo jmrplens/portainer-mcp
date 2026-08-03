@@ -21,7 +21,11 @@ func buildReport(results []legResult) string {
 	for _, r := range results {
 		totalDivergent += len(r.Divergent)
 
-		fmt.Fprintf(&b, "\n%s leg: %d documented operation(s) probed\n", r.Leg, r.Total)
+		// r.Total counts every documented operation, including the ones
+		// SkippedPublic records as unmeasured — reporting r.Total alone as
+		// "probed" would overstate what this run actually observed.
+		probed := r.Total - len(r.SkippedPublic)
+		fmt.Fprintf(&b, "\n%s leg: %d documented operation(s), %d probed\n", r.Leg, r.Total, probed)
 
 		if len(r.SkippedPublic) > 0 {
 			fmt.Fprintf(&b, "  %d PublicAccess operation(s) were NOT probed: this estate could not be confirmed\n", len(r.SkippedPublic))
@@ -40,11 +44,15 @@ func buildReport(results []legResult) string {
 		}
 
 		if len(r.Divergent) == 0 {
-			fmt.Fprintln(&b, "  No divergence: every documented operation is served by a real route.")
+			if len(r.SkippedPublic) > 0 {
+				fmt.Fprintln(&b, "  No divergence among the operations that were probed; the skipped ones above remain unmeasured.")
+			} else {
+				fmt.Fprintln(&b, "  No divergence: every documented operation is served by a real route.")
+			}
 			continue
 		}
 
-		fmt.Fprintf(&b, "  %d of %d documented operation(s) are NOT served: this server answers with\n", len(r.Divergent), r.Total)
+		fmt.Fprintf(&b, "  %d of %d documented operation(s) are NOT served: this server answers with\n", len(r.Divergent), probed)
 		fmt.Fprintln(&b, "  Go's literal default \"404 page not found\" for a route the specification documents.")
 		for _, d := range r.Divergent {
 			fmt.Fprintf(&b, "    - %s: %s %s (tag %q)\n", d.OperationID, d.Method, d.Path, d.Domain)

@@ -67,7 +67,7 @@ func allOperations(t *testing.T) []namedOperation {
 	return all
 }
 
-// TestActionName_ReproducesEveryHandWrittenPilotName is where the rule and
+// TestUnit_ActionName_ReproducesEveryHandWrittenPilotName is where the rule and
 // the three hand-written, twice-reviewed pilot domains (tags, system,
 // registries) have to agree or the disagreement gets resolved, not carried
 // forward silently into the 423 names this rule is about to mint. There are
@@ -89,7 +89,7 @@ func allOperations(t *testing.T) []namedOperation {
 // internal/tools/system/system.go and test/e2e/suite/system_test.go
 // alongside this test, rather than special-cased here to keep the test
 // passing against a name this task itself found to be the error.
-func TestActionName_ReproducesEveryHandWrittenPilotName(t *testing.T) {
+func TestUnit_ActionName_ReproducesEveryHandWrittenPilotName(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ domain, operationID, want string }{
 		// tags (internal/tools/tags/tags.go)
@@ -115,18 +115,20 @@ func TestActionName_ReproducesEveryHandWrittenPilotName(t *testing.T) {
 		{"registries", "EcrDeleteTags", "registries.ecr_delete_tags"},
 		{"registries", "RepositoryTagsDelete", "registries.repository_tags_delete"},
 	} {
-		got, err := ActionName(tc.domain, tc.operationID)
-		if err != nil {
-			t.Errorf("ActionName(%q, %q) error = %v", tc.domain, tc.operationID, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("ActionName(%q, %q) = %q, want %q", tc.domain, tc.operationID, got, tc.want)
-		}
+		t.Run(tc.domain+"/"+tc.operationID, func(t *testing.T) {
+			t.Parallel()
+			got, err := ActionName(tc.domain, tc.operationID)
+			if err != nil {
+				t.Fatalf("ActionName(%q, %q) error = %v", tc.domain, tc.operationID, err)
+			}
+			if got != tc.want {
+				t.Errorf("ActionName(%q, %q) = %q, want %q", tc.domain, tc.operationID, got, tc.want)
+			}
+		})
 	}
 }
 
-// TestActionName_NoCollisionAcrossTheEntireSpecification is 441 operations
+// TestUnit_ActionName_NoCollisionAcrossTheEntireSpecification is 441 operations
 // minted at once: two producing the same name means one silently shadows
 // the other in actioncatalog.Build, which refuses duplicates — surfacing as
 // a build failure at wave time with no indication of which name to change.
@@ -134,7 +136,7 @@ func TestActionName_ReproducesEveryHandWrittenPilotName(t *testing.T) {
 // spec-parsing code, independent of ActionName, so this cannot pass merely
 // because the list it iterates was itself produced by the function under
 // test.
-func TestActionName_NoCollisionAcrossTheEntireSpecification(t *testing.T) {
+func TestUnit_ActionName_NoCollisionAcrossTheEntireSpecification(t *testing.T) {
 	t.Parallel()
 	ops := allOperations(t)
 	if len(ops) != 441 {
@@ -148,7 +150,7 @@ func TestActionName_NoCollisionAcrossTheEntireSpecification(t *testing.T) {
 			// handful of operations identical to their own domain prefix
 			// (domain "motd"'s "MOTD", domain "backup"'s bare "Backup",
 			// domain "team_memberships"'s bare "TeamMemberships") — see
-			// TestActionName_LocalPartIsNeverEmpty and this task's report.
+			// TestUnit_ActionName_LocalPartIsNeverEmpty and this task's report.
 			// Those still need a name from somewhere before their domain
 			// package is written; they are not a collision, so they do not
 			// fail this test, but they are not silently ignored either.
@@ -204,7 +206,7 @@ func actionNameCollisions(t *testing.T, overrides map[string]actionNameOverride,
 }
 
 // TestUnit_ResolveActionName_NoCollisionAcrossTheEntireSpecification is the
-// check TestActionName_NoCollisionAcrossTheEntireSpecification above
+// check TestUnit_ActionName_NoCollisionAcrossTheEntireSpecification above
 // structurally cannot make. That test calls ActionName directly, so an
 // entry in actionNameOverrides is invisible to it twice over: the override's
 // *produced* name is never computed, and the override's *source* operationId
@@ -257,24 +259,24 @@ func TestUnit_ResolveActionName_CollisionCheckCatchesAnOverrideShadowingAMechani
 	}
 }
 
-// TestActionName_LocalPartIsNeverEmpty is the synthetic edge the brief
+// TestUnit_ActionName_LocalPartIsNeverEmpty is the synthetic edge the brief
 // specifies directly: an operationID identical to its domain's own prefix
 // leaves nothing after stripping. ActionSpec.Validate would refuse an empty
 // local part too, but 423 actions later and with no clue where it came
 // from — this is where it is caught instead, with the offending operationID
 // named in the error.
-func TestActionName_LocalPartIsNeverEmpty(t *testing.T) {
+func TestUnit_ActionName_LocalPartIsNeverEmpty(t *testing.T) {
 	t.Parallel()
 	if _, err := ActionName("tags", "Tag"); err == nil {
 		t.Error("ActionName() error = nil, want a refusal when nothing remains after the prefix")
 	}
 }
 
-// TestActionName_RequiresNonEmptyDomainAndOperationID guards the two
+// TestUnit_ActionName_RequiresNonEmptyDomainAndOperationID guards the two
 // preconditions ActionName documents but the three tests above never
 // exercise directly, both real ways to call this function wrong from a
 // generator loop that has, say, an unpopulated operation.Domain.
-func TestActionName_RequiresNonEmptyDomainAndOperationID(t *testing.T) {
+func TestUnit_ActionName_RequiresNonEmptyDomainAndOperationID(t *testing.T) {
 	t.Parallel()
 	if _, err := ActionName("", "TagList"); err == nil {
 		t.Error(`ActionName("", "TagList") error = nil, want a refusal: domain is required`)
@@ -310,20 +312,23 @@ func TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput(t *te
 		{"BackupToS3", "backup_to_s3", []string{"Backup", "To", "S", "3"}},
 		{"UpdateK8sPodSecurityRule", "update_k8s_pod_security_rule", []string{"Update", "K", "8s", "Pod", "Security", "Rule"}},
 	} {
-		gotActionParts := splitActionWords(tc.identifier)
-		lowered := make([]string, len(gotActionParts))
-		for i, w := range gotActionParts {
-			lowered[i] = lower(w)
-		}
-		if got := strings.Join(lowered, "_"); got != tc.wantActionLocalPart {
-			t.Errorf("splitActionWords(%q) joined = %q, want %q", tc.identifier, got, tc.wantActionLocalPart)
-		}
+		t.Run(tc.identifier, func(t *testing.T) {
+			t.Parallel()
+			gotActionParts := splitActionWords(tc.identifier)
+			lowered := make([]string, len(gotActionParts))
+			for i, w := range gotActionParts {
+				lowered[i] = lower(w)
+			}
+			if got := strings.Join(lowered, "_"); got != tc.wantActionLocalPart {
+				t.Errorf("splitActionWords(%q) joined = %q, want %q", tc.identifier, got, tc.wantActionLocalPart)
+			}
 
-		gotOld := splitWords(tc.identifier)
-		if strings.Join(gotOld, "|") != strings.Join(tc.wantOldSplitWords, "|") {
-			t.Errorf("splitWords(%q) = %q, want %q unchanged — actionInitialisms must never affect the function goFieldName and bodyJSONTag call",
-				tc.identifier, gotOld, tc.wantOldSplitWords)
-		}
+			gotOld := splitWords(tc.identifier)
+			if strings.Join(gotOld, "|") != strings.Join(tc.wantOldSplitWords, "|") {
+				t.Errorf("splitWords(%q) = %q, want %q unchanged — actionInitialisms must never affect the function goFieldName and bodyJSONTag call",
+					tc.identifier, gotOld, tc.wantOldSplitWords)
+			}
+		})
 	}
 }
 
@@ -423,11 +428,11 @@ func TestUnit_ActionNameOverrides_EveryEntryMatchesARealOperation(t *testing.T) 
 	}
 }
 
-// TestValidateActionNameOverrides_StaleEntry_ReturnsError proves the
+// TestUnit_ValidateActionNameOverrides_StaleEntry_ReturnsError proves the
 // direction that matters most in practice: a future respec that drops or
 // renames one of these four operations must fail loudly, not leave a dead
 // entry silently promising a name generation will never ask for again.
-func TestValidateActionNameOverrides_StaleEntry_ReturnsError(t *testing.T) {
+func TestUnit_ValidateActionNameOverrides_StaleEntry_ReturnsError(t *testing.T) {
 	t.Parallel()
 	overrides := map[string]actionNameOverride{
 		"NoLongerInTheSpec": {Domain: "motd", Name: "motd.get", Reason: "test fixture"},
@@ -442,12 +447,12 @@ func TestValidateActionNameOverrides_StaleEntry_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestValidateActionNameOverrides_WrongDomain_ReturnsError guards the other
+// TestUnit_ValidateActionNameOverrides_WrongDomain_ReturnsError guards the other
 // mistake this table can make: an override correctly naming a real
 // operationId but the wrong domain for it, which ResolveActionName's own
 // domain check would also catch at call time — this is the same property
 // checked ahead of time, against the whole table at once.
-func TestValidateActionNameOverrides_WrongDomain_ReturnsError(t *testing.T) {
+func TestUnit_ValidateActionNameOverrides_WrongDomain_ReturnsError(t *testing.T) {
 	t.Parallel()
 	overrides := map[string]actionNameOverride{
 		"MOTD": {Domain: "wrong_domain", Name: "motd.get", Reason: "test fixture"},
@@ -462,11 +467,11 @@ func TestValidateActionNameOverrides_WrongDomain_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestResolveActionName_PrefersOverrideThenFallsBackToActionName is
+// TestUnit_ResolveActionName_PrefersOverrideThenFallsBackToActionName is
 // ResolveActionName's own contract: an operationId actionNameOverrides names
 // gets that override's Name verbatim, regardless of what ActionName would
 // have computed; anything else falls through to ActionName unchanged.
-func TestResolveActionName_PrefersOverrideThenFallsBackToActionName(t *testing.T) {
+func TestUnit_ResolveActionName_PrefersOverrideThenFallsBackToActionName(t *testing.T) {
 	t.Parallel()
 
 	name, err := ResolveActionName("motd", "MOTD")

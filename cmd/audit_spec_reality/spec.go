@@ -58,6 +58,12 @@ var httpMethods = map[string]bool{
 func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 	var doc struct {
 		Paths map[string]map[string]json.RawMessage `json:"paths"`
+		// Security is the document-level default security requirement,
+		// applied to every operation that declares no security field of its
+		// own (see the fallback below). The vendored specs carry none today,
+		// so this is currently a no-op, but a future spec that does would
+		// otherwise be misclassified as public for every such operation.
+		Security *[]map[string][]string `json:"security"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("decode spec: %w", err)
@@ -90,6 +96,17 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 					"operationId %q (exported %q) is declared for both %s %s and %s %s",
 					op.OperationID, name, existing.Method, existing.Path, strings.ToUpper(method), path)
 			}
+			// An operation with no security field of its own inherits the
+			// document-level default (nil propagates through unchanged when
+			// the document declares none either). An operation that
+			// explicitly declares an empty array overrides the document
+			// default rather than inheriting it — OpenAPI's own "remove
+			// security for this operation" idiom — so it is never replaced
+			// by the fallback.
+			effectiveSecurity := op.Security
+			if effectiveSecurity == nil {
+				effectiveSecurity = doc.Security
+			}
 			ops[name] = specOperation{
 				OperationID: name,
 				Method:      strings.ToUpper(method),
@@ -97,7 +114,7 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 				Domain:      domain,
 				// Public is derived from the document, never from a
 				// hand-maintained list of paths: see specOperation.Public.
-				Public: op.Security == nil || len(*op.Security) == 0,
+				Public: effectiveSecurity == nil || len(*effectiveSecurity) == 0,
 			}
 		}
 	}

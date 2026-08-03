@@ -162,7 +162,7 @@ func TestTagCreate_Success_SendsNameAndReturnsDecodedBody(t *testing.T) {
 // directly and asserting a guard clause the handler no longer has; the
 // property under test (missing required input is refused before the API is
 // ever called) is unchanged.
-func TestTagCreate_MissingName_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+func TestUnit_TagCreate_MissingName_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	var called atomic.Bool
 	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
@@ -220,7 +220,7 @@ func TestTagDelete_Success_CallsCorrectPath(t *testing.T) {
 // "minimum": 1 constraint on "id" (toolutil.MinimumParams), enforced by
 // tools.Execute before any handler runs, so this routes through it rather
 // than calling the handler directly.
-func TestTagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+func TestUnit_TagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	spec := findSpec(t, "tags.delete")
 	for _, id := range []int{0, -1} {

@@ -89,17 +89,31 @@ func run(args []string) error {
 	// enumerates operations from *specPath, never from the CE spec — so it
 	// stays exactly what it is today, a hand-written, hand-appended
 	// ActionSpec in its own domain's Specs().
-	if *ceSpecPath == "" {
+	resolvedCESpecPath := *ceSpecPath
+	if resolvedCESpecPath == "" {
 		dir, base := filepath.Split(*specPath)
-		*ceSpecPath = filepath.Join(dir, strings.Replace(base, "ee-", "ce-", 1))
+		resolvedCESpecPath = filepath.Join(dir, strings.Replace(base, "ee-", "ce-", 1))
+		if resolvedCESpecPath == *specPath {
+			// strings.Replace found no "ee-" substring in the base filename
+			// to swap, so it returned the base unchanged: resolvedCESpecPath
+			// would silently become *specPath itself, ceOperationIDs would
+			// contain every EE operationId, and editionOf would classify
+			// every action as CE — the exact failure editionConstName
+			// already refuses at render time (see emit.go), just one step
+			// earlier and unguarded. Refuse loudly instead of loading the EE
+			// spec a second time and calling it CE.
+			return fmt.Errorf(
+				"cannot derive a Community Edition spec path from -spec %q: its filename carries no \"ee-\" to swap for \"ce-\"; pass -ce-spec explicitly rather than classifying every action as CE",
+				*specPath)
+		}
 	}
-	_, cePaths, err := loadDocument(*ceSpecPath)
+	_, cePaths, err := loadDocument(resolvedCESpecPath)
 	if err != nil {
-		return fmt.Errorf("load CE spec %s (used only to classify Edition): %w", *ceSpecPath, err)
+		return fmt.Errorf("load CE spec %s (used only to classify Edition): %w", resolvedCESpecPath, err)
 	}
 	ceByTag, err := operationsByDomain(cePaths)
 	if err != nil {
-		return fmt.Errorf("group CE spec %s by domain: %w", *ceSpecPath, err)
+		return fmt.Errorf("group CE spec %s by domain: %w", resolvedCESpecPath, err)
 	}
 	ceOperationIDs := ceOperationIDSet(ceByTag)
 
@@ -121,6 +135,12 @@ func run(args []string) error {
 	if empty, restates := descriptionQualityWarnings(allOps); len(empty) > 0 || len(restates) > 0 {
 		fmt.Fprintf(os.Stderr, "%d operation(s) with no description beyond boilerplate, %d whose description merely restates its summary — candidates for a narrative Description override:\n",
 			len(empty), len(restates))
+		for _, w := range empty {
+			fmt.Fprintf(os.Stderr, "  - %s\n", w)
+		}
+		for _, w := range restates {
+			fmt.Fprintf(os.Stderr, "  - %s\n", w)
+		}
 	}
 
 	// toolutil.DomainTags is the single table both this generator and a

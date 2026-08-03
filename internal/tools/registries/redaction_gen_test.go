@@ -9,98 +9,46 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// TestGenerated_redactRegistryCreate_RemovesEveryCredentialShapedField proves redactRegistryCreate actually
-// strips what it is required to strip. cmd/gen_action_inputs refuses to emit
-// a handler for RegistryCreate unless a function of this name exists; existing is not the
-// same as working, and this is what tells the two apart.
-func TestGenerated_redactRegistryCreate_RemovesEveryCredentialShapedField(t *testing.T) {
-	t.Parallel()
-	fn := reflect.ValueOf(redactRegistryCreate)
-	if fn.Type().NumIn() != 1 || fn.Type().NumOut() != 1 {
-		t.Fatalf("redactRegistryCreate must take exactly one argument and return exactly one value, got %d in and %d out",
-			fn.Type().NumIn(), fn.Type().NumOut())
-	}
-
-	// Populated, not zero-valued: WalkForCredentialShapedFields only reports
-	// fields that actually carry a value, so a guard run against a zero
-	// response would pass whatever the wrapper did.
-	arg := reflect.New(fn.Type().In(0)).Elem()
-	toolutil.PopulateForCredentialAudit(arg)
-
-	survived := toolutil.AssertRedacted(fn.Call([]reflect.Value{arg})[0].Interface(), "RegistryCreate")
-	if len(survived) > 0 {
-		t.Errorf("redactRegistryCreate left %d credential-shaped field(s) populated: %v", len(survived), survived)
-	}
+// redactionGuards is one table entry per generated redaction wrapper in this
+// domain, consulted by TestUnit_RedactionGuards_RemoveEveryCredentialShapedField.
+var redactionGuards = []struct {
+	funcName    string
+	operationID string
+	fn          any
+}{
+	{funcName: "redactRegistryCreate", operationID: "RegistryCreate", fn: redactRegistryCreate},
+	{funcName: "redactRegistryInspect", operationID: "RegistryInspect", fn: redactRegistryInspect},
+	{funcName: "redactRegistryList", operationID: "RegistryList", fn: redactRegistryList},
+	{funcName: "redactRegistryUpdate", operationID: "RegistryUpdate", fn: redactRegistryUpdate},
 }
 
-// TestGenerated_redactRegistryInspect_RemovesEveryCredentialShapedField proves redactRegistryInspect actually
-// strips what it is required to strip. cmd/gen_action_inputs refuses to emit
-// a handler for RegistryInspect unless a function of this name exists; existing is not the
-// same as working, and this is what tells the two apart.
-func TestGenerated_redactRegistryInspect_RemovesEveryCredentialShapedField(t *testing.T) {
+// TestUnit_RedactionGuards_RemoveEveryCredentialShapedField proves every
+// generated redaction wrapper in this domain actually strips what it is
+// required to strip. cmd/gen_action_inputs refuses to emit a handler for a
+// credential-returning operation unless a function of the expected name
+// exists; existing is not the same as working, and this is what tells the
+// two apart.
+func TestUnit_RedactionGuards_RemoveEveryCredentialShapedField(t *testing.T) {
 	t.Parallel()
-	fn := reflect.ValueOf(redactRegistryInspect)
-	if fn.Type().NumIn() != 1 || fn.Type().NumOut() != 1 {
-		t.Fatalf("redactRegistryInspect must take exactly one argument and return exactly one value, got %d in and %d out",
-			fn.Type().NumIn(), fn.Type().NumOut())
-	}
+	for _, g := range redactionGuards {
+		t.Run(g.operationID, func(t *testing.T) {
+			t.Parallel()
+			fn := reflect.ValueOf(g.fn)
+			if fn.Type().NumIn() != 1 || fn.Type().NumOut() != 1 {
+				t.Fatalf("%s must take exactly one argument and return exactly one value, got %d in and %d out",
+					g.funcName, fn.Type().NumIn(), fn.Type().NumOut())
+			}
 
-	// Populated, not zero-valued: WalkForCredentialShapedFields only reports
-	// fields that actually carry a value, so a guard run against a zero
-	// response would pass whatever the wrapper did.
-	arg := reflect.New(fn.Type().In(0)).Elem()
-	toolutil.PopulateForCredentialAudit(arg)
+			// Populated, not zero-valued: WalkForCredentialShapedFields only
+			// reports fields that actually carry a value, so a guard run
+			// against a zero response would pass whatever the wrapper did.
+			arg := reflect.New(fn.Type().In(0)).Elem()
+			toolutil.PopulateForCredentialAudit(arg)
 
-	survived := toolutil.AssertRedacted(fn.Call([]reflect.Value{arg})[0].Interface(), "RegistryInspect")
-	if len(survived) > 0 {
-		t.Errorf("redactRegistryInspect left %d credential-shaped field(s) populated: %v", len(survived), survived)
-	}
-}
-
-// TestGenerated_redactRegistryList_RemovesEveryCredentialShapedField proves redactRegistryList actually
-// strips what it is required to strip. cmd/gen_action_inputs refuses to emit
-// a handler for RegistryList unless a function of this name exists; existing is not the
-// same as working, and this is what tells the two apart.
-func TestGenerated_redactRegistryList_RemovesEveryCredentialShapedField(t *testing.T) {
-	t.Parallel()
-	fn := reflect.ValueOf(redactRegistryList)
-	if fn.Type().NumIn() != 1 || fn.Type().NumOut() != 1 {
-		t.Fatalf("redactRegistryList must take exactly one argument and return exactly one value, got %d in and %d out",
-			fn.Type().NumIn(), fn.Type().NumOut())
-	}
-
-	// Populated, not zero-valued: WalkForCredentialShapedFields only reports
-	// fields that actually carry a value, so a guard run against a zero
-	// response would pass whatever the wrapper did.
-	arg := reflect.New(fn.Type().In(0)).Elem()
-	toolutil.PopulateForCredentialAudit(arg)
-
-	survived := toolutil.AssertRedacted(fn.Call([]reflect.Value{arg})[0].Interface(), "RegistryList")
-	if len(survived) > 0 {
-		t.Errorf("redactRegistryList left %d credential-shaped field(s) populated: %v", len(survived), survived)
-	}
-}
-
-// TestGenerated_redactRegistryUpdate_RemovesEveryCredentialShapedField proves redactRegistryUpdate actually
-// strips what it is required to strip. cmd/gen_action_inputs refuses to emit
-// a handler for RegistryUpdate unless a function of this name exists; existing is not the
-// same as working, and this is what tells the two apart.
-func TestGenerated_redactRegistryUpdate_RemovesEveryCredentialShapedField(t *testing.T) {
-	t.Parallel()
-	fn := reflect.ValueOf(redactRegistryUpdate)
-	if fn.Type().NumIn() != 1 || fn.Type().NumOut() != 1 {
-		t.Fatalf("redactRegistryUpdate must take exactly one argument and return exactly one value, got %d in and %d out",
-			fn.Type().NumIn(), fn.Type().NumOut())
-	}
-
-	// Populated, not zero-valued: WalkForCredentialShapedFields only reports
-	// fields that actually carry a value, so a guard run against a zero
-	// response would pass whatever the wrapper did.
-	arg := reflect.New(fn.Type().In(0)).Elem()
-	toolutil.PopulateForCredentialAudit(arg)
-
-	survived := toolutil.AssertRedacted(fn.Call([]reflect.Value{arg})[0].Interface(), "RegistryUpdate")
-	if len(survived) > 0 {
-		t.Errorf("redactRegistryUpdate left %d credential-shaped field(s) populated: %v", len(survived), survived)
+			survived := toolutil.AssertRedacted(fn.Call([]reflect.Value{arg})[0].Interface(), g.operationID)
+			if len(survived) > 0 {
+				t.Errorf("%s left %d credential-shaped field(s) populated: %v", g.funcName, len(survived), survived)
+			}
+		})
 	}
 }

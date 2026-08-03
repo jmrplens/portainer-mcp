@@ -79,9 +79,9 @@
 // registries.configure non-persistence and the missing Kubernetes
 // auto-registration mentioned above are both real, both already known, and
 // neither is a route-existence divergence this command's mechanism can see.
-// It also does not probe the Kubernetes leg: see task-5-report.md for why
-// that leg's route table is not expected to differ from the Community and
-// Business Edition legs already probed.
+// It also does not probe the Kubernetes leg: see docs/api-divergences.md
+// §1.7 for why that leg's route table is not expected to differ from the
+// Community and Business Edition legs already probed.
 //
 // # Report, never gate
 //

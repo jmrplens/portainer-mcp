@@ -88,6 +88,7 @@ func buildRealHandlerSpec(t *testing.T, domain, operationID string) ([]structSpe
 type stubExecResult struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
+	Query  string `json:"query"`
 	Body   string `json:"body"`
 }
 
@@ -119,10 +120,10 @@ import (
 )
 
 func main() {
-	var method, path, body string
+	var method, path, query, body string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		method, path, body = r.Method, r.URL.Path, string(b)
+		method, path, query, body = r.Method, r.URL.Path, r.URL.RawQuery, string(b)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
@@ -140,7 +141,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	out, _ := json.Marshal(map[string]string{"method": method, "path": path, "body": body})
+	out, _ := json.Marshal(map[string]string{"method": method, "path": path, "query": query, "body": body})
 	fmt.Println(string(out))
 }
 `
@@ -280,8 +281,11 @@ func TestUnit_GenerateHandler_PathAndQuery_RoutesOptionalQueryIntoParamsStruct(t
 	if got.Path != "/api/registries/42" {
 		t.Errorf("request path = %q, want /api/registries/42: the path argument was mis-bound", got.Path)
 	}
-	if !strings.Contains(got.Path, "42") || got.Method != http.MethodGet {
-		t.Errorf("request = %s %s, unexpected", got.Method, got.Path)
+	if got.Method != http.MethodGet {
+		t.Errorf("request method = %q, want GET", got.Method)
+	}
+	if got.Query != "endpointId=9" {
+		t.Errorf("request query = %q, want endpointId=9: the query field never reached the params struct", got.Query)
 	}
 }
 
@@ -317,6 +321,9 @@ func TestUnit_GenerateHandler_ParamsOnly_NoPathNoBody(t *testing.T) {
 	got := executeGeneratedHandler(t, structs, spec, `{"view":"switcher"}`)
 	if got.Method != http.MethodGet || got.Path != "/api/addons" {
 		t.Errorf("request = %s %s, want GET /api/addons", got.Method, got.Path)
+	}
+	if got.Query != "view=switcher" {
+		t.Errorf("request query = %q, want view=switcher: the query field never reached the params struct", got.Query)
 	}
 }
 
@@ -371,6 +378,9 @@ func TestUnit_GenerateHandler_PathPathAndParams_BindsBothPathArgumentsAndTheQuer
 	want := "/api/docker/11/containers/22/image_status"
 	if got.Path != want {
 		t.Errorf("request path = %q, want %q: a path argument was mis-bound", got.Path, want)
+	}
+	if got.Query != "refresh=true" {
+		t.Errorf("request query = %q, want refresh=true: the query field never reached the params struct", got.Query)
 	}
 }
 
@@ -670,9 +680,12 @@ func TestUnit_HandlerFuncName_LowersOnlyTheFirstRune(t *testing.T) {
 		{"EcrDeleteRepository", "ecrDeleteRepository"},
 		{"SystemNodesCount", "systemNodesCount"},
 	} {
-		if got := handlerFuncName(tc.operationID); got != tc.want {
-			t.Errorf("handlerFuncName(%q) = %q, want %q", tc.operationID, got, tc.want)
-		}
+		t.Run(tc.operationID, func(t *testing.T) {
+			t.Parallel()
+			if got := handlerFuncName(tc.operationID); got != tc.want {
+				t.Errorf("handlerFuncName(%q) = %q, want %q", tc.operationID, got, tc.want)
+			}
+		})
 	}
 }
 

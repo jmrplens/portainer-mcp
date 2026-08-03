@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
 )
 
 // writeFixture writes body to dir/name, failing the test on error.
@@ -173,7 +175,7 @@ func TestUnit_ApiBaseURL_TrimsTrailingSlashAndAppendsAPI(t *testing.T) {
 // same environment variable test/e2e/suite's TestMain and up.sh already
 // agree on, rather than a second name this command invented for itself.
 func TestUnit_EstateDefault_UsesEnvVarWhenSet(t *testing.T) {
-	t.Setenv("PORTAINER_E2E_ESTATE", "/tmp/somewhere/estate.json")
+	t.Setenv(harness.EstateFileEnv, "/tmp/somewhere/estate.json")
 	if got := estateDefault(); got != "/tmp/somewhere/estate.json" {
 		t.Errorf("estateDefault() = %q, want the environment variable's value", got)
 	}
@@ -181,7 +183,7 @@ func TestUnit_EstateDefault_UsesEnvVarWhenSet(t *testing.T) {
 
 // TestUnit_EstateDefault_FallsBackWhenUnset covers the other branch.
 func TestUnit_EstateDefault_FallsBackWhenUnset(t *testing.T) {
-	t.Setenv("PORTAINER_E2E_ESTATE", "")
+	t.Setenv(harness.EstateFileEnv, "")
 	if got := estateDefault(); got != defaultEstate {
 		t.Errorf("estateDefault() = %q, want the fallback %q", got, defaultEstate)
 	}

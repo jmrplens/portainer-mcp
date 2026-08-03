@@ -334,7 +334,7 @@ func TestRegistryPing_Success_ReturnsDecodedBody(t *testing.T) {
 // through tools.Execute for the same reason (registries.ping also runs on
 // generated code now, and central schema validation is where "url is
 // required" is enforced).
-func TestRegistryPing_MissingURL_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+func TestUnit_RegistryPing_MissingURL_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	var called atomic.Bool
 	c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
@@ -406,7 +406,7 @@ func TestRegistryInspect_Success_CallsCorrectPath(t *testing.T) {
 // tools.Execute, the path every real caller actually takes, rather than
 // calling the handler directly and asserting a guard clause the handler no
 // longer has.
-func TestRegistryInspect_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+func TestUnit_RegistryInspect_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	spec := findSpec(t, "registries.inspect")
 	for _, id := range []int{0, -1} {
@@ -702,7 +702,7 @@ func TestRegistryDelete_Success_CallsCorrectPath(t *testing.T) {
 // counterpart of registries.inspect's guard above: registries.delete also
 // runs on generated code now, and the same generated "minimum": 1 on "id"
 // is what tools.Execute enforces.
-func TestRegistryDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
+func TestUnit_RegistryDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 	t.Parallel()
 	spec := findSpec(t, "registries.delete")
 	for _, id := range []int{0, -1} {
