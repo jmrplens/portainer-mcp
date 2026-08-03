@@ -3,6 +3,7 @@ package harness
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -199,10 +200,13 @@ func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
 
 	got := existing.MergeKubernetes(k8s)
 
-	if got.CE != existing.CE {
+	// Server now carries a []string field (ConflictingLicenceKeys), so it can
+	// no longer be compared with !=; reflect.DeepEqual is the direct
+	// replacement, not a weakening of the assertion.
+	if !reflect.DeepEqual(got.CE, existing.CE) {
 		t.Errorf("CE = %+v, want it unchanged at %+v", got.CE, existing.CE)
 	}
-	if got.EE != existing.EE {
+	if !reflect.DeepEqual(got.EE, existing.EE) {
 		t.Errorf("EE = %+v, want it unchanged at %+v", got.EE, existing.EE)
 	}
 	if got.AgentID != existing.AgentID {
@@ -211,7 +215,7 @@ func TestMergeKubernetes_PreservesTheComposeLegsAlreadyWritten(t *testing.T) {
 	if got.EdgeEndpointID != existing.EdgeEndpointID || got.EdgeAgentID != existing.EdgeAgentID || got.EdgeKey != existing.EdgeKey {
 		t.Errorf("edge fields changed: got %+v, want the edge fields from %+v", got, existing)
 	}
-	if got.Kubernetes != k8s {
+	if !reflect.DeepEqual(got.Kubernetes, k8s) {
 		t.Errorf("Kubernetes = %+v, want %+v", got.Kubernetes, k8s)
 	}
 }

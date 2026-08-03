@@ -1,0 +1,111 @@
+name: e2e
+
+# The whole estate is cheap: ~25s for the two compose Portainers, an agent and
+# an edge agent; another ~2 minutes for k3d plus the Helm chart (measured,
+# see plan/carry-forward.md). The sibling project (gitlab-mcp-server) gates
+# its equivalent Kubernetes leg behind workflow_dispatch because GitLab alone
+# takes ~5 minutes to boot; that reasoning does not transfer here, so both
+# legs run on every pull request rather than one being opt-in.
+#
+# test/e2e/suite is behind the `e2e` build tag, so it never runs as part of
+# the default `make test` / the main ci.yml workflow, whether or not this one
+# is green.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.5"
+
+jobs:
+  e2e:
+    name: Ephemeral Portainer estate
+    runs-on: ubuntu-latest
+    # Generous ceiling for image pulls on a cold runner, not for the estate
+    # itself: the measured total is well under 3 minutes end to end.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Provide the Business Edition licence
+        # Absent secret is not a failure: the Community Edition legs still
+        # run, and the Business Edition legs (and the edge domains, which are
+        # Business Edition only) skip with a named reason instead — see
+        # Sessions.For in test/e2e/suite. A fork's pull request has no access
+        # to repository secrets, and a red build for a secret a contributor
+        # cannot supply would be a bad first experience.
+        #
+        # The key never becomes a command-line argument and is never echoed:
+        # printf writes it straight to a file from the env var, exactly like
+        # up.sh/down.sh read it back out through read_licence. chmod 600
+        # matches the ownership the harness itself writes secrets with
+        # (writeOwnerOnlyAtomic).
+        env:
+          PORTAINER_LICENSE: ${{ secrets.PORTAINER_LICENSE }}
+        run: |
+          if [ -n "$PORTAINER_LICENSE" ]; then
+            printf 'PORTAINER_LICENSE=%s\n' "$PORTAINER_LICENSE" > .env
+            chmod 600 .env
+            echo "Business Edition legs enabled" >&2
+          else
+            echo "no licence secret available: Community Edition legs only" >&2
+          fi
+
+      - name: Confirm the Docker daemon accepts a privileged container
+        # Docker-in-Docker (test/e2e/docker-compose.yml's own "docker"
+        # service) needs `privileged: true`. GitHub-hosted Linux runners
+        # allow a *nested* container started by a regular `docker` command to
+        # run privileged — this is not the same as the job itself running
+        # inside a container via the `container:` key with `--privileged`,
+        # which hosted runners do restrict. This step fails fast, with a
+        # named cause, rather than letting a privileged-container refusal
+        # surface as an opaque compose failure three steps later.
+        run: |
+          if docker run --rm --privileged hello-world >/dev/null; then
+            echo "privileged containers are permitted on this runner" >&2
+          else
+            echo "::error::this runner refuses privileged containers; the compose Docker-in-Docker leg cannot run here"
+            exit 1
+          fi
+
+      - name: Bring up the compose estate (Community + Business Edition + agent)
+        run: make e2e-up
+
+      - name: Install the Kubernetes tooling (k3d, kubectl, helm)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.9.0 bash
+          curl -sfLo /usr/local/bin/kubectl \
+            "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
+          curl -sfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Bring up the Kubernetes leg (k3d + Portainer via Helm)
+        run: make e2e-k8s-up
+
+      - name: Run the pilot-domain suite against the live estate
+        run: make test-e2e
+
+      - name: Report unexercised catalog actions (informational, not a gate)
+        if: always()
+        run: make audit-e2e-gaps
+
+      - name: Tear down
+        # always(): a failure in any step above — provisioning, the suite,
+        # even a cancelled job — must still release the Business Edition
+        # licence and remove the estate. Each teardown step is best-effort
+        # (`|| true`): a stuck cluster or container must never be the reason
+        # the licence fails to release, and vice versa. The gitignored .env
+        # is removed on this same always() path so it never survives past
+        # the job that created it, on the success path or the failure one.
+        if: always()
+        run: |
+          make e2e-k8s-down || true
+          make e2e-down || true
+          rm -f .env

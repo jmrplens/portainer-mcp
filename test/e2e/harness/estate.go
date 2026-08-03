@@ -24,6 +24,17 @@ type Server struct {
 	Edition string      `json:"edition"`
 	BaseURL string      `json:"base_url"`
 	Creds   Credentials `json:"credentials"`
+
+	// ConflictingLicenceKeys carries what POST /licenses/add named as
+	// "conflictingKeys" when this server's licence was attached, if it was
+	// non-null. A clean attach leaves this empty. A non-empty value is the
+	// first observable sign that Portainer's own licensing service tracks
+	// activations across ephemeral runs (see plan/carry-forward.md); it is
+	// recorded here, rather than only logged once at attach time, so it
+	// survives past that one stderr line for whoever inspects the estate
+	// afterwards. Values are redacted the same way harness.ApplyLicence
+	// redacts its own errors.
+	ConflictingLicenceKeys []string `json:"conflicting_licence_keys,omitempty"`
 }
 
 // Estate is everything a suite needs to reach a running world.

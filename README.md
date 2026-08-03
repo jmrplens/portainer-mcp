@@ -217,6 +217,48 @@ make inspector                # Launch MCP Inspector UI
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines. The [Developer Documentation](https://jmrplens.github.io/portainer-mcp-enhanced/development/contributing/) covers project structure, adding tools, testing, dependencies, and CI/CD in detail.
 
+### End-to-end (e2e) testing
+
+`test/e2e` provisions a real, disposable Portainer estate — two servers (Community and, when a
+licence is available, Business Edition), a Portainer agent, an edge agent, and a Kubernetes leg in
+k3d — and drives every action under test against it over the actual MCP transport, not mocks.
+Everything runs on its own Docker-in-Docker daemon, so it never touches the host's containers or
+its Docker socket.
+
+```bash
+make e2e-up        # bring the compose estate up from empty (~25s)
+make e2e-k8s-up     # additionally bring up the k3d/Kubernetes leg (~2 min); needs k3d, kubectl, helm
+make test-e2e       # run the e2e suite against the live estate (go test -tags e2e)
+make e2e-k8s-down    # tear the Kubernetes leg down
+make e2e-down        # tear the compose estate down
+```
+
+`make e2e-up` and `make e2e-down` need only Docker and Docker Compose. `make e2e-k8s-up` /
+`make e2e-k8s-down` additionally need `k3d`, `kubectl` and `helm` on `PATH` — the scripts fail with
+a named message if any is missing rather than doing something partial.
+
+**Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
+gitignored `.env` at the repository root (see `.env.example`):
+
+```
+PORTAINER_LICENSE=your-business-edition-key
+```
+
+Without it, `make e2e-up` still provisions the Community Edition leg; suites that need Business
+Edition skip with a named reason instead of failing. The licence is released back
+(`POST /licenses/remove`) from every server that attached it — compose EE and the Kubernetes leg
+alike — before that server's container is destroyed, on both the success and the failure path, so
+no run keeps a licence attached past its own teardown. `make e2e-licence-release` recovers a licence
+left stranded by a run that crashed before it could release: it attaches the licence to a throwaway
+server and releases it immediately, and is safe to run even when nothing is actually stranded.
+
+**In CI** (`.github/workflows/e2e.yml`), the same is true: a pull request from a fork has no access
+to the `PORTAINER_LICENSE` repository secret, so the workflow writes an empty `.env` and the
+Business Edition legs skip with a named reason — the build does not go red for a secret a
+contributor cannot supply. The key is written to `.env` from the environment, never as a
+command-line argument or an echoed value, and the file is removed on every exit path, including a
+failed run.
+
 ### Security
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Please use **private disclosure** — do not open public issues for security bugs.

@@ -332,7 +332,7 @@ func TestApplyLicence_DoesNotLeakTheKeyIntoTheError(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	const secret = "3-SUPERSECRETLICENCEKEY=="
-	err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	_, err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
 	if err == nil {
 		t.Fatal("ApplyLicence() error = nil, want an error on a 400")
 	}
@@ -354,7 +354,7 @@ func TestApplyLicence_ServerEchoesTheKey_ItIsRedacted(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	_, err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
 	if err == nil {
 		t.Fatal("ApplyLicence() error = nil, want an error on a 400")
 	}
@@ -365,6 +365,55 @@ func TestApplyLicence_ServerEchoesTheKey_ItIsRedacted(t *testing.T) {
 	// trades one problem for another.
 	if !strings.Contains(err.Error(), "invalid licence") {
 		t.Errorf("error = %q, want it to keep the server's diagnosis", err)
+	}
+}
+
+func TestApplyLicence_CleanAttach_ReturnsNoConflictingKeys(t *testing.T) {
+	t.Parallel()
+	// The measured, normal case: a clean attach answers
+	// {"conflictingKeys":null}.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"conflictingKeys":null}`))
+	}))
+	t.Cleanup(server.Close)
+
+	conflicting, err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", "3-KEY")
+	if err != nil {
+		t.Fatalf("ApplyLicence() error = %v", err)
+	}
+	if len(conflicting) != 0 {
+		t.Errorf("conflicting = %v, want none on a clean attach", conflicting)
+	}
+}
+
+func TestApplyLicence_ConflictingKeys_ReturnedAndRedacted(t *testing.T) {
+	t.Parallel()
+	// The early warning the plan asks to watch for: a non-null
+	// conflictingKeys is the first observable sign the vendor tracks
+	// activations across runs. It must not become an error (failing here
+	// would only block investigating it), and if the server happened to name
+	// our own key back to us, that value is exactly as sensitive as the key
+	// itself and must not reach the estate file or a log unredacted.
+	const secret = "3-SUPERSECRETLICENCEKEY=="
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"conflictingKeys":[%q,"3-someOtherKey"]}`, secret)
+	}))
+	t.Cleanup(server.Close)
+
+	conflicting, err := ApplyLicence(context.Background(), server.Client(), server.URL, "jwt", secret)
+	if err != nil {
+		t.Fatalf("ApplyLicence() error = %v, want no error: a conflict is a warning, not a failure", err)
+	}
+	if len(conflicting) != 2 {
+		t.Fatalf("conflicting = %v, want 2 entries", conflicting)
+	}
+	for _, k := range conflicting {
+		if strings.Contains(k, secret) || strings.Contains(k, "SUPERSECRET") {
+			t.Fatalf("a conflicting key leaked our own licence key unredacted: %v", conflicting)
+		}
+	}
+	if conflicting[1] != "3-someOtherKey" {
+		t.Errorf("conflicting[1] = %q, want the unrelated key left untouched", conflicting[1])
 	}
 }
 

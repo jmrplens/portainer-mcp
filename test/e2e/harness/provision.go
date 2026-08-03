@@ -270,20 +270,41 @@ func EnableEdgeCompute(ctx context.Context, c *http.Client, baseURL, apiKey, por
 	return nil
 }
 
-// ApplyLicence installs a Business Edition licence.
+// ApplyLicence installs a Business Edition licence and reports any
+// conflicting keys the server names.
 //
 // Neither our own error text nor anything quoted back from the server may
 // carry the key. It comes from a gitignored .env, it is registered to a
 // personal email, and a CI log is the one place it must never reach — so the
 // server's response is scrubbed before it is wrapped, on the assumption that a
 // validation message may echo what it was sent.
-func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) error {
+//
+// A clean attach answers {"conflictingKeys":null}. A non-null value is not a
+// failure — this call still succeeds and returns it, never an error — but it
+// is the first observable sign that Portainer's own licensing service tracks
+// activations across ephemeral runs, which the local counters this harness
+// can otherwise read do not show (see plan/carry-forward.md). The caller logs
+// it prominently and carries it into the estate; failing here would only
+// block the investigation that signal is for. The returned keys are redacted
+// exactly like our own error text, since a conflicting key is exactly as
+// sensitive as the one this harness holds.
+func ApplyLicence(ctx context.Context, c *http.Client, baseURL, jwt, key string) ([]string, error) {
 	body := map[string]string{"key": key}
 	bearer := map[string]string{"Authorization": "Bearer " + jwt}
-	if err := postJSON(ctx, c, baseURL+"/api/licenses/add", body, bearer, nil); err != nil {
-		return fmt.Errorf("apply licence: %w", redactSecret(err, key))
+	var resp struct {
+		ConflictingKeys []string `json:"conflictingKeys"`
 	}
-	return nil
+	if err := postJSON(ctx, c, baseURL+"/api/licenses/add", body, bearer, &resp); err != nil {
+		return nil, fmt.Errorf("apply licence: %w", redactSecret(err, key))
+	}
+	if len(resp.ConflictingKeys) == 0 {
+		return nil, nil
+	}
+	conflicting := make([]string, len(resp.ConflictingKeys))
+	for i, k := range resp.ConflictingKeys {
+		conflicting[i] = redactString(k, key)
+	}
+	return conflicting, nil
 }
 
 // ReleaseLicence removes a previously applied Business Edition licence.
@@ -306,6 +327,16 @@ func ReleaseLicence(ctx context.Context, c *http.Client, baseURL, jwt, key strin
 // redactedMarker replaces every occurrence of a secret in an error's text.
 const redactedMarker = "[REDACTED]"
 
+// redactString returns s with every occurrence of secret replaced by a fixed
+// marker. It is a no-op when secret is empty, so an unlicensed run does not
+// start replacing every empty string in everything it touches.
+func redactString(s, secret string) string {
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, redactedMarker)
+}
+
 // redactSecret returns err with every occurrence of secret in its rendered
 // text replaced by a fixed marker. It is a no-op when secret is empty, so an
 // unlicensed run does not start replacing every empty string in every error
@@ -314,7 +345,7 @@ func redactSecret(err error, secret string) error {
 	if err == nil || secret == "" {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), secret, redactedMarker))
+	return errors.New(redactString(err.Error(), secret))
 }
 
 // LicenceNodes reports the node allowance of the installed licence.

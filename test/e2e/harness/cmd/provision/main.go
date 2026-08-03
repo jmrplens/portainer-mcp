@@ -56,28 +56,47 @@ const (
 
 	k8sEndpointName    = "k3d"
 	k8sEndpointEdition = "Kubernetes"
+
+	// recoverURLEnv names the throwaway server's address that
+	// scripts/licence-check.sh starts specifically for licence recovery: a
+	// fresh Business Edition container, never the shared estate. It has its
+	// own environment variable, distinct from ceBaseURLEnv/eeBaseURLEnv, so a
+	// stray value left over from a normal run can never silently redirect a
+	// recovery attempt at the real estate instead.
+	recoverURLEnv = "PORTAINER_E2E_RECOVER_URL"
 )
 
 func main() {
 	kubernetes := flag.Bool("kubernetes", false, "provision the Kubernetes leg into the existing estate")
 	releaseLicence := flag.Bool("release-licence", false,
-		"release the Kubernetes leg's Business Edition licence instead of provisioning")
+		"release a leg's Business Edition licence instead of provisioning "+
+			"(the Kubernetes leg's with -kubernetes, the compose EE leg's otherwise)")
+	recoverLicence := flag.Bool("recover-licence", false,
+		"attach and immediately release the licence against a throwaway server, "+
+			"recovering one stranded by a crashed run")
 	flag.Parse()
 
-	if err := run(*kubernetes, *releaseLicence); err != nil {
+	if err := run(*kubernetes, *releaseLicence, *recoverLicence); err != nil {
 		fmt.Fprintf(os.Stderr, "provision: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(kubernetes, releaseLicence bool) error {
+func run(kubernetes, releaseLicence, recoverLicence bool) error {
+	if recoverLicence {
+		return recoverStrandedLicence()
+	}
+
 	estatePath := os.Getenv(harness.EstateFileEnv)
 	if estatePath == "" {
 		return fmt.Errorf("%s is not set", harness.EstateFileEnv)
 	}
 
 	if releaseLicence {
-		return releaseKubernetesLicence(estatePath)
+		if kubernetes {
+			return releaseKubernetesLicence(estatePath)
+		}
+		return releaseComposeLicence(estatePath)
 	}
 	if kubernetes {
 		return runKubernetes(estatePath)
@@ -207,9 +226,12 @@ func provisionBusinessEdition(ctx context.Context, client *http.Client, baseURL,
 		return harness.Server{}, err
 	}
 
-	if err := harness.ApplyLicence(ctx, client, baseURL, server.Creds.JWT, licence); err != nil {
+	conflicting, err := harness.ApplyLicence(ctx, client, baseURL, server.Creds.JWT, licence)
+	if err != nil {
 		return harness.Server{}, fmt.Errorf("apply business edition licence: %w", err)
 	}
+	logConflictingKeys("EE", conflicting)
+	server.ConflictingLicenceKeys = conflicting
 
 	nodes, err := harness.LicenceNodes(ctx, client, baseURL, server.Creds.JWT)
 	if err != nil {
@@ -218,6 +240,22 @@ func provisionBusinessEdition(ctx context.Context, client *http.Client, baseURL,
 	fmt.Fprintf(os.Stderr, "EE: licence applied, %d node(s) allowed\n", nodes)
 
 	return server, nil
+}
+
+// logConflictingKeys logs a non-empty conflictingKeys prominently to stderr.
+// It is deliberately loud rather than a single line among many: this is the
+// first observable sign that Portainer's licensing service might track
+// activations across ephemeral runs (see plan/carry-forward.md), and a reader
+// scrolling past a wall of provisioning output must not miss it. Never fails
+// and never called with an error — a conflict is a warning, not a failure.
+func logConflictingKeys(leg string, conflicting []string) {
+	if len(conflicting) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"WARNING: %s: licence attach reported conflictingKeys %v — this may mean the "+
+			"vendor tracks activations across runs after all; see plan/carry-forward.md\n",
+		leg, conflicting)
 }
 
 // edgePortainerURL and edgeTunnelAddr are the EE server's compose-network
@@ -326,12 +364,16 @@ func runKubernetes(estatePath string) error {
 		return fmt.Errorf("provision Kubernetes: %w", err)
 	}
 
+	var conflicting []string
 	if licence == "" {
 		fmt.Fprintln(os.Stderr, "no licence supplied: Kubernetes leg provisioned without Business Edition")
 	} else {
-		if err := harness.ApplyLicence(ctx, client, baseURL, creds.JWT, licence); err != nil {
-			return fmt.Errorf("apply business edition licence: %w", err)
+		var applyErr error
+		conflicting, applyErr = harness.ApplyLicence(ctx, client, baseURL, creds.JWT, licence)
+		if applyErr != nil {
+			return fmt.Errorf("apply business edition licence: %w", applyErr)
 		}
+		logConflictingKeys("Kubernetes", conflicting)
 		nodes, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT)
 		if err != nil {
 			return fmt.Errorf("read applied licence: %w", err)
@@ -348,7 +390,10 @@ func runKubernetes(estatePath string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Kubernetes: registered endpoint %d\n", endpointID)
 
-	estate = estate.MergeKubernetes(harness.Server{Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds})
+	estate = estate.MergeKubernetes(harness.Server{
+		Edition: k8sEndpointEdition, BaseURL: baseURL, Creds: creds,
+		ConflictingLicenceKeys: conflicting,
+	})
 	if err := estate.SaveTo(estatePath); err != nil {
 		return fmt.Errorf("save estate: %w", err)
 	}
@@ -393,5 +438,98 @@ func releaseKubernetesLicence(estatePath string) error {
 		return fmt.Errorf("release kubernetes licence: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "kubernetes: licence released")
+	return nil
+}
+
+// releaseComposeLicence is releaseKubernetesLicence's twin for the compose
+// legs' Business Edition server. down.sh calls this before tearing the
+// compose project down: once the containers are gone the server is
+// unreachable and the licence key would be stranded against a real account
+// for good. Equally forgiving and for the same reason — a best-effort
+// teardown step must never be why the estate fails to come down.
+func releaseComposeLicence(estatePath string) error {
+	licence := os.Getenv(licenceEnv)
+	if licence == "" {
+		fmt.Fprintln(os.Stderr, "no licence supplied: nothing to release")
+		return nil
+	}
+
+	estate, err := harness.LoadEstate(estatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not load estate: %v: nothing to release\n", err)
+		return nil
+	}
+	if !estate.HasBusinessEdition() {
+		fmt.Fprintln(os.Stderr, "no business edition leg in the estate: nothing to release")
+		return nil
+	}
+	if estate.EE.Creds.JWT == "" {
+		fmt.Fprintln(os.Stderr, "business edition leg has no jwt on file: nothing to release")
+		return nil
+	}
+
+	client := &http.Client{Timeout: kubernetesClientTimeout}
+	if err := harness.ReleaseLicence(context.Background(), client, estate.EE.BaseURL,
+		estate.EE.Creds.JWT, licence); err != nil {
+		return fmt.Errorf("release business edition licence: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "business edition: licence released")
+	return nil
+}
+
+// recoverStrandedLicence attaches, then immediately releases, the licence
+// named by licenceEnv against a throwaway Business Edition server —
+// recovering one stranded by a run that crashed before its own teardown
+// could release it. scripts/licence-check.sh (make e2e-licence-release)
+// starts that throwaway server, calls this, and destroys the container
+// afterwards regardless of outcome.
+//
+// Reusing harness.Provision here rather than the fuller provisionServer
+// sequence is deliberate: the recovery needs nothing this instance will keep
+// past the one release call, so registering a docker endpoint would only be
+// ceremony with no consumer.
+func recoverStrandedLicence() error {
+	licence := os.Getenv(licenceEnv)
+	if licence == "" {
+		return fmt.Errorf("%s is not set: nothing to recover", licenceEnv)
+	}
+	baseURL := os.Getenv(recoverURLEnv)
+	if baseURL == "" {
+		return fmt.Errorf("%s is not set", recoverURLEnv)
+	}
+
+	client := &http.Client{Timeout: kubernetesClientTimeout}
+	ctx := context.Background()
+
+	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	fmt.Fprintf(os.Stderr, "waiting for the throwaway recovery server (%s) to become ready\n", baseURL)
+	if _, err := harness.WaitReady(waitCtx, client, baseURL); err != nil {
+		return fmt.Errorf("wait for recovery server: %w", err)
+	}
+
+	creds, err := harness.Provision(ctx, client, baseURL, "")
+	if err != nil {
+		return fmt.Errorf("provision recovery server: %w", err)
+	}
+
+	conflicting, err := harness.ApplyLicence(ctx, client, baseURL, creds.JWT, licence)
+	if err != nil {
+		return fmt.Errorf("attach stranded licence: %w", err)
+	}
+	logConflictingKeys("recovery", conflicting)
+
+	if err := harness.ReleaseLicence(ctx, client, baseURL, creds.JWT, licence); err != nil {
+		return fmt.Errorf("release stranded licence: %w", err)
+	}
+
+	// A licence still readable after release would mean the recovery did not
+	// actually work, silently. LicenceNodes returning its "none installed"
+	// error is the confirmation that GET /licenses is now empty.
+	if _, err := harness.LicenceNodes(ctx, client, baseURL, creds.JWT); err == nil {
+		return fmt.Errorf("licence still reads as installed on the recovery server after release")
+	}
+
+	fmt.Fprintln(os.Stderr, "stranded licence released: safe to reuse")
 	return nil
 }
