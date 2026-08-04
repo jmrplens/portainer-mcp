@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -127,6 +127,32 @@ audit-spec-reality:
 # drifted.
 audit-spec-drift:
 	go run ./cmd/audit_spec_drift -spec-version=$(SPEC_VERSION)
+
+# audit-spec-delta reports what changed between two OpenAPI documents — the
+# vendored one and a newer candidate — as a work list grouped by domain,
+# ordered added/removed/struct-touching/cosmetic within each domain. It never
+# gates, unlike audit-spec-drift above: a candidate version has not been
+# adopted yet, so there is nothing about the difference for this project's
+# own build to fail on. See cmd/audit_spec_delta's package doc for why its
+# "changed" count is narrower than a full operation-node diff by design, and
+# for the real 2.43.0 -> 2.44.0 measurement that verified it.
+#
+# BEFORE and AFTER are required file paths to two OpenAPI documents — the
+# currently vendored api/specs/ee-$(SPEC_VERSION).json is the usual BEFORE;
+# a newer version bundled into a scratch path with
+# plan/research/specs/bundle.py (never into api/specs/, which stays vendored
+# to the one version the catalog was generated from) is the usual AFTER.
+# JSON=1 emits machine-readable output instead of the human work list.
+#
+# Example:
+#   python3 plan/research/specs/bundle.py ee 2.45.0 /tmp/ee-2.45.0.json
+#   make audit-spec-delta BEFORE=api/specs/ee-$(SPEC_VERSION).json AFTER=/tmp/ee-2.45.0.json
+audit-spec-delta:
+	@if [ -z "$(BEFORE)" ] || [ -z "$(AFTER)" ]; then \
+		echo "usage: make audit-spec-delta BEFORE=<path-to-older-spec> AFTER=<path-to-newer-spec> [JSON=1]"; \
+		exit 2; \
+	fi
+	go run ./cmd/audit_spec_delta -before $(BEFORE) -after $(AFTER) $(if $(JSON),-json,)
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
