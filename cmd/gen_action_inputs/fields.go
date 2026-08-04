@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -158,17 +159,62 @@ func pathParamTakesMinimum(operationID, paramName string) bool {
 	return !excepted
 }
 
-// jsonTag renders one field's struct tag. required decides omitempty, and
-// nothing else does: google/jsonschema-go's reflector derives a schema's
-// "required" list purely from a field's own omitempty/omitzero tag, so this
-// is the single place a spec's required/optional status becomes Go source —
-// get this wrong and the published schema disagrees with the spec regardless
-// of the field's Go type.
-func jsonTag(name string, required bool) string {
-	if required {
-		return fmt.Sprintf("`json:%q`", name)
+// fieldTag renders one field's full struct tag: the "json" tag and, when
+// description is non-empty, a "jsonschema" tag carrying it.
+//
+// required decides omitempty on the "json" tag, and nothing else does:
+// google/jsonschema-go's reflector derives a schema's "required" list purely
+// from a field's own omitempty/omitzero tag (jsonschema-go@v0.4.3's infer.go:
+// `if !info.settings["omitempty"] && !info.settings["omitzero"] { s.Required
+// = append(...) }`), so this is the single place a spec's required/optional
+// status becomes Go source — get this wrong and the published schema
+// disagrees with the spec regardless of the field's Go type or its
+// "jsonschema" tag.
+//
+// The "jsonschema" tag carries description verbatim and nothing else.
+// Checked directly against the vendored module rather than assumed: this
+// version's reflector (infer.go, same file, a few lines above the
+// "required" check just cited) does exactly one thing with this tag —
+// `if tag, ok := field.Tag.Lookup("jsonschema"); ok { fs.Description = tag }`
+// — the *entire* tag value becomes the field's description, verbatim, with
+// no comma-separated keyword syntax of its own. This project's own
+// schema_test.go fixture (sampleInput) already demonstrates the trap of
+// assuming the sibling gitlab-mcp-server project's convention
+// (`jsonschema:"text,required"`) carries over: its ID field's tag ends
+// "...the tag,required", and that whole ",required" suffix lands in the
+// published description text, not in any required/optional decision — this
+// function must never append anything past the description itself, or every
+// generated field would carry the same pollution.
+//
+// Rendered as an ordinary (non-raw) Go string literal via %q whenever the
+// tag content itself contains a backtick, rather than the backtick-delimited
+// raw string this generator used before descriptions were added to the tag:
+// 32 of the vendored Business Edition specification's descriptions contain a
+// backtick, which would terminate a raw string literal early and either fail
+// to compile or silently truncate the tag. %q escapes exactly what needs
+// escaping (quotes, backslashes, newlines) for the common case; falling back
+// to it only when a backtick is present keeps the common, backtick-free case
+// rendering exactly as before.
+func fieldTag(name string, required bool, description string) string {
+	content := "json:" + strconv.Quote(jsonNameValue(name, required))
+	if description != "" {
+		content += " jsonschema:" + strconv.Quote(description)
 	}
-	return fmt.Sprintf("`json:%q`", name+",omitempty")
+	if strings.ContainsRune(content, '`') {
+		return fmt.Sprintf("%q", content)
+	}
+	return "`" + content + "`"
+}
+
+// jsonNameValue renders the value half of a field's "json" tag: the wire name
+// alone when required, or the wire name plus ",omitempty" when not — see
+// fieldTag's doc comment for why required is the only thing that decides
+// this.
+func jsonNameValue(name string, required bool) string {
+	if required {
+		return name
+	}
+	return name + ",omitempty"
 }
 
 // isEnumScalar reports whether t is a JSON Schema type this generator's enum

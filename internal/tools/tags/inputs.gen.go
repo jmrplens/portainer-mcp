@@ -10,7 +10,7 @@ type tagCreateInput struct {
 // tagDeleteInput is the parameter shape for operation TagDelete (DELETE /tags/{id}).
 type tagDeleteInput struct {
 	// ID Tag identifier
-	ID int `json:"id"`
+	ID int `json:"id" jsonschema:"Tag identifier"`
 }
 
 func (tagDeleteInput) MinimumParams() map[string]int {
