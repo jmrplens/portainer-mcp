@@ -586,3 +586,81 @@ func TestUnit_AuditDrift_FallsBackToCESpec(t *testing.T) {
 		t.Errorf("auditDrift() ActionsAudited = %d, want 1", result.ActionsAudited)
 	}
 }
+
+// zeroFieldSpec builds a vendored spec fixture for fixtureOperationID with no
+// parameters and no request body at all — the "vacuous comparison" case
+// ActionsWithZeroFields exists to surface: a parameterless real action, such
+// as registries.list or every system action but system.info's siblings, 8 of
+// this repository's 19 declared actions at the time this field was added.
+func zeroFieldSpec() map[string]specOperation {
+	return map[string]specOperation{
+		fixtureOperationID: {
+			Op: specdiff.SpecOperation{
+				OperationID: fixtureOperationID,
+				Method:      http.MethodGet,
+				Path:        "/" + fixtureOperationID,
+				Summary:     "Fixture action",
+				Description: "d",
+			},
+			Domain: "fixture",
+		},
+	}
+}
+
+// TestUnit_AuditDrift_ZeroFieldAndPopulatedActions_CountActionsWithZeroFieldsCorrectly
+// is table-driven over the two cases ActionsWithZeroFields exists to tell
+// apart: an action with nothing to compare must count toward it (the
+// vacuous-comparison case the field was added to surface), and an action
+// that does compare a real field must not (or the counter would be
+// meaningless the moment every action happened to have at least one field).
+//
+// Both cases assert ActionsAudited and FieldsAudited before checking
+// ActionsWithZeroFields, not merely the zero-fields count on its own: a
+// populated-action case that only checked ActionsWithZeroFields == 0 would
+// pass just as happily if auditDrift silently skipped the fixture action
+// altogether (never auditing it, and so never counting it as zero-field
+// either) as it would for a correct implementation that genuinely compared
+// the one real field and found it non-vacuous — asserting FieldsAudited == 1
+// first is what tells those two apart.
+func TestUnit_AuditDrift_ZeroFieldAndPopulatedActions_CountActionsWithZeroFieldsCorrectly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                      string
+		eeOps                     map[string]specOperation
+		actions                   []toolutil.ActionSpec
+		wantFieldsAudited         int
+		wantActionsWithZeroFields int
+	}{
+		{
+			name:                      "zero field action",
+			eeOps:                     zeroFieldSpec(),
+			actions:                   []toolutil.ActionSpec{fixtureAction(fixtureOperationID, nil)},
+			wantFieldsAudited:         0,
+			wantActionsWithZeroFields: 1,
+		},
+		{
+			name:                      "action with fields",
+			eeOps:                     singleFieldSpec("string", ""),
+			actions:                   []toolutil.ActionSpec{fixtureAction(fixtureOperationID, fixtureInputNoDescription{})},
+			wantFieldsAudited:         1,
+			wantActionsWithZeroFields: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := auditDrift(tc.eeOps, map[string]specOperation{}, tc.actions, nil)
+			if err != nil {
+				t.Fatalf("auditDrift() error = %v", err)
+			}
+			if result.ActionsAudited != 1 {
+				t.Fatalf("auditDrift() ActionsAudited = %d, want 1", result.ActionsAudited)
+			}
+			if result.FieldsAudited != tc.wantFieldsAudited {
+				t.Fatalf("auditDrift() FieldsAudited = %d, want %d", result.FieldsAudited, tc.wantFieldsAudited)
+			}
+			if result.ActionsWithZeroFields != tc.wantActionsWithZeroFields {
+				t.Errorf("auditDrift() ActionsWithZeroFields = %d, want %d", result.ActionsWithZeroFields, tc.wantActionsWithZeroFields)
+			}
+		})
+	}
+}

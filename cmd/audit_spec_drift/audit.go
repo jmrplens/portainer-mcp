@@ -205,6 +205,17 @@ type auditResult struct {
 	// ActionsAudited so a reader does not have to already know that
 	// distinction exists to ask for it.
 	FieldsAudited int
+	// ActionsWithZeroFields is how many of ActionsAudited compare no fields
+	// at all — a parameterless action, such as registries.list or every
+	// system action but system.info's siblings. buildReport prints this
+	// alongside ActionsAudited for the identical reason FieldsAudited itself
+	// was added: "Actions audited: 19" reads the same whether the other
+	// actions compare 51 real fields between them or this audit's own
+	// comparison engine silently stopped comparing anything, and the same
+	// blind spot exists one level up — "19 actions audited" on its own does
+	// not say that 8 of them were never going to find anything regardless,
+	// simply because they have nothing to compare.
+	ActionsWithZeroFields int
 }
 
 // HasDrift reports whether the build must fail: an un-excused gating finding,
@@ -258,6 +269,9 @@ func auditDrift(eeOps, ceOps map[string]specOperation, actions []toolutil.Action
 
 		result.ActionsAudited++
 		result.FieldsAudited += len(specShape.Fields)
+		if len(specShape.Fields) == 0 {
+			result.ActionsWithZeroFields++
+		}
 		for _, change := range specdiff.Compare(specShape, catalogShape) {
 			gating := isGating(change)
 			allowListed := false

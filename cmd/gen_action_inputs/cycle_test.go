@@ -301,13 +301,15 @@ func freshDomainDir(t *testing.T, toolsDir, domain string) {
 func TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name          string
-		operationID   string
-		poisonDomain  string
-		anotherDomain string
+		name           string
+		operationID    string
+		mechanicalName string // handlerFuncName(operationID): must not appear anywhere in poisonDomain's output
+		poisonDomain   string
+		cleanHandler   string // a real, unrelated handler still expected in poisonDomain's actions.go
+		anotherDomain  string
 	}{
-		{"poisoned domain sorts last", "TagCreate", "tags", "registries"},
-		{"poisoned domain sorts first", "RegistryPing", "registries", "tags"},
+		{"poisoned domain sorts last", "TagCreate", "tagCreate", "tags", "func tagList(", "registries"},
+		{"poisoned domain sorts first", "RegistryPing", "registryPing", "registries", "func registryList(", "tags"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -320,15 +322,35 @@ func TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated(t *tes
 			if err == nil {
 				t.Fatalf("run() = nil error, want a refusal: %s's response schema cannot be resolved", tc.operationID)
 			}
-			if !strings.Contains(err.Error(), "could not be checked for credential-shaped response fields") {
+			if !strings.Contains(err.Error(), "refused generation") {
 				t.Errorf("error = %q, want the deferred-refusal summary", err)
 			}
 
-			// The domain holding the unresolvable operation is left untouched...
-			poisoned := filepath.Join(toolsDir, tc.poisonDomain, "actions.go")
-			if _, statErr := os.Stat(poisoned); !os.IsNotExist(statErr) {
-				t.Errorf("%s/actions.go exists (stat error %v), want it unwritten: nothing about a domain with an uncheckable operation can be trusted",
+			// Since P3.3 task 3, an unresolvable response schema costs only the
+			// operation it belongs to, not the whole domain: registries and tags
+			// both have real operations unrelated to the poisoned one (the
+			// three hand-written registries overrides do not depend on
+			// RegistryPing at all, and tags' own TagList/TagDelete do not
+			// depend on TagCreate), so the domain's own files must still exist
+			// and still declare them.
+			poisonedActions := filepath.Join(toolsDir, tc.poisonDomain, "actions.go")
+			actionsSrc, statErr := os.ReadFile(poisonedActions)
+			if statErr != nil {
+				t.Fatalf("%s/actions.go was not written (%v); a domain with one unresolvable operation must still generate every other one",
 					tc.poisonDomain, statErr)
+			}
+			if !strings.Contains(string(actionsSrc), tc.cleanHandler) {
+				t.Errorf("%s/actions.go does not declare %s, a clean operation unrelated to %s's refusal:\n%s",
+					tc.poisonDomain, tc.cleanHandler, tc.operationID, actionsSrc)
+			}
+			// ...but the unresolvable operation itself must still contribute
+			// nothing: no mechanical handler name, and (since this generator
+			// never learns whether an unresolvable schema is credential-shaped)
+			// no ActionSpec/OperationID reference either.
+			for _, name := range []string{tc.mechanicalName, tc.operationID} {
+				if strings.Contains(string(actionsSrc), name) {
+					t.Errorf("%s/actions.go contains %q, want nothing contributed by the unresolvable operation %s", tc.poisonDomain, name, tc.operationID)
+				}
 			}
 			// ...and every other domain is generated exactly as it would have been.
 			for _, name := range []string{"actions.go", "inputs.go"} {

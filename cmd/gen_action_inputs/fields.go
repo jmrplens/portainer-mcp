@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 )
 
 // structSpec is one Go struct this generator will emit: either the flat
@@ -62,6 +64,37 @@ type fieldSpec struct {
 	// since google/jsonschema-go's reflector has no struct-tag syntax for
 	// "minimum" either.
 	Minimum *int
+	// RequiresEdition is non-empty (always edition.EE, the only value that
+	// means anything — see toolutil.FieldEditions) when this field is present
+	// in the Business Edition operation's resolved schema and absent from the
+	// Community one: a shared operation whose *shape* still is not shared.
+	// Set by ceEEFieldDiff/applyFieldEditionGate in main.go's per-operation
+	// loop, never by assembleFields/assembleOperationFields themselves, which
+	// have no notion of a second, Community-side resolution at all. Rendered
+	// as an `edition:"EE"` struct tag by fieldTag below, read back by
+	// toolutil.FieldEditions.
+	//
+	// applyFieldEditionGate itself is nested-inclusive — it stamps this tag
+	// onto a nested structSpec's own Fields exactly the way it stamps the
+	// top-level Input struct's, since both are plain []fieldSpec — but
+	// pruning is not: toolutil.FieldEditions, which actioncatalog.Build reads
+	// to decide what to prune (see that package's Catalog.InputSchema doc
+	// comment), inspects only a struct's own top-level fields. A nested
+	// struct reached through a field that is *itself* untagged is never
+	// recursed into, so a tag landing on one of its fields is inert unless
+	// some ancestor field on the path back to the top-level Input struct also
+	// carries the tag (in which case the whole subtree, tag included, is
+	// already dropped as one property — see pruneInputSchemaByEdition). Measured
+	// directly against a full scratch regeneration of both vendored specs at
+	// the time this note was written: seven real operations hit this —
+	// GitOpsSourcesTest, GitOpsSourcesTestById, CreateKubernetesNamespace,
+	// UpdateKubernetesNamespace, UpdateKubernetesNamespaceDeprecated (domain
+	// kubernetes), LDAPCheck (domain ldap) and UserUpdate (domain users) —
+	// none of them in wave 1. See docs/api-divergences.md for the fuller
+	// account and the precise field lists; a wave scaffolding one of those
+	// seven must either implement nested pruning or hand-verify each nested
+	// tag it emits is subsumed by an already-gated ancestor.
+	RequiresEdition edition.Edition
 }
 
 // isIdentifierPathParam reports whether name — a path parameter's own OpenAPI
@@ -133,19 +166,31 @@ type pathParamKey struct {
 //     everywhere else it appears (endpointRegistryAccess, and the registries
 //     domain's own routes), where zero really is invalid.
 //
-//   - containerId on the three operations below: declared "integer" in the
-//     vendored spec, but Portainer reads it as a string and passes it
-//     straight through to Docker as a hex container ID. This is the same
+//   - containerId on three operations, and serviceId on a fourth, below:
+//     declared "integer" in the vendored spec, but Portainer reads each as a
+//     string and passes it straight through to Docker (a hex container ID)
+//     or Docker Swarm (an alphanumeric service ID). This is the same
 //     documented-wrong-type defect "repositoryName" is excluded for, and it
-//     was simply never examined when the suffix rule was written. A hex ID is
-//     not reliably parseable as an integer at all, so a numeric lower bound
-//     asserts a guarantee about a value that is not a number; this generator
-//     refuses to mislabel an upstream defect as a constraint.
+//     was simply never examined when the suffix rule was written. Neither
+//     shape is reliably parseable as an integer at all, so a numeric lower
+//     bound asserts a guarantee about a value that is not a number; this
+//     generator refuses to mislabel an upstream defect as a constraint. All
+//     four also carry the identical entry in pathParamTypeOverrides above,
+//     which is what changes their rendered Go/JSON Schema type from "int" to
+//     "string" in the first place — a field whose published type is no
+//     longer a number cannot meaningfully publish a numeric "minimum" either,
+//     which is the only reason serviceId is named here at all: unlike the
+//     containerId trio, nothing about serviceId's own zero-vs-positive range
+//     is in question, only that "minimum" on a string is a constraint
+//     encoding/jsonschema silently ignores (see pathParamTypeOverrides'
+//     own doc comment for the fuller reasoning and the cheat this guards
+//     against).
 var pathParamMinimumExceptions = map[pathParamKey]string{
 	{OperationID: "EndpointDockerhubStatus", ParamName: "registryId"}:     "registryId 0 is Portainer's sentinel for the anonymous DockerHub registry (GET /endpoints/{id}/dockerhub/{registryId}); a positive lower bound would refuse the one value guaranteed to resolve",
 	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/gpus); no numeric bound is meaningful",
 	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/image_status); no numeric bound is meaningful",
 	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/snapshot/containers/{containerId}); no numeric bound is meaningful",
+	{OperationID: "ServiceImageStatus", ParamName: "serviceId"}:           "serviceId now publishes \"string\" (pathParamTypeOverrides); a numeric \"minimum\" on a string field is a constraint JSON Schema ignores, so the vestige is dropped rather than left to outlive its reason",
 }
 
 // pathParamTakesMinimum decides whether this generator stamps a positive lower
@@ -157,6 +202,58 @@ func pathParamTakesMinimum(operationID, paramName string) bool {
 	}
 	_, excepted := pathParamMinimumExceptions[pathParamKey{OperationID: operationID, ParamName: paramName}]
 	return !excepted
+}
+
+// pathParamTypeOverrides are the (operationId, path parameter) pairs where the
+// vendored specification's declared "integer" type is simply wrong about what
+// Portainer accepts on the wire: three of these are the identical
+// containerId trio pathParamMinimumExceptions above already carves out of the
+// minimum bound (declared "integer" upstream, but Portainer reads it as a
+// string and passes it straight through to Docker as a 64-character hex
+// container ID — no integer can represent one), and the fourth,
+// ServiceImageStatus's serviceId, is Docker Swarm's own service ID: an
+// alphanumeric token such as "9mnpnzenvg8p8tdbtq4wvbkcz", never a number
+// either. Left at the generator's ordinary "integer" -> "int" rendering, all
+// four actions are uncallable: tools.Execute's schema validation (via
+// toolutil.ActionSpec.ValidateInput) rejects the only values that could ever
+// work, since neither a hex container ID nor a Swarm service ID round-trips
+// through Go's int at all, let alone the specific one Docker assigned.
+//
+// This is not the same decision pathParamMinimumExceptions records. That
+// table suppresses a constraint this generator adds on top of the spec's own
+// type (a positive lower bound); this one overrides the spec's own type
+// itself, because the spec's declared type cannot be called against the real
+// server no matter what bound is or is not stamped on it. A field named here
+// keeps node.Type == "integer" for every other purpose (isIdentifierPathParam,
+// the minimum-exception cross-check test, and the doc comment three lines
+// above every entry below) — only the rendered Go field type and therefore
+// the published JSON Schema "type" change to "string". See docs/api-
+// divergences.md for the fuller account, including why a test that only
+// proves a realistic string identifier validates is not enough: Docker
+// chooses containerId, so nothing this project controls could fake one, but
+// serviceId's own probe container can be labelled with any string a test
+// author picks — including the digit "1", which would also satisfy a schema
+// that had wrongly stayed "integer". Only asserting that an *integer* is
+// refused proves the type actually changed.
+var pathParamTypeOverrides = map[pathParamKey]string{
+	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/gpus); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/image_status); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/snapshot/containers/{containerId}); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "ServiceImageStatus", ParamName: "serviceId"}:           "serviceId is a Docker Swarm service ID declared \"integer\" upstream (GET /docker/{environmentId}/services/{serviceId}/image_status); Swarm assigns an alphanumeric token no int can carry",
+}
+
+// pathParamGoType returns the Go type assembleOperationFields renders for one
+// required path parameter: defaultGoType (typeOf's ordinary derivation from
+// the resolved schema node) unless pathParamTypeOverrides names this exact
+// (operationId, parameter) pair, in which case it is always "string" — the
+// only override this table has ever needed, since every entry today excuses
+// the identical defect (an opaque identifier Portainer never parses as a
+// number, whatever the vendored specification calls it).
+func pathParamGoType(operationID, paramName, defaultGoType string) string {
+	if _, overridden := pathParamTypeOverrides[pathParamKey{OperationID: operationID, ParamName: paramName}]; overridden {
+		return "string"
+	}
+	return defaultGoType
 }
 
 // fieldTag renders one field's full struct tag: the "json" tag and, when
@@ -195,10 +292,20 @@ func pathParamTakesMinimum(operationID, paramName string) bool {
 // escaping (quotes, backslashes, newlines) for the common case; falling back
 // to it only when a backtick is present keeps the common, backtick-free case
 // rendering exactly as before.
-func fieldTag(name string, required bool, description string) string {
+//
+// requiresEdition, when non-empty, appends an `edition:"EE"` keyword —
+// toolutil.FieldEditions' own tag, read back at catalog-build time to prune
+// this field from a Community catalog's published schema (see
+// actioncatalog.Catalog.InputSchema). Appended last, after "json" and
+// "jsonschema", so an existing field's tag only ever grows a new trailing
+// keyword rather than reordering what is already there.
+func fieldTag(name string, required bool, description string, requiresEdition edition.Edition) string {
 	content := "json:" + strconv.Quote(jsonNameValue(name, required))
 	if description != "" {
 		content += " jsonschema:" + strconv.Quote(description)
+	}
+	if requiresEdition != "" {
+		content += " edition:" + strconv.Quote(string(requiresEdition))
 	}
 	if strings.ContainsRune(content, '`') {
 		return fmt.Sprintf("%q", content)
@@ -494,6 +601,16 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s %q: %w", origin, name, err)
 		}
+		if in == "path" {
+			// pathParamTypeOverrides only ever applies to the four opaque
+			// identifiers documented on it — node.Type itself is left alone
+			// (still "integer", exactly as the vendored spec declares it) so
+			// every other use of this node's type (the Enum check just below,
+			// the Minimum check further down, and the cross-check test that
+			// keeps pathParamTypeOverrides honest against the real spec) still
+			// sees what the specification actually says.
+			goType = pathParamGoType(op.OperationID, name, goType)
+		}
 		f := fieldSpec{
 			GoName:      goFieldName(splitWords(name)),
 			GoType:      goType,
@@ -598,4 +715,101 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		fields = append(fields, byName[name].field)
 	}
 	return fields, pathOrder, nil
+}
+
+// ceOperationsByID flattens operationsByDomain's per-tag grouping of the
+// vendored Community Edition specification into the flat, by-operationId
+// index ceEEFieldDiff needs to find one EE operation's CE counterpart.
+// Mirrors ceOperationIDSet's identical flattening in actionspec.go, which
+// only needed presence (map[string]bool); this needs the operation itself,
+// to resolve its fields.
+func ceOperationsByID(ceByTag map[string][]operation) map[string]operation {
+	out := make(map[string]operation)
+	for _, ops := range ceByTag {
+		for _, op := range ops {
+			out[op.OperationID] = op
+		}
+	}
+	return out
+}
+
+// ceEEFieldDiff resolves ceOp's own fields (against the Community
+// specification's resolver and document) and compares them, structurally,
+// against eeStructName/eeFields/eeNested — the identical operation's already-
+// resolved Business Edition shape — returning the set of fields present on
+// the Business side and absent from the Community one.
+//
+// The comparison is nested-inclusive, matching this generator's own
+// deterministic nested-struct naming (typeOf/assembleFields: a nested
+// struct's name is always structPrefix+GoFieldName, independent of which
+// specification produced it): a struct is looked up by that same name on
+// both sides. A struct absent from the Community side entirely — an object
+// property Business Edition added wholesale, not merely widened — marks
+// every one of its own fields Business-only; a struct present on both sides
+// is compared field by field, by JSON name, within that struct alone. The
+// returned set is keyed "structName.jsonName", which is unique across one
+// operation's whole tree because structSpec names already are (see
+// duplicateStructName).
+//
+// ceRes must resolve against ceDoc (the Community specification's own
+// resolver/document pair), never the Business Edition one eeRes/eeDoc used
+// to produce eeFields/eeNested — comparing an operation's Community shape
+// against itself, resolved from the wrong document, would silently report
+// no divergence at all.
+func ceEEFieldDiff(eeStructName string, eeFields []fieldSpec, eeNested []structSpec, ceOp operation, ceRes *resolver, ceDoc *document) (map[string]bool, error) {
+	var ceNested []structSpec
+	ceFields, _, err := assembleOperationFields(ceOp, ceRes, ceDoc, eeStructName, &ceNested)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Community Edition shape: %w", err)
+	}
+
+	ceByStruct := map[string]structSpec{eeStructName: {Name: eeStructName, Fields: ceFields}}
+	for _, s := range ceNested {
+		ceByStruct[s.Name] = s
+	}
+
+	eeByStruct := map[string]structSpec{eeStructName: {Name: eeStructName, Fields: eeFields}}
+	for _, s := range eeNested {
+		eeByStruct[s.Name] = s
+	}
+
+	eeOnly := map[string]bool{}
+	for structName, eeStruct := range eeByStruct {
+		ceStruct, sharedStruct := ceByStruct[structName]
+		var ceFieldNames map[string]bool
+		if sharedStruct {
+			ceFieldNames = make(map[string]bool, len(ceStruct.Fields))
+			for _, f := range ceStruct.Fields {
+				ceFieldNames[f.JSONName] = true
+			}
+		}
+		for _, f := range eeStruct.Fields {
+			if !sharedStruct || !ceFieldNames[f.JSONName] {
+				eeOnly[structName+"."+f.JSONName] = true
+			}
+		}
+	}
+	return eeOnly, nil
+}
+
+// applyFieldEditionGate stamps RequiresEdition = edition.EE onto every field
+// of eeFields (the operation's own top-level Input fields, keyed
+// eeStructName+"."+JSONName in eeOnly) and every nested struct's own fields
+// in eeNested (keyed structName+"."+JSONName) that eeOnly names — mutating
+// both in place, the same way assembleOperationFields' own caller already
+// relies on fields/nested being mutable shared state (see main.go's
+// commitInput closure, which captures fields by reference).
+func applyFieldEditionGate(eeStructName string, eeFields []fieldSpec, eeNested []structSpec, eeOnly map[string]bool) {
+	for i := range eeFields {
+		if eeOnly[eeStructName+"."+eeFields[i].JSONName] {
+			eeFields[i].RequiresEdition = edition.EE
+		}
+	}
+	for i := range eeNested {
+		for j := range eeNested[i].Fields {
+			if eeOnly[eeNested[i].Name+"."+eeNested[i].Fields[j].JSONName] {
+				eeNested[i].Fields[j].RequiresEdition = edition.EE
+			}
+		}
+	}
 }

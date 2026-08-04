@@ -235,11 +235,29 @@ func pathArgTypesFor(operationID string, pathArgCount int) ([]reflect.Type, erro
 // SystemNodesCount, which is exactly why scanHandOverrides below treats an
 // operation as overridden when its *OperationID* is already declared by
 // hand, not only when a function of this exact name is).
+//
+// Routed through actionGoFieldName/splitActionWords (naming.go) rather than
+// a bare first-rune lower-case, for the identical reason inputStructName
+// (naming.go) now is: a naive rune swap leaves a recognised initialism
+// spelled the way the vendored specification happened to write it, which
+// golangci-lint's revive var-naming rule flags whenever that spelling is not
+// the initialism's own canonical all-caps form ("StackCreateKubernetesUrl"
+// -> "stackCreateKubernetesUrl", "GitOpsSourcesTestById" ->
+// "gitOpsSourcesTestById", both wrong the same way inputStructName's were).
+//
+// This is deliberately not goFieldName/splitWords — see inputStructName's
+// own doc comment for why routing an operationId through that pair instead
+// regressed "GetKubernetesGPUInfo", and why splitActionWords/actionGoFieldName
+// do not have that defect for it.
 func handlerFuncName(operationID string) string {
-	r := []rune(operationID)
-	if len(r) == 0 {
+	if operationID == "" {
 		return operationID
 	}
+	name := actionGoFieldName(splitActionWords(operationID))
+	if name == "" {
+		return operationID
+	}
+	r := []rune(name)
 	r[0] = unicode.ToLower(r[0])
 	return string(r)
 }

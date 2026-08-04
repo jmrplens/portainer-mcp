@@ -52,41 +52,55 @@ func rawOperationIDsByExportedName(paths map[string]map[string]json.RawMessage) 
 // cannot be mistaken for "already handled" the way C1 and C2 both went
 // unnoticed until inspected directly.
 //
-// Two distinct root causes, not one:
+// One root cause remains, of two this map used to carry:
 //
-//   - "multipart": the requestBody's only content type is
-//     multipart/form-data. This package's requestBodySchema resolves a
-//     multipart schema into real fields (file uploads and their metadata);
-//     specdiff.requestBodySchemaNode looks only at "application/json"
-//     content (see that function's own doc comment) and treats a
-//     multipart-only body as no body at all, reporting 0 (or, when the
-//     operation also has path/query parameters, only those) fields. This is
-//     the same failure shape C1 and C2 closed (the generator emits real
-//     fields; specdiff silently reports fewer), on a third dimension
-//     (content type, not body top-level type) neither fix touched. None of
-//     these operations is declared by any action in the catalog today, so —
-//     like C2 before this round — it is a real, understood gap, not yet an
-//     armed one. (CustomTemplateCreate declares both application/json and
+//   - "multipart" (closed): the requestBody's only content type was
+//     multipart/form-data. This package's requestBodySchema always resolved
+//     a multipart schema into real fields (file uploads and their
+//     metadata); internal/specdiff.requestBodySchemaNode used to look only
+//     at "application/json" content and treat a multipart-only body as no
+//     body at all, reporting 0 (or, when the operation also has path/query
+//     parameters, only those) fields — the same failure shape C1 and C2
+//     closed (the generator emits real fields; specdiff silently reports
+//     fewer), on a third dimension (content type, not body top-level type)
+//     neither fix touched. The 13 operations this named ("Create",
+//     "CloudCredsUpdate", "CustomTemplateCreateFile", "EdgeConfigCreate",
+//     "EdgeConfigUpdate", "EdgeJobCreateFile", "EdgeStackCreateFile",
+//     "EdgeStackParseRegistries", "EndpointCreate",
+//     "EndpointDockerBrowsePut", "StackCreateDockerStandaloneFile",
+//     "StackCreateDockerSwarmFile", "UploadTLS" — every multipart-only
+//     requestBody in either vendored spec) are gone from this map because
+//     specdiff.requestBodySchemaNode now reads whichever single content
+//     type a requestBody declares, not only "application/json". None of
+//     these operations was declared by any action in the catalog when this
+//     closed, so closing it here is what keeps every one of wave-1's five
+//     real multipart operations (EndpointCreate, CustomTemplateCreateFile,
+//     both StackCreateDockerSwarm/StandaloneFile,
+//     EndpointDockerBrowsePut) from needing an api/spec-drift-allowlist.yaml
+//     entry per field the moment a catalog action declares one. (
+//     CustomTemplateCreate declares both application/json and
 //     multipart/form-data content: the generator refuses outright, on
-//     principle, because no single Go type represents both; specdiff, which
-//     only ever reads the application/json variant, happened to resolve
-//     that variant to the identical free-form-object shape this round's
-//     fix also refuses — the two now agree, by refusing, for unrelated
-//     reasons. Not listed below: it is no longer a disagreement.)
-//   - "generator-refuses" (all EE-only): this package refuses to scaffold
-//     because a *nested* value inside the body has no expressible type
-//     ("map value: schema has no type" — an additionalProperties value
-//     schema declaring no "type" keyword at any level), while
-//     specdiff.ShapeFromSpec succeeds, because it never needs to resolve
-//     past a body property's own top-level type/description/enum (see
-//     resolvedNode's own doc comment: OperationShape is flat by design).
-//     This direction is the opposite of the dangerous one: the generator's
-//     own refusal already means none of these operations can ever be
-//     mechanically scaffolded, so there is no risk of a catalog action
-//     existing for one of them whose real shape this package's field count
-//     then contradicts — the failure mode C1/C2/the multipart class share
-//     (generator succeeds, specdiff undercounts) cannot occur here, because
-//     the generator never succeeds.
+//     principle, because no single Go type represents both; specdiff now
+//     refuses too, for the identical reason (more than one content type,
+//     see requestBodySchemaNode's own doc comment) rather than incidentally
+//     landing on the same free-form-object refusal it used to reach through
+//     the application/json variant alone. Still not listed below: the two
+//     sides still agree, by refusing, just for the same reason now instead
+//     of two different ones.)
+//   - "generator-refuses" (all EE-only, still open): this package refuses
+//     to scaffold because a *nested* value inside the body has no
+//     expressible type ("map value: schema has no type" — an
+//     additionalProperties value schema declaring no "type" keyword at any
+//     level), while specdiff.ShapeFromSpec succeeds, because it never needs
+//     to resolve past a body property's own top-level type/description/enum
+//     (see resolvedNode's own doc comment: OperationShape is flat by
+//     design). This direction is the opposite of the dangerous one: the
+//     generator's own refusal already means none of these operations can
+//     ever be mechanically scaffolded, so there is no risk of a catalog
+//     action existing for one of them whose real shape this package's field
+//     count then contradicts — the failure mode C1/C2/the closed multipart
+//     class shared (generator succeeds, specdiff undercounts) cannot occur
+//     here, because the generator never succeeds.
 //
 // Every entry must currently correspond to a real disagreement:
 // TestUnit_FieldCounts_GeneratorAndSpecdiffAgree_AcrossBothVendoredSpecs
@@ -97,25 +111,12 @@ func rawOperationIDsByExportedName(paths map[string]map[string]json.RawMessage) 
 // allowed to go stale unnoticed" discipline cmd/audit_1to1's and
 // cmd/audit_spec_drift's own allow-lists apply, for the identical reason.
 var knownFieldCountResidual = map[string]string{
-	"Create":                          "multipart",
-	"CloudCredsUpdate":                "multipart",
-	"CustomTemplateCreateFile":        "multipart",
-	"EdgeConfigCreate":                "multipart",
-	"EdgeConfigUpdate":                "multipart",
-	"EdgeJobCreateFile":               "multipart",
-	"EdgeStackCreateFile":             "multipart",
-	"EdgeStackParseRegistries":        "multipart",
-	"EndpointCreate":                  "multipart",
-	"EndpointDockerBrowsePut":         "multipart",
-	"StackCreateDockerStandaloneFile": "multipart",
-	"StackCreateDockerSwarmFile":      "multipart",
-	"UploadTLS":                       "multipart",
-	"AddonInstall":                    "generator-refuses",
-	"OmniCreateCluster":               "generator-refuses",
-	"OmniUpdateCluster":               "generator-refuses",
-	"OmniValidateCluster":             "generator-refuses",
-	"PolicyUpdate":                    "generator-refuses",
-	"UpdateAlertingSettings":          "generator-refuses",
+	"AddonInstall":           "generator-refuses",
+	"OmniCreateCluster":      "generator-refuses",
+	"OmniUpdateCluster":      "generator-refuses",
+	"OmniValidateCluster":    "generator-refuses",
+	"PolicyUpdate":           "generator-refuses",
+	"UpdateAlertingSettings": "generator-refuses",
 }
 
 // TestUnit_FieldCounts_GeneratorAndSpecdiffAgree_AcrossBothVendoredSpecs is

@@ -30,7 +30,15 @@ import (
 )
 
 // AllSpecs collects every declared action. Later phases append their domains
-// here; this is the only place that changes when a domain is added.
+// here — but this is one of four places that change when a domain is added,
+// not the only one: cmd/audit_1to1, cmd/audit_e2e_gaps and
+// cmd/audit_discovery each carry their own allCatalogSpecs/allSpecs function
+// that must gain the same domain by hand. See
+// docs/domain-wave-checklist.md Step 1.4 for the full procedure. (A fifth
+// site used to exist by accident — internal/wiring/server_test.go hard-coded
+// the meta surface's expected tool list — until that test was changed to
+// derive its expectation from AllSpecs() instead; see
+// TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface's meta case.)
 //
 // FillScopeParameterGuidance runs once, here, rather than inside each
 // domain's own Specs(): this is the single path cmd/portainer-mcp builds a

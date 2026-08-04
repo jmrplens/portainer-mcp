@@ -124,17 +124,36 @@ mechanical but must land in the same commit as the domain, never a follow-up.
 
    Expect a first-time scaffold to refuse loudly rather than guess: an
    ambiguous shape, a wire-type width mismatch, or a credential-shaped
-   success response with no declared redaction wrapper all abort generation
-   for that domain, naming the operation. That is `cmd/gen_action_inputs`
-   working as designed (see its own package doc) — resolve the refusal in
-   the domain file, do not work around it.
+   success response with no declared redaction wrapper each refuse
+   generation for *that one operation*, naming it — not the whole domain.
+   Since P3.3 Task 3, a refusal costs only the refused operation: every
+   other operation in the same domain still generates normally, and the
+   domain's `actions.go`/`inputs.go` are still written from whatever
+   succeeded. `run()` still exits non-zero when any refusal occurred (a
+   refused operation gets no handler, no Input struct and no ActionSpec
+   entry, and that is worth failing the build over), and every refusal is
+   named in the report printed at the end of the run — this is
+   `cmd/gen_action_inputs` working as designed (see its own package doc);
+   resolve each named refusal in the domain file, do not work around it. An
+   earlier revision of this checklist described the pre-Task-3 behaviour,
+   where any one of these three refusals aborted generation for the entire
+   domain.
 4. Wire the new domain's `Specs()` into every place that still collects
    domain packages by hand: `internal/wiring` (the real server), and each of
    `cmd/audit_1to1`, `cmd/audit_e2e_gaps` and `cmd/audit_discovery`'s own
-   `allCatalogSpecs`/`allSpecs` functions. There is no single registry yet —
-   each of these currently lists domains by hand, and a wave that forgets
-   one gets a build that compiles and an audit that silently ignores the
-   new domain.
+   `allCatalogSpecs`/`allSpecs` functions. That is four places, no more —
+   there is no single registry yet, each of these currently lists domains by
+   hand, and a wave that forgets one gets a build that compiles and an audit
+   that silently ignores the new domain.
+
+   `internal/wiring/server_test.go` is deliberately **not** a fifth place to
+   edit: its meta-surface test derives its expected tool list from
+   `AllSpecs()` itself (one tool per `catalog.Domains()` entry, plus status),
+   so it tracks whatever domains step 4 already registered without a further
+   hand edit. It briefly was a fifth, undocumented site — a hard-coded
+   literal there went stale on every wave and failed the build with no note
+   pointing back at itself — before being fixed to derive the expectation
+   instead of hard-coding it.
 
 
 ### Step 2 — Read the generated names

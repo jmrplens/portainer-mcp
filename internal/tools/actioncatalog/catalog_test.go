@@ -3,6 +3,7 @@ package actioncatalog
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -518,6 +519,192 @@ func TestBuild_EmptyEdition_ReturnsError(t *testing.T) {
 	}
 }
 
+// editionGatedInput is the fixture every Catalog.InputSchema test below
+// shares: one plain field and one `edition:"EE"` field, the exact shape
+// Task 2's own brief specifies for its Step 1 tests.
+//
+// EdgeKey deliberately carries no "omitempty": google/jsonschema-go's
+// reflector puts a field in the reflected schema's "required" list exactly
+// when it lacks omitempty/omitzero (see toolutil/schema.go's InputSchema and
+// cmd/gen_action_inputs/fields.go's fieldTag, which states the identical
+// rule for the generator's own output), so an omitempty EdgeKey is never in
+// "required" to begin with — TestUnit_CatalogInputSchema_CEBuild_
+// DropsEEOnlyFieldAndFromRequired's own "required" assertion would then pass
+// whether or not pruning touches "required" at all, and deleting that whole
+// code path (catalog.go's `switch req := schema["required"].(type)` block)
+// left every test in this file green. A genuinely required gated field is
+// what makes the "required" half of that test — and of the mutation that
+// proves it — actually exercise the code it claims to.
+type editionGatedInput struct {
+	Name    string `json:"name"`
+	EdgeKey string `json:"edgeKey" edition:"EE"`
+}
+
+// editionGatedSpec is spec() plus an Input carrying editionGatedInput, so
+// its schema has something for edition-based pruning to actually drop.
+// system.info/SystemInfo is shared by both editions in the real
+// applicability index, which every test below needs: Build's own
+// Edition/index cross-check would refuse a CE declaration for an
+// EE-exclusive operation before InputSchema is ever reached.
+func editionGatedSpec() toolutil.ActionSpec {
+	s := spec("system.info", "system", "SystemInfo", edition.CE)
+	s.Input = editionGatedInput{}
+	return s
+}
+
+// TestUnit_CatalogInputSchema_CEBuild_DropsEEOnlyFieldAndFromRequired is
+// Task 2's Step 1 test, CE half: built for Community Edition, the plain
+// field is published and the EE-only field is gone from both "properties"
+// and "required".
+func TestUnit_CatalogInputSchema_CEBuild_DropsEEOnlyFieldAndFromRequired(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	found, ok := c.Lookup("system.info")
+	if !ok {
+		t.Fatal("Lookup(system.info) = false, want the action present on a CE catalog")
+	}
+
+	schema, err := c.InputSchema(found)
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("properties = %v, want the untagged \"name\" field present", props)
+	}
+	if _, ok := props["edgeKey"]; ok {
+		t.Errorf("properties = %v, want the edition:\"EE\" \"edgeKey\" field pruned from a CE catalog", props)
+	}
+	required := toolutil.RequiredParams(schema)
+	sawName := false
+	for _, name := range required {
+		if name == "edgeKey" {
+			t.Error("required still names \"edgeKey\" after it was pruned from properties")
+		}
+		if name == "name" {
+			sawName = true
+		}
+	}
+	// Both required fields would trivially "pass" the edgeKey check above if
+	// pruning simply emptied "required" altogether rather than removing only
+	// the gated entry — this is the other half that catches that: "name" was
+	// never gated and must still be required.
+	if !sawName {
+		t.Errorf("required = %v, want the untagged, still-required \"name\" field present", required)
+	}
+}
+
+// TestUnit_CatalogInputSchema_EEBuild_KeepsEEOnlyField is Step 1's EE half:
+// built for Business Edition, both fields appear.
+func TestUnit_CatalogInputSchema_EEBuild_KeepsEEOnlyField(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	found, ok := c.Lookup("system.info")
+	if !ok {
+		t.Fatal("Lookup(system.info) = false, want the action present on an EE catalog")
+	}
+
+	schema, err := c.InputSchema(found)
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for _, name := range []string{"name", "edgeKey"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("properties = %v, want %q present on an EE catalog", props, name)
+		}
+	}
+}
+
+// TestUnit_PruneInputSchemaByEdition_NothingToDrop_ReturnsSchemaUnchanged is
+// the discriminating half the brief calls out explicitly: an action with no
+// `edition:"EE"` field (fieldEditions nil, the common case) must get back
+// the exact same map, not a needless clone.
+//
+// spec.InputSchema itself already returns an independent deep copy on every
+// call (see that method's own doc comment), so this property has to be
+// tested at the pruning function's own level — Catalog.InputSchema's two
+// stages (spec.InputSchema, then pruneInputSchemaByEdition) cannot be told
+// apart by comparing two separately-obtained schemas, since the first stage
+// alone already guarantees they are never the same map. Proven here by
+// mutating schema *after* the call and checking the mutation is visible in
+// got too — only true if the two are the same underlying map, which a
+// clone would not be.
+func TestUnit_PruneInputSchemaByEdition_NothingToDrop_ReturnsSchemaUnchanged(t *testing.T) {
+	t.Parallel()
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string"}},
+	}
+
+	got := pruneInputSchemaByEdition(schema, nil, edition.CE)
+	schema["marker"] = "planted after the call"
+	if _, ok := got["marker"]; !ok {
+		t.Error("pruneInputSchemaByEdition returned a different map when fieldEditions was nil; want the identical map, not a clone")
+	}
+
+	// Same claim, the other way nothing-to-drop can arise: a fieldEditions
+	// map that names a field, but whose required edition the target already
+	// includes (an EE target facing an EE-only field), so drop ends up empty
+	// even though fieldEditions itself is not nil.
+	schema2 := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"edgeKey": map[string]any{"type": "string"}},
+	}
+	got2 := pruneInputSchemaByEdition(schema2, map[string]edition.Edition{"edgeKey": edition.EE}, edition.EE)
+	schema2["marker"] = "planted after the call"
+	if _, ok := got2["marker"]; !ok {
+		t.Error("pruneInputSchemaByEdition cloned the schema even though the EE target already includes every gated field")
+	}
+}
+
+// TestUnit_CatalogInputSchema_BuildingCEThenEE_DoesNotLoseFieldForEE is the
+// trap named explicitly in the brief: a test that only ever builds a CE
+// catalog cannot tell "prunes per catalog" apart from "mutates the shared
+// cached schema", because both look identical from the CE side alone. This
+// builds CE first, reads its (rightly) pruned schema, then builds a second,
+// independent EE catalog for the exact same Input type and confirms the
+// EE-only field is still there — which an implementation that cached the
+// *pruned* result keyed only by reflect.Type (ignoring which edition it was
+// pruned for) would fail, because the CE build would have poisoned that
+// cache entry before the EE build ever read it.
+func TestUnit_CatalogInputSchema_BuildingCEThenEE_DoesNotLoseFieldForEE(t *testing.T) {
+	t.Parallel()
+	ceCatalog, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("CE Build() error = %v", err)
+	}
+	ceSpec, _ := ceCatalog.Lookup("system.info")
+	ceSchema, err := ceCatalog.InputSchema(ceSpec)
+	if err != nil {
+		t.Fatalf("CE InputSchema() error = %v", err)
+	}
+	ceProps, _ := ceSchema["properties"].(map[string]any)
+	if _, leaked := ceProps["edgeKey"]; leaked {
+		t.Fatal("CE catalog already publishes edgeKey; the fixture proves nothing about the cache trap")
+	}
+
+	eeCatalog, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, eeOpts())
+	if err != nil {
+		t.Fatalf("EE Build() error = %v", err)
+	}
+	eeSpec, _ := eeCatalog.Lookup("system.info")
+	eeSchema, err := eeCatalog.InputSchema(eeSpec)
+	if err != nil {
+		t.Fatalf("EE InputSchema() error = %v", err)
+	}
+	eeProps, _ := eeSchema["properties"].(map[string]any)
+	if _, ok := eeProps["edgeKey"]; !ok {
+		t.Error("EE catalog is missing edgeKey after a CE catalog for the same Input type was built first: the CE build's pruning leaked across catalogs")
+	}
+}
+
 // The end-to-end property the registries pilot exists for: the same declared
 // specs must yield different catalogs on CE and EE.
 func TestBuild_RegistriesPilot_YieldsDifferentCatalogsPerEdition(t *testing.T) {
@@ -533,5 +720,149 @@ func TestBuild_RegistriesPilot_YieldsDifferentCatalogsPerEdition(t *testing.T) {
 	if len(ceCatalog.Actions()) >= len(eeCatalog.Actions()) {
 		t.Errorf("CE has %d actions and EE has %d; EE must offer strictly more in this domain",
 			len(ceCatalog.Actions()), len(eeCatalog.Actions()))
+	}
+}
+
+// propertyNames returns schema's "properties" keys, sorted, so two schemas'
+// published fields can be compared and printed deterministically.
+func propertyNames(schema map[string]any) []string {
+	props, _ := schema["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestUnit_Catalog_RegistriesDivergentActions_PublishExactFieldsPerEdition is
+// this task's per-edition catalog test. registries is used rather than the
+// brief's own suggested endpoints.create/endpoints.list: this repository has
+// not scaffolded a docker/endpoints domain yet (wave 1 is the next plan, and
+// this task is expressly forbidden from scaffolding one — see this task's
+// own "Notes for the executor"), whereas registries is real, already built,
+// and already carries a genuine field-level divergence — task 7 hand-tagged
+// registryCreateInput.Github, registryUpdateInput.Github and
+// registryInspectInput.EndpointID with `edition:"EE"` (see
+// internal/tools/registries/inputs.go and that domain's own
+// edition_prune_test.go, the first real-code exercise of Task 2's mechanism
+// outside actioncatalog's own package). This is the second: it builds the
+// real catalog Task 2's mechanism actually runs inside
+// (actioncatalog.Build + Catalog.InputSchema), rather than registries' own
+// test, which is exactly as real but does not itself prove the *catalog*
+// wiring — as opposed to some registries-local helper — is what performs the
+// pruning.
+//
+// The trap this guards against (spelled out in this task's own brief): a
+// test that only asserts "the CE count differs from the EE count" passes
+// against an implementation that prunes the *wrong* field, or prunes at
+// random, as long as it prunes something. Every case below asserts the
+// specific field that must divarge, in both directions (present in EE,
+// absent from CE) — never a bare count.
+//
+// It also survives an unrelated hand-edit to registries: rather than pinning
+// to registries.create's current 11-CE/12-EE property counts (which a future
+// field addition to registryCreateInput would break for a reason unrelated
+// to edition gating), the third assertion below checks the invariant "EE's
+// properties, minus exactly the named Business-only fields, equal CE's
+// properties" — true regardless of how many other, ungated fields
+// registries.create happens to declare on either side of this edit.
+func TestUnit_Catalog_RegistriesDivergentActions_PublishExactFieldsPerEdition(t *testing.T) {
+	t.Parallel()
+
+	ceCatalog, err := Build(registries.Specs(), Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build(CE): %v", err)
+	}
+	eeCatalog, err := Build(registries.Specs(), Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build(EE): %v", err)
+	}
+
+	cases := []struct {
+		actionName string
+		// businessOnly names the field(s) this action's Input tags
+		// edition:"EE": genuinely absent from the Community Edition
+		// operation's own resolved schema (verified directly against
+		// api/specs/ce-2.44.0.json — see registries/inputs.go's own doc
+		// comments on registryCreateInput.Github, registryUpdateInput.Github
+		// and registryInspectInput.EndpointID for the exact verification).
+		businessOnly []string
+	}{
+		{"registries.create", []string{"github"}},
+		{"registries.update", []string{"github"}},
+		{"registries.inspect", []string{"endpointId"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.actionName, func(t *testing.T) {
+			t.Parallel()
+
+			ceSpec, ok := ceCatalog.Lookup(tc.actionName)
+			if !ok {
+				t.Fatalf("%s: not found in the Community catalog", tc.actionName)
+			}
+			ceSchema, err := ceCatalog.InputSchema(ceSpec)
+			if err != nil {
+				t.Fatalf("CE InputSchema(%s): %v", tc.actionName, err)
+			}
+
+			eeSpec, ok := eeCatalog.Lookup(tc.actionName)
+			if !ok {
+				t.Fatalf("%s: not found in the Business catalog", tc.actionName)
+			}
+			eeSchema, err := eeCatalog.InputSchema(eeSpec)
+			if err != nil {
+				t.Fatalf("EE InputSchema(%s): %v", tc.actionName, err)
+			}
+
+			ceProps, _ := ceSchema["properties"].(map[string]any)
+			eeProps, _ := eeSchema["properties"].(map[string]any)
+
+			// Direction 1: every named field is genuinely published to
+			// Business Edition. A pruning bug that dropped it from both
+			// editions (rather than only Community) would still pass a test
+			// that checked only direction 2 below.
+			for _, field := range tc.businessOnly {
+				if _, ok := eeProps[field]; !ok {
+					t.Errorf("%s: Business Edition does not publish %q, want it present", tc.actionName, field)
+				}
+			}
+
+			// Direction 2: every named field is genuinely pruned from
+			// Community Edition. This is the direction Task 2's own
+			// mechanism exists for.
+			for _, field := range tc.businessOnly {
+				if _, ok := ceProps[field]; ok {
+					t.Errorf("%s: Community Edition still publishes %q, want it pruned", tc.actionName, field)
+				}
+			}
+
+			// Direction 3, the specific-not-a-count check: dropping exactly
+			// businessOnly's fields from EE's own property set must yield
+			// precisely CE's — not merely a smaller set, and not pinned to
+			// today's literal counts. A pruning implementation that dropped
+			// some unrelated field (or dropped nothing and this domain's
+			// fixture happened to already differ some other way) would fail
+			// here even though directions 1 and 2 above both passed.
+			want := make(map[string]bool, len(eeProps))
+			for name := range eeProps {
+				want[name] = true
+			}
+			for _, field := range tc.businessOnly {
+				delete(want, field)
+			}
+			wantNames := make([]string, 0, len(want))
+			for name := range want {
+				wantNames = append(wantNames, name)
+			}
+			sort.Strings(wantNames)
+
+			gotNames := propertyNames(ceSchema)
+			if strings.Join(gotNames, ",") != strings.Join(wantNames, ",") {
+				t.Errorf("%s: CE properties = %v, want exactly EE's properties %v minus %v",
+					tc.actionName, gotNames, propertyNames(eeSchema), tc.businessOnly)
+			}
+		})
 	}
 }

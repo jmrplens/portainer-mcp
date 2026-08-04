@@ -2,6 +2,7 @@ package specdiff
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -326,6 +327,164 @@ func TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody_SyntheticShapes(t *testi
 			}
 			if !strings.Contains(err.Error(), "is not an object") {
 				t.Errorf("ShapeFromSpec() error = %q, want it to say the top-level type is not an object", err)
+			}
+		})
+	}
+}
+
+// multipartOperationFieldCounts names the five wave-1 multipart/form-data
+// operations the coordinator measured directly against the vendored
+// specification, and the field count cmd/gen_action_inputs's own
+// assembleOperationFields already produces for each — the number
+// ShapeFromSpec must now match, having previously reported 0, 0, 1, 1 and 2
+// respectively (requestBodySchemaNode read only "application/json", so a
+// multipart-only body flattened as no body at all; only each operation's own
+// path/query parameters, if any, ever contributed a field). Verified
+// independently against api/specs/ee-2.44.0.json for this test: EndpointCreate
+// and CustomTemplateCreateFile declare no path or query parameters at all, so
+// their entire count is body properties (27 and 10 respectively);
+// StackCreateDockerSwarmFile/StackCreateDockerStandaloneFile each add one
+// query parameter ("endpointId") to 4/3 body properties; EndpointDockerBrowsePut
+// adds one path ("id") and one query ("volumeID") parameter to 2 body
+// properties ("Path", "file").
+var multipartOperationFieldCounts = map[string]int{
+	"EndpointCreate":                  27,
+	"CustomTemplateCreateFile":        10,
+	"StackCreateDockerSwarmFile":      5,
+	"StackCreateDockerStandaloneFile": 4,
+	"EndpointDockerBrowsePut":         4,
+}
+
+// TestUnit_ShapeFromSpec_MultipartFormDataBody_MatchesGeneratorFieldCount is
+// the regression guard for the multipart defect this round's fix closes:
+// before it, every operation named in multipartOperationFieldCounts reported
+// 0 (or, when the operation also has path/query parameters, only those)
+// fields, because requestBodySchemaNode looked only at "application/json"
+// content and treated a multipart-only body as no body at all. Asserting the
+// exact count the generator itself would emit (not merely "> 0", which a
+// single stray field would also satisfy) is the load-bearing check: a count
+// off by even one still means a real field silently missing (or a spurious
+// one added) from a drift comparison that is supposed to catch exactly that.
+func TestUnit_ShapeFromSpec_MultipartFormDataBody_MatchesGeneratorFieldCount(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("read vendored spec: %v", err)
+	}
+	// Sorted operation IDs for deterministic subtest order.
+	operationIDs := make([]string, 0, len(multipartOperationFieldCounts))
+	for id := range multipartOperationFieldCounts {
+		operationIDs = append(operationIDs, id)
+	}
+	sort.Strings(operationIDs)
+	for _, operationID := range operationIDs {
+		wantFields := multipartOperationFieldCounts[operationID]
+		t.Run(operationID, func(t *testing.T) {
+			t.Parallel()
+			op, err := LoadSpecOperation(data, operationID)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s) error = %v", operationID, err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err != nil {
+				t.Fatalf("ShapeFromSpec(%s) error = %v, want the multipart/form-data body resolved like any other object body", operationID, err)
+			}
+			if len(shape.Fields) != wantFields {
+				t.Errorf("ShapeFromSpec(%s).Fields = %+v (%d), want exactly %d — the generator's own count for this operation",
+					operationID, shape.Fields, len(shape.Fields), wantFields)
+			}
+		})
+	}
+}
+
+// TestUnit_ShapeFromSpec_MultipartFormDataBody_ResolvesFileUploadField is the
+// discriminating half of the guard above: a field-count match alone could be
+// satisfied by an implementation that resolved the multipart schema into the
+// right *number* of fields but the wrong ones (e.g. reading query parameters
+// twice, or synthesizing placeholder fields rather than the body's actual
+// properties). EndpointDockerBrowsePut's own body declares exactly two
+// properties, "Path" (a string) and "file" (a file upload, declared
+// `"type":"string","format":"binary"` — format is not a JSON Schema "type"
+// keyword, so this must still resolve as an ordinary string field, not be
+// dropped or mistyped), both required. Asserting their JSONName, Type,
+// Required and Origin directly is what a bare field count could not catch.
+func TestUnit_ShapeFromSpec_MultipartFormDataBody_ResolvesFileUploadField(t *testing.T) {
+	t.Parallel()
+	shape := realShapeFromVendoredSpec(t, "EndpointDockerBrowsePut")
+
+	byName := make(map[string]FieldShape, len(shape.Fields))
+	for _, f := range shape.Fields {
+		byName[f.JSONName] = f
+	}
+
+	for _, tc := range []struct {
+		name         string
+		wantType     string // "" when Type is not asserted for this field
+		wantRequired bool
+		wantOrigin   string
+	}{
+		{"file", "string", true, "body"},
+		{"path", "string", true, "body"},
+		{"id", "integer", true, "path"},
+		{"volumeID", "", false, "query"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			field, ok := byName[tc.name]
+			if !ok {
+				t.Fatalf("Fields[%q] not found", tc.name)
+			}
+			if tc.wantType != "" && field.Type != tc.wantType {
+				t.Errorf("Fields[%q].Type = %q, want %q", tc.name, field.Type, tc.wantType)
+			}
+			if field.Required != tc.wantRequired {
+				t.Errorf("Fields[%q].Required = %v, want %v", tc.name, field.Required, tc.wantRequired)
+			}
+			if field.Origin != tc.wantOrigin {
+				t.Errorf("Fields[%q].Origin = %q, want %q", tc.name, field.Origin, tc.wantOrigin)
+			}
+		})
+	}
+}
+
+// TestUnit_ShapeFromSpec_RefusesMultipleContentTypes mirrors
+// cmd/gen_action_inputs's requestBodySchema's identical refusal
+// ("no single Go type represents both") for the one operation in either
+// vendored specification whose requestBody declares more than one content
+// type: CustomTemplateCreate (application/json and multipart/form-data, EE
+// spec only). Before this round's fix, requestBodySchemaNode silently picked
+// the "application/json" entry alone and happened to land on a free-form
+// object ShapeFromSpec already refused for an unrelated reason (see
+// cmd/gen_action_inputs/fieldcount_crosscheck_test.go's own doc comment on
+// this exact operation); now that requestBodySchemaNode reads whichever
+// single content type is present, it must refuse outright, the same way the
+// generator does, rather than pick either entry arbitrarily — picking one
+// silently would mean a real future disagreement between the two entries'
+// shapes goes uncompared.
+func TestUnit_ShapeFromSpec_RefusesMultipleContentTypes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		operationID string
+	}{
+		{"CustomTemplateCreate", "CustomTemplateCreate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+			if err != nil {
+				t.Fatalf("read vendored spec: %v", err)
+			}
+			op, err := LoadSpecOperation(data, tc.operationID)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s) error = %v", tc.operationID, err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err == nil {
+				t.Fatalf("ShapeFromSpec(%s) error = nil, shape = %+v, want a refusal: this operation's requestBody declares two content types, and no single schema can represent both", tc.operationID, shape)
+			}
+			if !strings.Contains(err.Error(), "content type") {
+				t.Errorf("ShapeFromSpec(%s) error = %q, want it to mention the multiple content types", tc.operationID, err)
 			}
 		})
 	}

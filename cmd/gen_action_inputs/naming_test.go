@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
@@ -284,6 +286,378 @@ func TestUnit_ActionName_RequiresNonEmptyDomainAndOperationID(t *testing.T) {
 	if _, err := ActionName("tags", ""); err == nil {
 		t.Error(`ActionName("tags", "") error = nil, want a refusal: operationID is required`)
 	}
+}
+
+// TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag
+// is the fix for the plural-initialism defect golangci-lint's revive
+// var-naming check flags on every wave-1-shaped domain that touches an "IDs"
+// (or "IPs"/"URLs") field: 13 real property names measured directly from the
+// vendored ee-2.44.0.json ("TagIDs" (5), "EdgeGroupIDs" (3), "GroupIDs" (2),
+// and nine more, one occurrence each) plus two cases that demonstrate this
+// generator getting the *same* concept backwards under oapi-codegen's other,
+// plainer wire spelling ("TagIds", "EndpointIds" — both real property names
+// in the same spec, for the same underlying tag/endpoint-id-list concept).
+//
+// Before this fix goFieldName rendered the 13 real, two-or-more-letter-ID
+// names *worse than not special-casing them at all*: the trailing pluraliser
+// title-cased into an extra capital ("TagIDs" -> "TagIDS", "ClusterIPs" ->
+// "ClusterIPS"), and the two plain-style names went unrecognised entirely
+// ("TagIds" stayed "TagIds", "EndpointIds" stayed "EndpointIds" — a
+// coincidental no-op that still fails revive because the *rule*, not the
+// diff, is what it checks). Every case below is asserted against the exact
+// literal string this generator must now produce, not against "changed from
+// before" or "not the old wrong value" — either of those would pass just as
+// happily against some other, different wrong value, exactly the
+// non-discriminating shape this project's review discipline exists to catch.
+//
+// The second half of every case is the constraint that makes this fix
+// delicate at all: bodyJSONTag's output must be the *literal, unchanged*
+// string this generator has always emitted for that wire name (ugly
+// mid-word capitals like "tagIdS" included), because internal/specdiff's
+// ShapeFromSpec re-derives the identical bodyJSONTag(splitWords(...)) call
+// from its own reimplementation (internal/specdiff/naming.go) to compare
+// against — see audit_spec_drift. This test only ever changes goFieldName;
+// splitWords, consumeInitialisms and bodyJSONTag are not touched by this fix
+// at all, which is what makes asserting the JSON tag here a proof rather
+// than a formality: if a future edit to this function's neighbours ever did
+// move the tag, this is what would catch it, immediately, against a literal
+// string rather than a value computed from the same code under test.
+func TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		wireName    string
+		wantGoField string
+		wantJSONTag string // bodyJSONTag's output, unchanged by this fix — asserted so a future edit that moves it fails here first
+	}{
+		// The 13 real property names measured in api/specs/ee-2.44.0.json,
+		// all using the two-or-more-letter initialism spelled out in full
+		// ("...IDs", "...IPs", "...URLs") before the fix rendered them
+		// backwards ("...IDS", "...IPS", "...URLS").
+		{"ClusterIPs", "ClusterIPs", "clusterIpS"},
+		{"EdgeGroupIDs", "EdgeGroupIDs", "edgeGroupIdS"},
+		{"EndpointIDs", "EndpointIDs", "endpointIdS"},
+		{"EnvironmentIDs", "EnvironmentIDs", "environmentIdS"},
+		{"ExternalIPs", "ExternalIPs", "externalIpS"},
+		{"GroupIDs", "GroupIDs", "groupIdS"},
+		{"IssuingCertificateURLs", "IssuingCertificateURLs", "issuingCertificateUrlS"},
+		{"LinkLocalIPs", "LinkLocalIPs", "linkLocalIpS"},
+		{"SubResourceIDs", "SubResourceIDs", "subResourceIdS"},
+		{"TagIDs", "TagIDs", "tagIdS"},
+		{"URLs", "URLs", "urlS"},
+		{"edgeGroupIDs", "EdgeGroupIDs", "edgeGroupIdS"}, // lower-camel query-param spelling of EdgeGroupIDs
+		{"nonResourceURLs", "NonResourceURLs", "nonResourceUrlS"},
+		// The two backwards cases: the same tag/endpoint-id-list concept,
+		// spelled with oapi-codegen's plainer single-capital "Ids" instead —
+		// also real property names in the same vendored spec. Before this
+		// fix these rendered as a coincidental no-op ("TagIds" -> "TagIds"),
+		// which still fails revive's rule.
+		{"TagIds", "TagIDs", "tagIds"},
+		{"EndpointIds", "EndpointIDs", "endpointIds"},
+	} {
+		t.Run(tc.wireName, func(t *testing.T) {
+			t.Parallel()
+			words := splitWords(tc.wireName)
+			if got := goFieldName(words); got != tc.wantGoField {
+				t.Errorf("goFieldName(splitWords(%q)) = %q, want %q", tc.wireName, got, tc.wantGoField)
+			}
+			if got := bodyJSONTag(words); got != tc.wantJSONTag {
+				t.Errorf("bodyJSONTag(splitWords(%q)) = %q, want %q unchanged — a moved JSON tag gates audit_spec_drift", tc.wireName, got, tc.wantJSONTag)
+			}
+		})
+	}
+}
+
+// TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable is
+// this task's I5 fix: before it, both functions lower-cased only the
+// operationID's first rune, so a recognised initialism spelled the way the
+// vendored specification happened to write it (never forced upper-case,
+// unlike every wire property name goFieldName already renders correctly)
+// reached golangci-lint's revive var-naming check unchanged —
+// "StackCreateKubernetesUrl" (wave 1's stacks domain) rendered
+// "stackCreateKubernetesUrlInput"/"stackCreateKubernetesUrl", and
+// "GitOpsSourcesTestById" (a later wave's gitops domain) rendered
+// "gitOpsSourcesTestByIdInput"/"gitOpsSourcesTestById" — the exact two
+// findings golangci-lint reported against a real scaffold. Both now render
+// through actionGoFieldName/splitActionWords (naming.go) — not
+// goFieldName/splitWords, the pair every wire property name still uses.
+//
+// "GetKubernetesGPUInfo" and "DockerContainerGpusInspect" are the tokenizer
+// fix's own two proofs, not I5's: both are asserted against their exact,
+// literal output — not merely "changed from before" — because that is the
+// only form of assertion this project's review discipline accepts (see
+// TestUnit_InputStructNameAndHandlerFuncName_OnlyTheseOperationsChangeAcrossBothSpecs
+// below for why "changed" alone is not enough).
+//
+//   - "GetKubernetesGPUInfo" is the regression a prior version of this fix
+//     introduced by routing operationIDs through goFieldName/splitWords: that
+//     pair's consumeInitialisms greedily matches the initialism "UI" inside
+//     the uppercase run "GPUI" (part of "...GPUInfo"), splitting "Info" apart
+//     from its own leading "I" and rendering "GPUINfo" — worse than the naive
+//     rune swap this generator used before either fix, which happened to
+//     leave "GPUInfo" untouched. actionGoFieldName/splitActionWords do not
+//     have this defect: actionInitialisms recognises "GPU" as a whole
+//     initialism, so the greedy matcher never reaches the wrong reading. This
+//     case must render byte-identical to the naive pre-fix output
+//     ("getKubernetesGPUInfoInput"/"getKubernetesGPUInfo") — not a "known
+//     regression" to tolerate, which is what an earlier version of this test
+//     recorded it as.
+//   - "DockerContainerGpusInspect" is the one operationId, across both
+//     vendored specs, where the tokenizer switch actually changes output
+//     for the better beyond the three intended fixes: "Gpus" (a single
+//     capital "G" merged with the lower-case run "pus") is recognised by
+//     trailingPluralInitialismIn as the plural of the newly-available "GPU"
+//     initialism, the same convention already applied to "TagIDs" and
+//     "ClusterIPs" (see TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag),
+//     rendering "GPUs" instead of "Gpus".
+func TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		operationID     string
+		wantInputStruct string
+		wantHandlerFunc string
+	}{
+		{"StackCreateKubernetesUrl", "stackCreateKubernetesURLInput", "stackCreateKubernetesURL"},
+		{"GitOpsSourcesTestById", "gitOpsSourcesTestByIDInput", "gitOpsSourcesTestByID"},
+		{"GetKubernetesGPUInfo", "getKubernetesGPUInfoInput", "getKubernetesGPUInfo"},
+		{"DockerContainerGpusInspect", "dockerContainerGPUsInspectInput", "dockerContainerGPUsInspect"},
+		// Every frozen pilot domain's own hand-written name must survive
+		// unchanged: none of these operationIds spell a recognised
+		// initialism any way other than its own canonical form already, so
+		// consulting the table must not rename what was already correct.
+		{"TagCreate", "tagCreateInput", "tagCreate"},
+		{"EcrDeleteRepository", "ecrDeleteRepositoryInput", "ecrDeleteRepository"},
+		{"RegistryConfigure", "registryConfigureInput", "registryConfigure"},
+		{"SystemInfo", "systemInfoInput", "systemInfo"},
+	} {
+		t.Run(tc.operationID, func(t *testing.T) {
+			t.Parallel()
+			if got := inputStructName(tc.operationID); got != tc.wantInputStruct {
+				t.Errorf("inputStructName(%q) = %q, want %q", tc.operationID, got, tc.wantInputStruct)
+			}
+			if got := handlerFuncName(tc.operationID); got != tc.wantHandlerFunc {
+				t.Errorf("handlerFuncName(%q) = %q, want %q", tc.operationID, got, tc.wantHandlerFunc)
+			}
+		})
+	}
+}
+
+// unionOperationIDs returns every distinct exported operationId declared
+// across both vendored specifications, loaded directly through
+// loadDocument/operationsByDomain — not allOperations/domainOperations
+// above, which additionally requires toolutil.DomainTags to claim every
+// operation and only ever loads the EE document. inputStructName and
+// handlerFuncName take a bare operationID string and know nothing about
+// domains or which of the two specs it came from, so this is the actual
+// blast radius the tokenizer switch (naming.go's actionGoFieldName) has to
+// answer for.
+//
+// The two specs spell one operation's raw id with a different leading letter
+// case ("getAllKubernetesApplicationsCount" in EE,
+// "GetAllKubernetesApplicationsCount" in CE), so the raw JSON holds 445
+// distinct ids where there are only 444 operations. That collapse is NOT
+// this function's to make: operationsByDomain already stores
+// exportedName(operationId) (spec.go:133), so every id reaching this loop is
+// exported-cased and the two variants arrive as one. Deduplicating on the
+// raw key here is therefore exact, and re-applying exportedName to it would
+// be a second, provably idempotent call over the same 444 ids — dead code
+// dressed as a guard.
+// TestUnit_OperationsByDomain_NormalisesEveryOperationIDToItsExportedForm
+// pins the invariant unionOperationIDs' raw-key dedup rests on, and which
+// was until now only asserted in prose: operationsByDomain stores
+// exportedName(operationId), never the spec's raw spelling.
+//
+// It is load-bearing beyond naming. Both vendored specs declare
+// GetAllKubernetesApplicationsCount, but EE spells the raw id with a leading
+// lowercase letter — so the raw JSON holds 445 ids for 444 operations. Every
+// consumer that keys on operation.OperationID (the 444 constant below,
+// ResolveActionName's override table, handlerFuncName's scan) would see the
+// two spellings as two operations if spec.go:133 ever stopped normalising.
+func TestUnit_OperationsByDomain_NormalisesEveryOperationIDToItsExportedForm(t *testing.T) {
+	t.Parallel()
+	for _, specPath := range []string{"../../api/specs/ce-2.44.0.json", "../../api/specs/ee-2.44.0.json"} {
+		t.Run(filepath.Base(specPath), func(t *testing.T) {
+			t.Parallel()
+			_, paths, err := loadDocument(specPath)
+			if err != nil {
+				t.Fatalf("loadDocument(%q) error = %v", specPath, err)
+			}
+			byDomain, err := operationsByDomain(paths)
+			if err != nil {
+				t.Fatalf("operationsByDomain(%q) error = %v", specPath, err)
+			}
+			raw := rawOperationIDsByExportedName(paths)
+			checked := 0
+			for _, ops := range byDomain {
+				for _, op := range ops {
+					if got := exportedName(op.OperationID); got != op.OperationID {
+						t.Errorf("operationsByDomain kept %q, want its exported form %q", op.OperationID, got)
+					}
+					if _, ok := raw[op.OperationID]; !ok {
+						t.Errorf("operationsByDomain produced %q, which no raw operationId in the spec exports to", op.OperationID)
+					}
+					checked++
+				}
+			}
+			if checked == 0 {
+				t.Fatal("checked 0 operations; the loop above proves nothing")
+			}
+		})
+	}
+}
+
+// TestUnit_OperationsByDomain_CollapsesTheOneCrossSpecCaseDisagreement
+// measures the collision itself rather than trusting the comment: the two
+// vendored specs disagree on the leading case of exactly one raw
+// operationId, and normalisation is what makes 445 raw ids read as 444
+// operations. If Portainer ever fixes the spec, this test says so plainly
+// instead of leaving a stale claim in a comment.
+func TestUnit_OperationsByDomain_CollapsesTheOneCrossSpecCaseDisagreement(t *testing.T) {
+	t.Parallel()
+	rawIDs := map[string]bool{}
+	exported := map[string]bool{}
+	for _, specPath := range []string{"../../api/specs/ce-2.44.0.json", "../../api/specs/ee-2.44.0.json"} {
+		_, paths, err := loadDocument(specPath)
+		if err != nil {
+			t.Fatalf("loadDocument(%q) error = %v", specPath, err)
+		}
+		for exp, raw := range rawOperationIDsByExportedName(paths) {
+			rawIDs[raw] = true
+			exported[exp] = true
+		}
+	}
+	if len(rawIDs) != 445 || len(exported) != 444 {
+		t.Fatalf("raw operationIds = %d, exported = %d; want 445 and 444 (one cross-spec leading-case disagreement)", len(rawIDs), len(exported))
+	}
+	for _, want := range []string{"getAllKubernetesApplicationsCount", "GetAllKubernetesApplicationsCount"} {
+		if !rawIDs[want] {
+			t.Errorf("raw operationId %q absent; the collapse this package relies on is no longer the one documented", want)
+		}
+	}
+}
+
+func unionOperationIDs(t *testing.T) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	var ids []string
+	for _, specPath := range []string{"../../api/specs/ce-2.44.0.json", "../../api/specs/ee-2.44.0.json"} {
+		_, paths, err := loadDocument(specPath)
+		if err != nil {
+			t.Fatalf("loadDocument(%q) error = %v", specPath, err)
+		}
+		byDomain, err := operationsByDomain(paths)
+		if err != nil {
+			t.Fatalf("operationsByDomain(%q) error = %v", specPath, err)
+		}
+		for _, ops := range byDomain {
+			for _, op := range ops {
+				// op.OperationID is already exportedName'd by
+				// operationsByDomain, so this key collapses the one operation
+				// the two specs spell with different leading case. See the
+				// function comment.
+				if seen[op.OperationID] {
+					continue
+				}
+				seen[op.OperationID] = true
+				ids = append(ids, op.OperationID)
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// TestUnit_InputStructNameAndHandlerFuncName_OnlyTheseOperationsChangeAcrossBothSpecs
+// checks the tokenizer switch's blast radius directly against both vendored
+// specifications, rather than trusting the cases named above are the only
+// ones that differ from the pre-fix behaviour: routing an entire operationID
+// through splitActionWords/actionGoFieldName re-derives every word boundary
+// from scratch, which is not obviously limited to improving only the cases
+// it was written for.
+//
+// Every operationId gets its own named subtest, table-driven over
+// unionOperationIDs' 444 entries rather than one loop with plain t.Errorf,
+// so a future failure names exactly which operationId regressed instead of
+// requiring a human to scan a shared log for it.
+//
+// An earlier version of this test recorded a third operationId,
+// GetKubernetesGPUInfo, as a "known", accepted regression in wantChanged —
+// exactly the shape this project's own review discipline exists to catch: a
+// test that accepts the wrong answer is worse than no test at all. It is not
+// listed here because the tokenizer fix in naming.go (actionGoFieldName,
+// paired with splitActionWords rather than splitWords) removes the
+// regression entirely — inputStructName/handlerFuncName(GetKubernetesGPUInfo)
+// now render byte-identical to the pre-fix naive rename, which
+// TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable above
+// asserts directly against the literal string, not merely "unchanged from
+// naive".
+func TestUnit_InputStructNameAndHandlerFuncName_OnlyTheseOperationsChangeAcrossBothSpecs(t *testing.T) {
+	t.Parallel()
+	ids := unionOperationIDs(t)
+	if len(ids) != 444 {
+		t.Fatalf("unionOperationIDs() returned %d operationIds, want 444 (both vendored specs combined, deduplicated by exported name)", len(ids))
+	}
+
+	wantChanged := map[string]bool{
+		"StackCreateKubernetesUrl":   true, // wave 1's fix target
+		"GitOpsSourcesTestById":      true, // the "later" fix target the review named
+		"DockerContainerGpusInspect": true, // GPU's plural, rendered consistently with TagIDs/ClusterIPs once actionInitialisms recognises "GPU"
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		t.Run(id, func(t *testing.T) {
+			naiveInput := oldInputStructNameForTest(id)
+			fixedInput := inputStructName(id)
+			naiveHandler := oldHandlerFuncNameForTest(id)
+			fixedHandler := handlerFuncName(id)
+
+			inputChanged := naiveInput != fixedInput
+			handlerChanged := naiveHandler != fixedHandler
+			if inputChanged != handlerChanged {
+				t.Errorf("inputStructName changed = %t but handlerFuncName changed = %t for %q; both route through the identical splitActionWords/actionGoFieldName pair and must agree on whether this operationId's tokenization moved",
+					inputChanged, handlerChanged, id)
+			}
+			if !inputChanged && !handlerChanged {
+				return
+			}
+			seen[id] = true
+			if !wantChanged[id] {
+				t.Errorf("inputStructName(%q) changed from the naive rename (%q -> %q) unexpectedly; every change must be accounted for in this test",
+					id, naiveInput, fixedInput)
+			}
+		})
+	}
+	for id := range wantChanged {
+		if !seen[id] {
+			t.Errorf("expected inputStructName/handlerFuncName(%q) to differ from the naive rename across both specs, but neither did", id)
+		}
+	}
+}
+
+// oldInputStructNameForTest reproduces the pre-fix inputStructName exactly
+// (lower-case the first rune only), so
+// TestUnit_InputStructNameAndHandlerFuncName_OnlyTheseOperationsChangeAcrossBothSpecs
+// can diff the fix's actual output against it directly, rather than against
+// a hand-maintained list of "operations this fix should not touch" that could
+// itself drift from what the code produces.
+func oldInputStructNameForTest(operationID string) string {
+	r := []rune(operationID)
+	if len(r) == 0 {
+		return "input"
+	}
+	r[0] = unicode.ToLower(r[0])
+	return string(r) + "Input"
+}
+
+// oldHandlerFuncNameForTest reproduces the pre-fix handlerFuncName exactly
+// (lower-case the first rune only, no suffix), the handlerFuncName
+// counterpart of oldInputStructNameForTest above.
+func oldHandlerFuncNameForTest(operationID string) string {
+	if operationID == "" {
+		return operationID
+	}
+	r := []rune(operationID)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
 }
 
 // TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput is

@@ -31,6 +31,45 @@ Anything in the working scratch pad that a future contributor would need and
 could not reconstruct belongs here instead. The scratch pad is one fresh
 clone away from not existing.
 
+
+## The `jwt`-only security declaration is a documentation defect
+
+**Measured 2026-08-04 against an ephemeral Portainer 2.44.0 Community Edition, with an API key.**
+
+Sixteen operations in the vendored EE specification declare `security: [{jwt: []}]` with no
+`ApiKeyAuth` alternative, against 402 that declare both and 24 that inherit. By tag: `docker` 8,
+`endpoints` 4, `registries` 2, `stacks` 1, `users` 1.
+
+This server authenticates with `X-API-Key` and nothing else (`internal/portainer/client.go`). Taken
+at face value, the declaration would make all eight `docker`-tag operations uncallable by this
+binary — the whole domain.
+
+It is not true. Probed with an API key against a live server:
+
+```text
+GET /api/docker/{env}/dashboard   -> 200
+GET /api/docker/{env}/images      -> 200
+GET /api/docker/{env}/snapshot            -> 404   (no snapshot yet; 404 means auth passed)
+GET /api/docker/{env}/snapshot/containers -> 404   (same)
+GET /api/stacks/{id}/images_status        -> 404   (no stack yet; same)
+```
+
+A rejected key answers 401. Every probe got past authentication. The `jwt`-only declaration
+describes nothing the server enforces.
+
+**Why this was nearly missed, and why it is recorded here rather than left to be rediscovered.**
+Neither existing audit can see it. `audit_spec_reality` classifies a route by whether it answers
+Go's plain-text `404 page not found` or a JSON body, so a 401 from an API-key-rejecting route would
+read as "route exists". And the only two `jwt`-only operations already in the catalog —
+`registries.ecr_delete_repository` and `registries.ecr_delete_tags` — are exercised by a test that
+asserts the call *fails*, so a 401 is indistinguishable from the expected "no real ECR backend"
+error. The existing green test is not evidence either way.
+
+**Consequence for planning:** treat the `security` field as unreliable. Do not gate work on it, and
+do not add an allow-list entry for it — nothing in the toolchain reads it today, and nothing should
+start.
+
+
 ## How a claim here is traced
 
 Every entry carries an evidence label. There are three, and nothing is
@@ -485,7 +524,60 @@ an audit key from. They are therefore invisible to coverage figures as well
 as to the reality audit, and are the reason the probed totals are 251 and
 441 rather than 265 and 442.
 
-### 6.3 `ecrDeleteTags.RepositoryName` was typed wrong
+### 6.3 Four identifiers declared `integer` that Portainer never treats as a number
+
+**Evidence: vendored spec** for the declaration; **diagnosed** for what Portainer actually does with
+each value, from the shape of the identifier itself and Docker's/Docker Swarm's own ID conventions;
+recorded 2026-08-04 (P3.3 task 7).
+
+Four path parameters across three `docker`-tagged operations and one endpoint-scoped one declare
+`"type": "integer"` in the vendored Business Edition specification, yet the identifier each one
+names is never actually a number:
+
+| Operation ID | Route | Parameter | Real shape |
+|---|---|---|---|
+| `dockerContainerGpusInspect` | `GET /docker/{environmentId}/containers/{containerId}/gpus` | `containerId` | Docker's 64-character hex container ID |
+| `containerImageStatus` | `GET /docker/{environmentId}/containers/{containerId}/image_status` | `containerId` | same |
+| `snapshotContainerInspect` | `GET /docker/{environmentId}/snapshot/containers/{containerId}` | `containerId` | same |
+| `ServiceImageStatus` | `GET /docker/{environmentId}/services/{serviceId}/image_status` | `serviceId` | Docker Swarm's own alphanumeric service ID (e.g. `9mnpnzenvg8p8tdbtq4wvbkcz`) |
+
+Left as generated, all four actions were uncallable: `cmd/gen_action_inputs` rendered each field as
+Go `int`, publishing JSON Schema `"type": "integer"`, and `toolutil.ActionSpec.ValidateInput` (the
+same check every real tool call goes through, via `tools.Execute`) refused the only values that could
+ever work — neither identifier round-trips through an integer at all, let alone the specific one
+Docker or Swarm assigned. `cmd/gen_action_inputs/fields.go`'s `pathParamTypeOverrides` now renders
+all four as `string` instead; see that table's own doc comment for the mechanism, and
+`pathParamMinimumExceptions`'s doc comment for why the pre-existing `containerId` carve-out there
+(which suppressed a numeric `"minimum"`, not the type itself) needed a type-level fix on top, and why
+`serviceId` needed a fifth minimum-exception entry once its own type changed.
+
+This does not, on its own, make the four operations generatable. Every generated client method
+(`internal/portainer/gen`, built by `oapi-codegen` from the identical wrong declaration) *also* takes
+`containerId`/`serviceId` as a Go `int` — the wrong type is baked into two independently generated
+layers, not one. `cmd/gen_action_inputs/handler.go`'s own path-argument type check
+(`goTypeMatchesReflectType`) refuses to bind a `string` Input field to an `int` client parameter, so
+once a fixed `docker`/`endpoints` domain is scaffolded, all four of these operations will refuse
+generation there too — correctly: no automatically generated handler can call any of them, whichever
+type is published, because the generated client's own signature cannot carry the real identifier
+either. Whoever scaffolds `docker`/`endpoints` must hand-write these four handlers, the same way the
+four existing pilot actions (`EcrDeleteTags`, `RegistryConfigure`, `RepositoryTagsDelete`,
+`SystemUpgrade`) already bypass generation for their own reasons — building the HTTP request directly
+with the real string identifier rather than going through the generated client's typed wrapper.
+
+**The cheat this is written down to forbid.** `docker.service_image_status`'s `serviceId` can be made
+to look correct without actually being correct: label a probe container (or a Swarm service, in the
+e2e estate) `com.docker.swarm.service.id=1` and pass the plain integer `1` as `serviceId`. That value
+is a real, resolvable service ID on that specific probe — so a test that only checks "a value I chose
+resolves successfully" passes — while the schema underneath is still wrong for every service Portainer
+did not have a test author hand-label. A real deployment's Swarm service IDs are assigned by Swarm,
+never `1`. `containerId` has no equivalent shortcut at all: Docker, not a test author, assigns the
+64-hex container ID, so there is no small integer that could ever be a real one to fake acceptance
+with. That asymmetry is exactly why the string fix above is not optional for either field, and why
+any handler or test written against these four operations must validate with a realistic, non-trivial
+identifier and must separately assert that a plain integer is refused — accepting a realistic string
+alone proves nothing that an unfixed, still-`"integer"` schema could not also have passed by coincidence.
+
+### 6.4 `ecrDeleteTags.RepositoryName` was typed wrong
 
 Named in `cmd/audit_spec_reality`'s package doc as the fourth of the four
 spec defects found by accident before that tool existed — "a field typed
@@ -533,7 +625,7 @@ question for a settled fact.
 5. **`licensesInfo` was never separately measured** for the leak that
    `licensesList` demonstrably has (§4.1). Assume it leaks until measured.
 6. **`ecrDeleteTags.RepositoryName`'s original defect is not recoverable**
-   from the working notes (§6.3).
+   from the working notes (§6.4).
 7. **The Kubernetes leg has never been probed for route existence** (§1.7).
    The reasoning for skipping it is sound for route existence only; if a
    wave ever finds a route that exists only under a Helm deployment, that
@@ -636,3 +728,123 @@ domain's accumulated hand edits and start over should delete
 `actions.go`/`inputs.go` by hand first (so `domainAlreadyScaffolded` no
 longer sees them and `scanHandOverrides` has nothing stale left to
 misread), then run `make scaffold-domain` without `FORCE`.
+
+### 9.3 Per-field edition pruning does not recurse into a nested struct
+
+`toolutil.FieldEditions` (`internal/toolutil/edition_fields.go`) inspects
+only a struct's own top-level fields: an anonymous embedded field is
+flattened into its parent (the same promotion `encoding/json` already
+applies), but a *named* nested struct field — the shape every generated
+object-typed property takes (`typeOf` in `cmd/gen_action_inputs/fields.go`)
+— is never recursed into. `actioncatalog.Build`, which is the only place
+this function's result is now consulted (see that package's `Catalog`
+doc comment), therefore only ever prunes a whole top-level property or
+nothing: when a top-level field is itself tagged `edition:"EE"`, pruning
+drops the entire property value, nested subtree included, which is why a
+nested `edition:"EE"` tag *under an already-gated parent* is harmless — the
+parent's own removal already took it with it. The gap is the opposite
+case: a nested struct reached through a field that is **not** itself
+gated. A tag on one of that struct's own fields is computed by
+`cmd/gen_action_inputs/fields.go`'s `applyFieldEditionGate` (which *is*
+nested-inclusive — it walks every `structSpec` the operation produced, not
+only the top-level one) and rendered into the generated source as a real
+`edition:"EE"` struct tag, but `FieldEditions` never looks at it, so it is
+silently never pruned: a Community catalog would publish that nested field
+to a server that has never heard of it.
+
+**Measured directly**, by running `cmd/gen_action_inputs` fresh against the
+full vendored Business Edition specification (every domain `toolutil.DomainTags`
+names, in a scratch `-tools-dir`, so every operation could be generated
+regardless of whether its own domain is scaffolded yet) and searching every
+emitted `inputs.go` for a struct that (a) is not a top-level `...Input`
+struct, (b) carries at least one `edition:"EE"`-tagged field of its own, and
+(c) is reached from its operation's top-level Input struct through a field
+that is not itself gated: **seven operations**, none in wave 1 —
+
+| Domain | Operation | Nested struct | Inert field(s) |
+|---|---|---|---|
+| gitops | `GitOpsSourcesTest` | `Authentication` | `provider`, `sharedCredentialId`, `type` |
+| gitops | `GitOpsSourcesTestById` | `Authentication` | `provider`, `sharedCredentialId`, `type` |
+| kubernetes | `CreateKubernetesNamespace` | `ResourceQuota` | `cpuLimit`, `cpuRequest`, `memoryLimit`, `memoryRequest` |
+| kubernetes | `UpdateKubernetesNamespace` | `ResourceQuota` | `cpuLimit`, `cpuRequest`, `memoryLimit`, `memoryRequest` |
+| kubernetes | `UpdateKubernetesNamespaceDeprecated` | `ResourceQuota` | `cpuLimit`, `cpuRequest`, `memoryLimit`, `memoryRequest` |
+| ldap | `LDAPCheck` | `LDAPSettings` (and its own nested `AdminGroupSearchSettings`/`Kerberos`) | 13 fields, see `cmd/gen_action_inputs/fields.go`'s `RequiresEdition` doc comment |
+| users | `UserUpdate` | `Theme` | `subtleUpgradeButton` |
+
+Thirty-two fields across those seven operations, today; a scratch
+regeneration also refuses 123 other operations across 24 domains for
+reasons unrelated to this one (mostly a missing hand-declared redaction
+wrapper, since a wave's domain files do not exist yet in that scratch
+copy), so this count is a **floor**, not a ceiling — an operation refused
+for an unrelated reason during measurement was never inspected for a
+nested tag at all, and may also carry one once its domain's redaction
+wrappers are declared for real.
+
+Not fixed in this branch: implementing nested pruning is a larger,
+separately-reviewable change (it would need to walk the schema tree and the
+Go type in lockstep, handling a pointer, a slice-of-struct and a
+map-value-of-struct the way `typeOf` itself does), and none of wave 1's
+five domains (`endpoints`, `stacks`, `custom_templates`, `docker`,
+`templates`) is affected. Whichever wave scaffolds `gitops`, `kubernetes`,
+`ldap` or `users` must either implement nested pruning first or hand-verify
+every nested `edition:"EE"` tag that domain's generated inputs carry is
+subsumed by an already-gated ancestor field, the same way this table was
+produced.
+
+### 9.4 A redaction wrapper typed `any` defeats its own generated guard, vacuously
+
+`cmd/gen_action_inputs/render.go` emits, per domain, a reflective test
+(`TestUnit_RedactionGuards_RemoveEveryCredentialShapedField`) that
+constructs a zero value of each redaction wrapper's own declared parameter
+type via `reflect.New(fn.Type().In(0)).Elem()`, populates it with
+`toolutil.PopulateForCredentialAudit`, calls the wrapper, and asserts
+nothing credential-shaped survived. `PopulateForCredentialAudit`
+(`internal/toolutil/credential.go`) walks every reflect.Kind it can
+meaningfully allocate a dummy value for — except `reflect.Interface`, which
+it deliberately leaves untouched ("an interface field has no concrete type
+to populate, and guessing one would put a value in a response the real
+client would never produce").
+
+That single, deliberate exception is also a hole: a redaction wrapper
+declared to take `any` instead of its real response type —
+`func redactRegistryInspect(r any) any { return r }` in place of the
+generated `func redactRegistryInspect(r *apigen.PortainereeRegistry) any` —
+makes `fn.Type().In(0)` the empty interface itself. The constructed argument
+is then a genuinely empty interface value with no concrete type ever set,
+`PopulateForCredentialAudit` does nothing to it (correctly, by its own
+stated rule), the wrapper's pass-through returns that same empty value, and
+`AssertRedacted` finds nothing populated to report — because there is
+nothing there to find. The guard test **passes**, for the one reason it
+exists to prevent: a wrapper that does not actually redact anything.
+`make audit-spec-drift` does not catch it either, since drift auditing
+checks that a redaction function of the expected *name* exists, never that
+its signature is the real response type. Confirmed directly: mutating
+`internal/tools/registries/registries.go`'s `redactRegistryInspect` to this
+`any`-typed pass-through leaves both its generated guard test
+(`TestUnit_RedactionGuards_RemoveEveryCredentialShapedField/RegistryInspect`,
+`redaction_test.go`) *and* `TestUnit_RedactionGuards_HandlerRedactsCredentialShapedFields/RegistryInspect`
+green, and `audit-spec-drift` reports "No drift". Only
+`registries_test.go`'s own hand-written, concretely-typed handler tests —
+`TestRegistryInspect_ResponseWithPassword_IsRedacted` and
+`TestRegistryInspect_ResponseWithNestedManagementCredentials_IsRedacted`,
+which build a real HTTP response and call the real `RegistryInspect`
+handler rather than reflecting over a wrapper in isolation — still fail.
+Mutation reverted, byte-identical, before continuing.
+
+Not introduced by this branch, and not fixed here: it is a structural gap
+in the generated guard's own test harness that predates this branch by
+several tasks. Recorded because it is not merely theoretical for what
+comes next — every one of wave 1's `73` operations that returns a
+credential-shaped field needs a declared redaction wrapper
+(`checkCredentialRedaction`, `cmd/gen_action_inputs/credential.go`) before
+it can generate at all, and the generator has no way to refuse a
+hand-written wrapper for being typed `any` instead of the real response
+type; a domain author copying the wrong signature by hand would ship
+exactly this hole with a fully green build. Closing it durably means either
+teaching `PopulateForCredentialAudit`/the generated guard test to refuse an
+`any`-typed (or otherwise underspecified) wrapper parameter outright, or
+having `cmd/gen_action_inputs` itself check a hand-written wrapper's
+declared parameter type against the operation's real response type before
+accepting it as satisfying `checkCredentialRedaction`. Either is a
+generator/toolchain change large enough to deserve its own review, not a
+line-item inside this one.

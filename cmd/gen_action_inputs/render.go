@@ -80,7 +80,7 @@ func renderStruct(buf *strings.Builder, s structSpec) {
 		if f.Description != "" {
 			writeIndentedComment(buf, f.GoName+" "+f.Description)
 		}
-		fmt.Fprintf(buf, "%s %s %s\n", f.GoName, f.GoType, fieldTag(f.JSONName, f.Required, f.Description))
+		fmt.Fprintf(buf, "%s %s %s\n", f.GoName, f.GoType, fieldTag(f.JSONName, f.Required, f.Description, f.RequiresEdition))
 	}
 	buf.WriteString("}\n")
 
