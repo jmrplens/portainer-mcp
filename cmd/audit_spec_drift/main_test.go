@@ -36,7 +36,7 @@ func TestUnit_Run_RealCatalogAgainstRealSpecs_ReturnsNil(t *testing.T) {
 	t.Parallel()
 	t.Run("Run RealCatalogAgainstRealSpecs ReturnsNil", func(t *testing.T) {
 		var out strings.Builder
-		err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml")
+		err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml", defaultSpecVer)
 		if err != nil {
 			t.Fatalf("run() error = %v, want nil: the real catalog is expected to match the vendored spec it was generated from\n%s", err, out.String())
 		}
@@ -122,7 +122,7 @@ func TestUnit_Run_RealCatalogTypeDriftAgainstMutatedSpec_ReturnsNonNilError(t *t
 		writeFixture(t, dir, "spec-drift-allowlist.yaml", string(realAllowList))
 
 		var out strings.Builder
-		err = run(&out, dir, "ce-2.44.0.json", "ee-2.44.0.json", dir, "spec-drift-allowlist.yaml")
+		err = run(&out, dir, "ce-2.44.0.json", "ee-2.44.0.json", dir, "spec-drift-allowlist.yaml", defaultSpecVer)
 		if err == nil {
 			t.Fatalf("run() error = nil, want an error: TagDelete's \"id\" was mutated integer -> string in the spec fed to run\n%s", out.String())
 		}
@@ -141,7 +141,7 @@ func TestUnit_Run_MissingSpecFile_ReturnsError(t *testing.T) {
 		dir := t.TempDir()
 		writeFixture(t, dir, "allowlist.yaml", "[]\n")
 		var out strings.Builder
-		err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml")
+		err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml", defaultSpecVer)
 		if err == nil {
 			t.Fatal("run() error = nil, want an error for a missing spec file")
 		}
@@ -156,7 +156,7 @@ func TestUnit_Run_MissingAllowListFile_ReturnsError(t *testing.T) {
 		writeFixture(t, dir, "ce.json", `{"paths": {}}`)
 		writeFixture(t, dir, "ee.json", `{"paths": {}}`)
 		var out strings.Builder
-		err := run(&out, dir, "ce.json", "ee.json", dir, "does-not-exist.yaml")
+		err := run(&out, dir, "ce.json", "ee.json", dir, "does-not-exist.yaml", defaultSpecVer)
 		if err == nil {
 			t.Fatal("run() error = nil, want an error for a missing allow-list file")
 		}
@@ -173,7 +173,7 @@ func TestUnit_Run_CanaryCannotBeBypassed_StillRunsAgainstCleanTree(t *testing.T)
 	t.Parallel()
 	t.Run("Run CanaryCannotBeBypassed StillRunsAgainstCleanTree", func(t *testing.T) {
 		var out strings.Builder
-		if err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml"); err != nil {
+		if err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml", defaultSpecVer); err != nil {
 			t.Fatalf("run() error = %v", err)
 		}
 		if !strings.Contains(out.String(), "Canary self-test: passed") {

@@ -137,7 +137,7 @@ func main() {
 	ceSpecFile := fmt.Sprintf("ce-%s.json", *specVersion)
 	eeSpecFile := fmt.Sprintf("ee-%s.json", *specVersion)
 
-	if err := run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile); err != nil {
+	if err := run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, *specVersion); err != nil {
 		fmt.Fprintf(os.Stderr, "audit_spec_drift: %v\n", err)
 		os.Exit(1)
 	}
@@ -148,12 +148,18 @@ func main() {
 // against the vendored operation it was generated from, and writes the
 // report to w.
 //
+// serverVersion grounds auditEditionFieldCounts's own two catalog builds
+// (see that function's doc comment): the report's per-edition field counts
+// must reflect the same server version this run's vendored specs name, not
+// an unrelated default, or the two could disagree about which operations a
+// version-gated action is even available for.
+//
 // It returns an error whenever the build must fail: the canary could not
 // confirm the comparison engine still discriminates (in which case nothing
 // else is even attempted), a malformed input, an action whose OperationID
 // resolves in neither vendored spec, an un-excused gating finding, or a
 // stale allow-list entry.
-func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile string) error {
+func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, serverVersion string) error {
 	if err := verifyCanary(specdiff.Compare); err != nil {
 		return fmt.Errorf("refusing to report: %w", err)
 	}
@@ -204,8 +210,12 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 	if err != nil {
 		return err
 	}
+	editionResult, err := auditEditionFieldCounts(actions, serverVersion)
+	if err != nil {
+		return err
+	}
 
-	if _, err := fmt.Fprint(w, buildReport(result, credResult, minResult)); err != nil {
+	if _, err := fmt.Fprint(w, buildReport(result, credResult, minResult, editionResult)); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 

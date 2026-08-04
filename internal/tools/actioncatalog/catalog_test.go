@@ -3,6 +3,7 @@ package actioncatalog
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -694,5 +695,149 @@ func TestBuild_RegistriesPilot_YieldsDifferentCatalogsPerEdition(t *testing.T) {
 	if len(ceCatalog.Actions()) >= len(eeCatalog.Actions()) {
 		t.Errorf("CE has %d actions and EE has %d; EE must offer strictly more in this domain",
 			len(ceCatalog.Actions()), len(eeCatalog.Actions()))
+	}
+}
+
+// propertyNames returns schema's "properties" keys, sorted, so two schemas'
+// published fields can be compared and printed deterministically.
+func propertyNames(schema map[string]any) []string {
+	props, _ := schema["properties"].(map[string]any)
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestUnit_Catalog_RegistriesDivergentActions_PublishExactFieldsPerEdition is
+// this task's per-edition catalog test. registries is used rather than the
+// brief's own suggested endpoints.create/endpoints.list: this repository has
+// not scaffolded a docker/endpoints domain yet (wave 1 is the next plan, and
+// this task is expressly forbidden from scaffolding one — see this task's
+// own "Notes for the executor"), whereas registries is real, already built,
+// and already carries a genuine field-level divergence — task 7 hand-tagged
+// registryCreateInput.Github, registryUpdateInput.Github and
+// registryInspectInput.EndpointID with `edition:"EE"` (see
+// internal/tools/registries/inputs.go and that domain's own
+// edition_prune_test.go, the first real-code exercise of Task 2's mechanism
+// outside actioncatalog's own package). This is the second: it builds the
+// real catalog Task 2's mechanism actually runs inside
+// (actioncatalog.Build + Catalog.InputSchema), rather than registries' own
+// test, which is exactly as real but does not itself prove the *catalog*
+// wiring — as opposed to some registries-local helper — is what performs the
+// pruning.
+//
+// The trap this guards against (spelled out in this task's own brief): a
+// test that only asserts "the CE count differs from the EE count" passes
+// against an implementation that prunes the *wrong* field, or prunes at
+// random, as long as it prunes something. Every case below asserts the
+// specific field that must divarge, in both directions (present in EE,
+// absent from CE) — never a bare count.
+//
+// It also survives an unrelated hand-edit to registries: rather than pinning
+// to registries.create's current 11-CE/12-EE property counts (which a future
+// field addition to registryCreateInput would break for a reason unrelated
+// to edition gating), the third assertion below checks the invariant "EE's
+// properties, minus exactly the named Business-only fields, equal CE's
+// properties" — true regardless of how many other, ungated fields
+// registries.create happens to declare on either side of this edit.
+func TestUnit_Catalog_RegistriesDivergentActions_PublishExactFieldsPerEdition(t *testing.T) {
+	t.Parallel()
+
+	ceCatalog, err := Build(registries.Specs(), Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build(CE): %v", err)
+	}
+	eeCatalog, err := Build(registries.Specs(), Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build(EE): %v", err)
+	}
+
+	cases := []struct {
+		actionName string
+		// businessOnly names the field(s) this action's Input tags
+		// edition:"EE": genuinely absent from the Community Edition
+		// operation's own resolved schema (verified directly against
+		// api/specs/ce-2.44.0.json — see registries/inputs.go's own doc
+		// comments on registryCreateInput.Github, registryUpdateInput.Github
+		// and registryInspectInput.EndpointID for the exact verification).
+		businessOnly []string
+	}{
+		{"registries.create", []string{"github"}},
+		{"registries.update", []string{"github"}},
+		{"registries.inspect", []string{"endpointId"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.actionName, func(t *testing.T) {
+			t.Parallel()
+
+			ceSpec, ok := ceCatalog.Lookup(tc.actionName)
+			if !ok {
+				t.Fatalf("%s: not found in the Community catalog", tc.actionName)
+			}
+			ceSchema, err := ceCatalog.InputSchema(ceSpec)
+			if err != nil {
+				t.Fatalf("CE InputSchema(%s): %v", tc.actionName, err)
+			}
+
+			eeSpec, ok := eeCatalog.Lookup(tc.actionName)
+			if !ok {
+				t.Fatalf("%s: not found in the Business catalog", tc.actionName)
+			}
+			eeSchema, err := eeCatalog.InputSchema(eeSpec)
+			if err != nil {
+				t.Fatalf("EE InputSchema(%s): %v", tc.actionName, err)
+			}
+
+			ceProps, _ := ceSchema["properties"].(map[string]any)
+			eeProps, _ := eeSchema["properties"].(map[string]any)
+
+			// Direction 1: every named field is genuinely published to
+			// Business Edition. A pruning bug that dropped it from both
+			// editions (rather than only Community) would still pass a test
+			// that checked only direction 2 below.
+			for _, field := range tc.businessOnly {
+				if _, ok := eeProps[field]; !ok {
+					t.Errorf("%s: Business Edition does not publish %q, want it present", tc.actionName, field)
+				}
+			}
+
+			// Direction 2: every named field is genuinely pruned from
+			// Community Edition. This is the direction Task 2's own
+			// mechanism exists for.
+			for _, field := range tc.businessOnly {
+				if _, ok := ceProps[field]; ok {
+					t.Errorf("%s: Community Edition still publishes %q, want it pruned", tc.actionName, field)
+				}
+			}
+
+			// Direction 3, the specific-not-a-count check: dropping exactly
+			// businessOnly's fields from EE's own property set must yield
+			// precisely CE's — not merely a smaller set, and not pinned to
+			// today's literal counts. A pruning implementation that dropped
+			// some unrelated field (or dropped nothing and this domain's
+			// fixture happened to already differ some other way) would fail
+			// here even though directions 1 and 2 above both passed.
+			want := make(map[string]bool, len(eeProps))
+			for name := range eeProps {
+				want[name] = true
+			}
+			for _, field := range tc.businessOnly {
+				delete(want, field)
+			}
+			wantNames := make([]string, 0, len(want))
+			for name := range want {
+				wantNames = append(wantNames, name)
+			}
+			sort.Strings(wantNames)
+
+			gotNames := propertyNames(ceSchema)
+			if strings.Join(gotNames, ",") != strings.Join(wantNames, ",") {
+				t.Errorf("%s: CE properties = %v, want exactly EE's properties %v minus %v",
+					tc.actionName, gotNames, propertyNames(eeSchema), tc.businessOnly)
+			}
+		})
 	}
 }

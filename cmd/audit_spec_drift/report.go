@@ -55,23 +55,30 @@ func minimumFindingLine(f minimumFinding) string {
 		f.OperationID, f.ActionName, f.ParamName)
 }
 
-// buildReport renders result, credResult and minResult as a human-readable
-// summary, written to standard error (see this command's package doc for why
-// never standard output).
+// buildReport renders result, credResult, minResult and editionResult as a
+// human-readable summary, written to standard error (see this command's
+// package doc for why never standard output).
 //
 // Every finding is printed, gating or not, allow-listed or not: an allow-list
 // that can hide an entry from its own report is exactly how it turns from an
 // honesty mechanism into a hiding place, the identical reasoning
 // cmd/audit_1to1's buildReport states for its own allow-list.
-func buildReport(result *auditResult, credResult *credentialAuditResult, minResult *minimumAuditResult) string {
+func buildReport(result *auditResult, credResult *credentialAuditResult, minResult *minimumAuditResult, editionResult *editionFieldCountsResult) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Portainer MCP specification drift audit")
 	fmt.Fprintln(&b, "=========================================")
 	fmt.Fprintln(&b, "Canary self-test: passed (a deliberately perturbed shape was correctly reported as drift).")
 	fmt.Fprintln(&b, "Credential canary self-test: passed (a handler that calls its wrapper and one that does not were told apart).")
 	fmt.Fprintln(&b, "Identifier-minimum canary self-test: passed (an action publishing \"minimum\":1 and one not were told apart).")
-	fmt.Fprintf(&b, "Actions audited: %d\n", result.ActionsAudited)
-	fmt.Fprintf(&b, "Fields audited: %d\n", result.FieldsAudited)
+	fmt.Fprintf(&b, "Actions audited: %d (%d compare zero fields)\n", result.ActionsAudited, result.ActionsWithZeroFields)
+	if editionResult != nil {
+		fmt.Fprintf(&b, "Fields audited: %d (%d published to Business Edition across %d actions, %d to Community Edition across %d actions)\n",
+			result.FieldsAudited,
+			editionResult.EE.Fields, editionResult.EE.Actions,
+			editionResult.CE.Fields, editionResult.CE.Actions)
+	} else {
+		fmt.Fprintf(&b, "Fields audited: %d\n", result.FieldsAudited)
+	}
 	fmt.Fprintf(&b, "Allow-list entries: %d\n\n", result.AllowListCount)
 
 	var currentOp string
