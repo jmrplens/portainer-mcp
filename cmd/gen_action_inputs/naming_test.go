@@ -286,6 +286,85 @@ func TestUnit_ActionName_RequiresNonEmptyDomainAndOperationID(t *testing.T) {
 	}
 }
 
+// TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag
+// is the fix for the plural-initialism defect golangci-lint's revive
+// var-naming check flags on every wave-1-shaped domain that touches an "IDs"
+// (or "IPs"/"URLs") field: 13 real property names measured directly from the
+// vendored ee-2.44.0.json ("TagIDs" (5), "EdgeGroupIDs" (3), "GroupIDs" (2),
+// and nine more, one occurrence each) plus two cases that demonstrate this
+// generator getting the *same* concept backwards under oapi-codegen's other,
+// plainer wire spelling ("TagIds", "EndpointIds" — both real property names
+// in the same spec, for the same underlying tag/endpoint-id-list concept).
+//
+// Before this fix goFieldName rendered the 13 real, two-or-more-letter-ID
+// names *worse than not special-casing them at all*: the trailing pluraliser
+// title-cased into an extra capital ("TagIDs" -> "TagIDS", "ClusterIPs" ->
+// "ClusterIPS"), and the two plain-style names went unrecognised entirely
+// ("TagIds" stayed "TagIds", "EndpointIds" stayed "EndpointIds" — a
+// coincidental no-op that still fails revive because the *rule*, not the
+// diff, is what it checks). Every case below is asserted against the exact
+// literal string this generator must now produce, not against "changed from
+// before" or "not the old wrong value" — either of those would pass just as
+// happily against some other, different wrong value, exactly the
+// non-discriminating shape this project's review discipline exists to catch.
+//
+// The second half of every case is the constraint that makes this fix
+// delicate at all: bodyJSONTag's output must be the *literal, unchanged*
+// string this generator has always emitted for that wire name (ugly
+// mid-word capitals like "tagIdS" included), because internal/specdiff's
+// ShapeFromSpec re-derives the identical bodyJSONTag(splitWords(...)) call
+// from its own reimplementation (internal/specdiff/naming.go) to compare
+// against — see audit_spec_drift. This test only ever changes goFieldName;
+// splitWords, consumeInitialisms and bodyJSONTag are not touched by this fix
+// at all, which is what makes asserting the JSON tag here a proof rather
+// than a formality: if a future edit to this function's neighbours ever did
+// move the tag, this is what would catch it, immediately, against a literal
+// string rather than a value computed from the same code under test.
+func TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		wireName    string
+		wantGoField string
+		wantJSONTag string // bodyJSONTag's output, unchanged by this fix — asserted so a future edit that moves it fails here first
+	}{
+		// The 13 real property names measured in api/specs/ee-2.44.0.json,
+		// all using the two-or-more-letter initialism spelled out in full
+		// ("...IDs", "...IPs", "...URLs") before the fix rendered them
+		// backwards ("...IDS", "...IPS", "...URLS").
+		{"ClusterIPs", "ClusterIPs", "clusterIpS"},
+		{"EdgeGroupIDs", "EdgeGroupIDs", "edgeGroupIdS"},
+		{"EndpointIDs", "EndpointIDs", "endpointIdS"},
+		{"EnvironmentIDs", "EnvironmentIDs", "environmentIdS"},
+		{"ExternalIPs", "ExternalIPs", "externalIpS"},
+		{"GroupIDs", "GroupIDs", "groupIdS"},
+		{"IssuingCertificateURLs", "IssuingCertificateURLs", "issuingCertificateUrlS"},
+		{"LinkLocalIPs", "LinkLocalIPs", "linkLocalIpS"},
+		{"SubResourceIDs", "SubResourceIDs", "subResourceIdS"},
+		{"TagIDs", "TagIDs", "tagIdS"},
+		{"URLs", "URLs", "urlS"},
+		{"edgeGroupIDs", "EdgeGroupIDs", "edgeGroupIdS"}, // lower-camel query-param spelling of EdgeGroupIDs
+		{"nonResourceURLs", "NonResourceURLs", "nonResourceUrlS"},
+		// The two backwards cases: the same tag/endpoint-id-list concept,
+		// spelled with oapi-codegen's plainer single-capital "Ids" instead —
+		// also real property names in the same vendored spec. Before this
+		// fix these rendered as a coincidental no-op ("TagIds" -> "TagIds"),
+		// which still fails revive's rule.
+		{"TagIds", "TagIDs", "tagIds"},
+		{"EndpointIds", "EndpointIDs", "endpointIds"},
+	} {
+		t.Run(tc.wireName, func(t *testing.T) {
+			t.Parallel()
+			words := splitWords(tc.wireName)
+			if got := goFieldName(words); got != tc.wantGoField {
+				t.Errorf("goFieldName(splitWords(%q)) = %q, want %q", tc.wireName, got, tc.wantGoField)
+			}
+			if got := bodyJSONTag(words); got != tc.wantJSONTag {
+				t.Errorf("bodyJSONTag(splitWords(%q)) = %q, want %q unchanged — a moved JSON tag gates audit_spec_drift", tc.wireName, got, tc.wantJSONTag)
+			}
+		})
+	}
+}
+
 // TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput is
 // the two-sided proof the separation between splitActionWords and splitWords
 // actually holds. Asserting only that splitActionWords now produces a good
