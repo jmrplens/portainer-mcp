@@ -331,6 +331,180 @@ func TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody_SyntheticShapes(t *testi
 	}
 }
 
+// kubernetesBulkDeleteOperationIDs is all seven map-bodied Kubernetes
+// bulk-delete operations in the vendored specification (fields.go's own
+// MapValue doc comment names them): "a map where the key is the namespace
+// and the value is an array of <kind> to delete" — the shape C2 (this
+// coordinator round) closes ShapeFromSpec's blind spot for. Named directly,
+// not discovered by a scan, so this test's own list cannot silently shrink
+// if a future spec revision renames one of them without this test noticing.
+var kubernetesBulkDeleteOperationIDs = []string{
+	"DeleteCronJobs", "DeleteJobs", "DeleteKubernetesIngresses",
+	"DeleteKubernetesServices", "DeleteRoleBindings", "DeleteRoles", "DeleteServiceAccounts",
+}
+
+// TestUnit_ShapeFromSpec_MapBodiedKubernetesBulkDeletes_ReportTwoFields is
+// the direction C1's own fix could not close: a map-shaped request body
+// (JSON Schema "type":"object" with a typed "additionalProperties" and no
+// named "properties") synthesizes a "namespace" field, exactly the shape
+// cmd/gen_action_inputs's assembleOperationFields already does for these
+// same seven operations. Before this fix, every one of them reported
+// exactly one field (the "id" path parameter) — verified directly, this is
+// the coordinator's own measurement — silently dropping the body entirely.
+// Asserting len(Fields) == 2 is the load-bearing assertion here: a shape
+// that dropped the namespace field but still had "id" would pass any
+// assertion that only inspected byName["namespace"] without first checking
+// how many fields exist at all, the identical discrimination gap C1's own
+// non-object refusal exists to close on the array side.
+func TestUnit_ShapeFromSpec_MapBodiedKubernetesBulkDeletes_ReportTwoFields(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("read vendored spec: %v", err)
+	}
+	for _, operationID := range kubernetesBulkDeleteOperationIDs {
+		t.Run(operationID, func(t *testing.T) {
+			t.Parallel()
+			op, err := LoadSpecOperation(data, operationID)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s) error = %v", operationID, err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err != nil {
+				t.Fatalf("ShapeFromSpec(%s) error = %v, want the map body synthesized, not refused", operationID, err)
+			}
+			if len(shape.Fields) != 2 {
+				t.Fatalf("ShapeFromSpec(%s).Fields = %+v, want exactly 2 (id path parameter + namespace body field)", operationID, shape.Fields)
+			}
+
+			byName := make(map[string]FieldShape, len(shape.Fields))
+			for _, f := range shape.Fields {
+				byName[f.JSONName] = f
+			}
+
+			id, ok := byName["id"]
+			if !ok || id.Type != "integer" || !id.Required || id.Origin != "path" {
+				t.Errorf(`Fields["id"] = %+v, want {Type: integer, Required: true, Origin: path}`, id)
+			}
+
+			namespace, ok := byName["namespace"]
+			if !ok {
+				t.Fatalf("no \"namespace\" field in %+v; the map-typed body was silently discarded", shape.Fields)
+			}
+			if namespace.Type != "object" {
+				t.Errorf("namespace.Type = %q, want %q: a map's own JSON Schema type, regardless of its values' shape", namespace.Type, "object")
+			}
+			if !namespace.Required {
+				t.Error("namespace.Required = false, want true: every one of these seven operations declares requestBody.required = true")
+			}
+			if namespace.Origin != "body" {
+				t.Errorf("namespace.Origin = %q, want %q", namespace.Origin, "body")
+			}
+			if namespace.Description == "" {
+				t.Error("namespace.Description is empty, want the requestBody's own description (or the generator's fallback) carried through")
+			}
+		})
+	}
+}
+
+// The four structs below are hand-written to match, field for field and tag
+// for tag, exactly what cmd/gen_action_inputs would generate for these four
+// operations today — the same shape
+// TestUnit_MapTypedRequestBody_GeneratesMapField
+// (cmd/gen_action_inputs/generate_test.go) already pins for
+// DeleteServiceAccounts's identical body shape, reproduced here for the
+// four operations the coordinator explicitly measured. This is not a
+// fixture invented for this test to pass; every field name, JSON tag and
+// jsonschema description is copied verbatim from api/specs/ee-2.44.0.json
+// (verified by the two test functions above and below reading the identical
+// document).
+type deleteCronJobsInput struct {
+	ID        int                 `json:"id" jsonschema:"Environment identifier"`
+	Namespace map[string][]string `json:"namespace" jsonschema:"A map where the key is the namespace and the value is an array of Cron Jobs to delete"`
+}
+
+func (deleteCronJobsInput) MinimumParams() map[string]int { return map[string]int{"id": 1} }
+
+type deleteJobsInput struct {
+	ID        int                 `json:"id" jsonschema:"Environment identifier"`
+	Namespace map[string][]string `json:"namespace" jsonschema:"A map where the key is the namespace and the value is an array of Jobs to delete"`
+}
+
+func (deleteJobsInput) MinimumParams() map[string]int { return map[string]int{"id": 1} }
+
+type deleteRolesInput struct {
+	ID        int                 `json:"id" jsonschema:"Environment identifier"`
+	Namespace map[string][]string `json:"namespace" jsonschema:"A map where the key is the namespace and the value is an array of roles to delete"`
+}
+
+func (deleteRolesInput) MinimumParams() map[string]int { return map[string]int{"id": 1} }
+
+type deleteKubernetesServicesInput struct {
+	ID        int                 `json:"id" jsonschema:"Environment identifier"`
+	Namespace map[string][]string `json:"namespace" jsonschema:"A map where the key is the namespace and the value is an array of services to delete"`
+}
+
+func (deleteKubernetesServicesInput) MinimumParams() map[string]int { return map[string]int{"id": 1} }
+
+// TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeOnMapBodiedKubernetesBulkDeletes
+// is the half that actually matters (the coordinator's own framing): a
+// shape that reports the namespace field with the wrong type or origin
+// still gates the build, just with a different message than "field
+// missing". Each Input struct above is what the generator would emit for
+// its operation today (mirroring TestUnit_MapTypedRequestBody_GeneratesMapField's
+// identical DeleteServiceAccounts fixture), wrapped in a plain ActionSpec —
+// no toolutil.WithNarrative override, no hand-improved Title/Description —
+// exactly as a freshly scaffolded, never-hand-edited action would be
+// declared. specdiff.Compare between that catalog shape and the real
+// vendored operation must report zero changes: not merely "namespace is
+// present on both sides", but present with the identical type, requiredness,
+// origin and description-matching-or-excused-cosmetic on both.
+func TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeOnMapBodiedKubernetesBulkDeletes(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("read vendored spec: %v", err)
+	}
+	for _, tc := range []struct {
+		operationID string
+		title       string
+		description string
+		input       any
+	}{
+		{"DeleteCronJobs", "Delete Cron Jobs", "Delete the provided list of Cron Jobs.", deleteCronJobsInput{}},
+		{"DeleteJobs", "Delete Jobs", "Delete the provided list of Jobs.", deleteJobsInput{}},
+		{"DeleteRoles", "Delete roles", "Delete the provided list of roles.", deleteRolesInput{}},
+		{"DeleteKubernetesServices", "Delete services", "Delete the provided list of services.", deleteKubernetesServicesInput{}},
+	} {
+		t.Run(tc.operationID, func(t *testing.T) {
+			t.Parallel()
+			op, err := LoadSpecOperation(data, tc.operationID)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s) error = %v", tc.operationID, err)
+			}
+			specShape, err := ShapeFromSpec(op)
+			if err != nil {
+				t.Fatalf("ShapeFromSpec(%s) error = %v", tc.operationID, err)
+			}
+
+			catalogSpec := toolutil.ActionSpec{
+				Name: "kubernetes." + tc.operationID, Domain: "kubernetes",
+				OperationID: tc.operationID, Title: tc.title, Description: tc.description,
+				Input: tc.input,
+			}
+			catalogShape, err := ShapeFromCatalog(catalogSpec)
+			if err != nil {
+				t.Fatalf("ShapeFromCatalog(%s) error = %v", tc.operationID, err)
+			}
+
+			changes := Compare(specShape, catalogShape)
+			if len(changes) != 0 {
+				t.Errorf("Compare() = %+v, want no drift: this catalog shape is exactly what the generator would emit for %s today", changes, tc.operationID)
+			}
+		})
+	}
+}
+
 // TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeStructurallyForPilotDomain is
 // the end-to-end proof that the two producers this engine compares actually
 // agree on an operation nothing has changed for: the catalog's tags and

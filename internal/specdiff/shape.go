@@ -147,6 +147,20 @@ type resolvedNode struct {
 	Enum        []any
 	Properties  map[string]map[string]any
 	Required    map[string]bool
+	// HasMapValue reports whether this node is an object schema with a typed
+	// "additionalProperties" and no named "properties" — a map/dictionary
+	// body, mirroring cmd/gen_action_inputs's identical schemaNode.MapValue
+	// (fields.go). Only ever set when Properties is empty at the point this
+	// is checked, the identical condition that function's resolver applies:
+	// an object schema can only be flattened one way, and named properties
+	// win when a schema author declares both (never observed in either
+	// vendored specification, but not assumed impossible). This carries only
+	// the fact that a map value exists, not the value schema itself: unlike
+	// cmd/gen_action_inputs, ShapeFromSpec never needs to name the value's Go
+	// type, because the field it synthesizes for a map body always reports
+	// JSON Schema type "object" regardless of what the map's values are (see
+	// ShapeFromSpec's own doc comment on synthesizeMapBodyField).
+	HasMapValue bool
 }
 
 // resolveSchema resolves one raw schema node against schemas
@@ -239,6 +253,21 @@ func resolveSchema(schemas map[string]any, raw map[string]any, resolving map[str
 		}
 	}
 
+	// A typed "additionalProperties" only matters when nothing has already
+	// contributed a named property — mirroring cmd/gen_action_inputs's
+	// identical resolver.resolve, which checks this after (not instead of)
+	// the "properties" handling above for the same reason: a schema
+	// declaring both, however unlikely, flattens as named properties, not as
+	// a map, because that is the shape a Go struct can actually express.
+	if len(node.Properties) == 0 {
+		if _, ok := raw["additionalProperties"].(map[string]any); ok {
+			node.HasMapValue = true
+			if node.Type == "" {
+				node.Type = "object"
+			}
+		}
+	}
+
 	return node, nil
 }
 
@@ -275,18 +304,20 @@ func mergeResolved(dst *resolvedNode, src resolvedNode) {
 			dst.Required[name] = true
 		}
 	}
+	if src.HasMapValue {
+		dst.HasMapValue = true
+	}
 }
 
-// requestBodySchemaNode returns op's request body's single application/json
-// schema node, resolving one components.requestBodies $ref first if the body
-// itself is declared that way — the same indirection
-// cmd/gen_action_inputs's requestBodySchema resolves. Returns nil, nil for an
-// operation with no body, or one whose body declares no application/json
-// content at all (a multipart-only body is the real example,
-// CustomTemplateCreate in the vendored spec): ShapeFromSpec has no non-JSON
-// content to flatten into fields either way, so there is nothing to
-// distinguish that from "no body" for this package's purposes.
-func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
+// resolvedRequestBody returns op's own "requestBody" node, resolving one
+// components.requestBodies $ref first if the body itself is declared that
+// way — the same indirection cmd/gen_action_inputs's requestBodySchema
+// resolves. Returns nil, nil for an operation with no body at all. Both
+// requestBodySchemaNode (which reads only its "content") and
+// synthesizeMapBodyField (which reads only its own "required" and
+// "description", never its content) resolve the identical indirection
+// through this one function, rather than each following the $ref itself.
+func resolvedRequestBody(op SpecOperation) (map[string]any, error) {
 	rb := op.RequestBody
 	if rb == nil {
 		return nil, nil
@@ -299,6 +330,23 @@ func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
 		}
 		rb = resolved
 	}
+	return rb, nil
+}
+
+// requestBodySchemaNode returns op's request body's single application/json
+// schema node. Returns nil, nil for an operation with no body, or one whose
+// body declares no application/json content at all (a multipart-only body is
+// the real example, CustomTemplateCreate in the vendored spec): ShapeFromSpec
+// has no non-JSON content to flatten into fields either way, so there is
+// nothing to distinguish that from "no body" for this package's purposes.
+func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
+	rb, err := resolvedRequestBody(op)
+	if err != nil {
+		return nil, err
+	}
+	if rb == nil {
+		return nil, nil
+	}
 	content, _ := rb["content"].(map[string]any)
 	entry, ok := content["application/json"].(map[string]any)
 	if !ok {
@@ -306,6 +354,55 @@ func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
 	}
 	schema, _ := entry["schema"].(map[string]any)
 	return schema, nil
+}
+
+// mapBodyDefaultDescription is the fallback description ShapeFromSpec gives
+// a map-shaped body whose requestBody itself carries none, verbatim from
+// cmd/gen_action_inputs/fields.go's identical string — see
+// synthesizeMapBodyField.
+const mapBodyDefaultDescription = "Values keyed by Kubernetes namespace."
+
+// synthesizeMapBodyField returns the single field ShapeFromSpec reports for
+// a map-shaped request body (JSON Schema "type":"object" with a typed
+// "additionalProperties" and no named "properties"), mirroring
+// cmd/gen_action_inputs/fields.go's assembleOperationFields's identical
+// synthesis for the seven Kubernetes bulk-delete operations exactly: JSON
+// name "namespace" (a map body has no property name of its own to derive one
+// from — every real instance in the vendored specification is "a map where
+// the key is the namespace and the value is an array of <kind> to delete"),
+// required exactly when the request body itself is required (not a
+// property-level "required" list — a map body has no named properties to
+// list one for), and described by the request body's own "description" when
+// non-empty, falling back to mapBodyDefaultDescription otherwise
+// (bodyDescription's identical fallback rule).
+//
+// Type is always "object", never a Go type string naming the map's value
+// shape (cmd/gen_action_inputs's typeOf derives "map[string][]string" or
+// similar, because it emits a Go struct field and must): a map's own JSON
+// Schema type is "object" regardless of what its values are — verified
+// directly, reflecting the exact generated field
+// (`Namespace map[string][]string`) through google/jsonschema-go renders
+// "namespace"'s own "type" as "object", carrying the value shape only in
+// "additionalProperties", which OperationShape's flat Fields do not describe
+// at all (see that type's own doc comment on why a nested shape is out of
+// scope). Reporting anything other than "object" here would make this field
+// permanently, spuriously incomparable against ShapeFromCatalog's identical
+// "object" for the same reason a nullable-array type spelling would (see
+// canonicalType's own doc comment).
+func synthesizeMapBodyField(op SpecOperation) FieldShape {
+	rb, _ := resolvedRequestBody(op) // already resolved once by requestBodySchemaNode above; a $ref error there already returned
+	required, _ := rb["required"].(bool)
+	description := mapBodyDefaultDescription
+	if d, ok := rb["description"].(string); ok && d != "" {
+		description = d
+	}
+	return FieldShape{
+		JSONName:    "namespace",
+		Type:        "object",
+		Required:    required,
+		Description: description,
+		Origin:      "body",
+	}
 }
 
 // ShapeFromSpec flattens op's path parameters, query parameters and
@@ -380,42 +477,71 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 		}
 
 		// Mirrors cmd/gen_action_inputs/fields.go's identical refusal exactly
-		// (same message, same condition): a non-object top-level body (an
-		// array is the real case — see below) has no named top-level fields
-		// for this function to read, and reading only resolved.Properties for
-		// one silently produced zero fields with no error at all —
-		// indistinguishable from a real operation that genuinely has none.
-		// That is precisely the shape the generator refuses rather than
-		// guesses (fields.go's requestBodySchema caller), which after the
-		// freeze means an operation like this renders as hand-written code
-		// with no generator refusal ever standing over it again; this
-		// function's refusal is the only net left. Verified against the
-		// vendored specification: DeleteKubernetesNamespace's body is
+		// (same message, same condition): a non-object top-level body has no
+		// named top-level fields for this function to read, and reading
+		// only resolved.Properties for one silently produced zero fields
+		// with no error at all — indistinguishable from a real operation
+		// that genuinely has none. That is precisely the shape the
+		// generator refuses rather than guesses (fields.go's
+		// requestBodySchema caller), which after the freeze means an
+		// operation like this renders as hand-written code with no
+		// generator refusal ever standing over it again; this function's
+		// refusal is the only net left. Verified against the vendored
+		// specification: DeleteKubernetesNamespace's body is
 		// `{"type":"array","items":{"type":"string"}}`, a required list of
 		// namespace names this function must not silently report as "no
 		// drift" against a catalog shape that also happens to have none.
 		//
 		// A map-shaped body (JSON Schema "type":"object" with a typed
-		// "additionalProperties" and no named "properties" — the seven
-		// Kubernetes bulk-delete operations, per fields.go's own handling)
-		// is not caught by this check: its resolved.Type is "object", not
-		// something this condition flags, yet resolvedNode does not carry
-		// whether "additionalProperties" was present, only Properties/
-		// Required, so this function cannot yet tell that shape apart from a
-		// body that is genuinely, validly property-less. The generator does
-		// not refuse a map body either — it synthesizes one field named
-		// "namespace" for it (fields.go's assembleOperationFields) — so this
-		// residual gap is narrower than the array case above: unlike an
-		// array body, a map body's real field is knowable, this function
-		// just does not yet derive it. None of the seven map-bodied
-		// Kubernetes bulk-delete operations is declared by any action in the
-		// catalog today, so this residual gap is not yet armed the way the
-		// array case was; closing it fully means threading
-		// additionalProperties' presence through resolvedNode and
-		// reproducing the "namespace" synthesis here, left for whichever
-		// wave first scaffolds one of those seven operations.
+		// "additionalProperties" and no named "properties") is deliberately
+		// NOT refused here, even though resolved.Properties is empty for it
+		// too: the generator does not refuse this shape either — it
+		// synthesizes one field named "namespace" for it
+		// (fields.go's assembleOperationFields, the seven Kubernetes
+		// bulk-delete operations' real shape) — so refusing it here would be
+		// wrong, not merely incomplete, the moment any of those seven is
+		// scaffolded: DeleteCronJobs, DeleteJobs, DeleteKubernetesIngresses,
+		// DeleteKubernetesServices, DeleteRoleBindings, DeleteRoles and
+		// DeleteServiceAccounts would each report a spurious "namespace
+		// added" drift finding against a catalog shape that, correctly,
+		// also has it — the exact false positive this function exists to
+		// prevent, arriving with the single largest wave this project has
+		// scaffolded to date. See synthesizeMapBodyField below for the
+		// matching synthesis.
 		if resolved.Type != "" && resolved.Type != "object" {
 			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: top-level type %q is not an object; only an object body flattens into named fields", op.OperationID, resolved.Type)
+		}
+		// A genuinely free-form object — "type":"object" with neither named
+		// "properties" nor a typed "additionalProperties" (PolicyCreate and
+		// PolicyConflicts in the vendored Business Edition specification are
+		// the real cases) — is refused for the identical reason
+		// cmd/gen_action_inputs/fields.go's typeOf refuses it ("a free-form
+		// object is not expressible as a Go struct"): the generator can
+		// never scaffold this shape, so it can never disagree with this
+		// function's own field count for it by producing a real field this
+		// function missed — the map-body and non-object cases above are
+		// dangerous precisely because the generator *can* express them and
+		// this function used to silently report a different count. Refusing
+		// here instead of reporting zero fields keeps that same guarantee
+		// for the one remaining shape neither side can flatten: both sides
+		// now refuse, which specdiff's own field-count cross-check
+		// (cmd/gen_action_inputs's TestUnit_FieldCounts_GeneratorAndSpecdiffAgree_AcrossBothVendoredSpecs)
+		// counts as agreement, not disagreement.
+		if resolved.Type == "object" && len(resolved.Properties) == 0 && !resolved.HasMapValue {
+			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: object schema has neither named properties nor a typed additionalProperties; a free-form object has no top-level field to flatten", op.OperationID)
+		}
+		if len(resolved.Properties) == 0 && resolved.HasMapValue {
+			mapField := synthesizeMapBodyField(op)
+			if existing, dup := origins[mapField.JSONName]; dup {
+				return OperationShape{}, fmt.Errorf("shape from spec for %s: %q is contributed by both %s and body", op.OperationID, mapField.JSONName, existing)
+			}
+			origins[mapField.JSONName] = "body"
+			fields = append(fields, mapField)
+			// resolved.Properties is empty, so the property-flattening loop
+			// below contributes nothing further for this operation; falling
+			// through to it (rather than returning early) means this
+			// function still sorts and returns through the identical single
+			// path every other operation does, not a second, parallel one.
 		}
 
 		propNames := make([]string, 0, len(resolved.Properties))
