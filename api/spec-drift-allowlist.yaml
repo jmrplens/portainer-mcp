@@ -12,20 +12,6 @@
 #                 not its entire shape, and excusing the whole operation would
 #                 also excuse any unrelated field that starts drifting later
 #                 under the same entry's forgiveness.
-#
-#                 Also accepts "$title" or "$description"
-#                 (internal/specdiff.TitleSentinel/DescriptionSentinel) to
-#                 excuse a deliberately hand-authored operation-level Title or
-#                 Description — a domain's narrative() hook or a fully
-#                 hand-written ActionSpec literal replacing the vendored
-#                 specification's own summary/description with improved,
-#                 permanent prose. toolutil.WithNarrative fully replaces
-#                 Title/Description rather than tagging which fields it
-#                 touched, so there is nothing left on toolutil.ActionSpec by
-#                 the time ShapeFromCatalog reads it to recognise "this was a
-#                 deliberate override" from directly — this file is where
-#                 that decision is recorded instead, the same way it already
-#                 records a parameter's deliberately narrower type.
 #   reason        why this field will always differ from the vendored
 #                 specification.
 #   added         the ISO 8601 date (YYYY-MM-DD) the entry was added.
@@ -41,190 +27,30 @@
 # and a real, unrelated divergence on the same field could later inherit
 # that forgiveness silently.
 #
-# The 35 entries below are this file's first real divergences, added the
-# same day OperationShape grew Title/Description (previously this file was
-# empty: every declared action's *parameter* shape matched the vendored
-# specification exactly). Every one was verified by reading the domain
-# source directly, not inferred from the audit's report alone: each is
-# either a domain's narrative() hook (registries.go, system.go, tags.go)
-# supplying improved Title/Description for an otherwise-generated action, or
-# one of the four hand-written pilot actions (RegistryConfigure,
-# EcrDeleteTags, RepositoryTagsDelete, SystemUpgrade) that declares its own
-# ActionSpec literal directly. None of these is accidental staleness — see
-# this task's own report for the investigation that ruled that out before a
-# single entry below was added.
-- operation_id: "EcrDeleteRepository"
-  field: "$title"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "EcrDeleteRepository"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "EcrDeleteTags"
-  field: "$title"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "EcrDeleteTags"
-  field: "$description"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "RegistryConfigure"
-  field: "$title"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "RegistryConfigure"
-  field: "$description"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "RegistryCreate"
-  field: "$title"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryCreate"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryDelete"
-  field: "$title"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryDelete"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryInspect"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryList"
-  field: "$title"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryList"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryPing"
-  field: "$title"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryPing"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RegistryUpdate"
-  field: "$description"
-  reason: >-
-    registries/registries.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "RepositoryTagsDelete"
-  field: "$title"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "RepositoryTagsDelete"
-  field: "$description"
-  reason: >-
-    Hand-written pilot action (internal/tools/registries/registries.go) that declares its own Title/Description directly, never generated from this operation's spec text.
-  added: "2026-08-04"
-- operation_id: "SystemInfo"
-  field: "$title"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemInfo"
-  field: "$description"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemNodesCount"
-  field: "$title"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemNodesCount"
-  field: "$description"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemStatus"
-  field: "$title"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemStatus"
-  field: "$description"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemUpdate"
-  field: "$title"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemUpdate"
-  field: "$description"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemUpgrade"
-  field: "$title"
-  reason: >-
-    Hand-written pilot action (internal/tools/system/system.go) that declares its own Title/Description directly; SystemUpgrade never generates because it is Community Edition only.
-  added: "2026-08-04"
-- operation_id: "SystemUpgrade"
-  field: "$description"
-  reason: >-
-    Hand-written pilot action (internal/tools/system/system.go) that declares its own Title/Description directly; SystemUpgrade never generates because it is Community Edition only.
-  added: "2026-08-04"
-- operation_id: "SystemVersion"
-  field: "$title"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "SystemVersion"
-  field: "$description"
-  reason: >-
-    system/system.go's narrative() hook supplies this generated action's Title/Description directly, deliberately improving on the vendored specification's own summary/description.
-  added: "2026-08-04"
-- operation_id: "TagCreate"
-  field: "$title"
-  reason: >-
-    tags/tags.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "TagCreate"
-  field: "$description"
-  reason: >-
-    tags/tags.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "TagDelete"
-  field: "$title"
-  reason: >-
-    tags/tags.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "TagDelete"
-  field: "$description"
-  reason: >-
-    tags/tags.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
-- operation_id: "TagList"
-  field: "$description"
-  reason: >-
-    tags/tags.go's narrative() hook preserves this domain's own hand-authored wording from before its swap to generated code, deliberately improving on the vendored specification's terser summary/description.
-  added: "2026-08-04"
+# This file is empty again, as of task 4 of P3.2's freeze. It briefly held 35
+# entries, all "$title"/"$description" (internal/specdiff.TitleSentinel/
+# DescriptionSentinel) excusing a deliberately hand-authored operation-level
+# Title or Description — every domain's narrative() hook and, before task 4,
+# the four hand-written pilot actions (RegistryConfigure, EcrDeleteTags,
+# RepositoryTagsDelete, SystemUpgrade) that assigned Title/Description
+# directly in their ActionSpec literal instead of through toolutil.WithNarrative.
+# That mechanism worked, but it recorded the identical decision — "this
+# action's own wording deliberately improves on the specification's" — in
+# TWO places for every overridden action: once in the domain's own narrative()
+# hook or literal, once again here. toolutil.ActionSpec grew
+# TitleOverridden/DescriptionOverridden (set by toolutil.WithNarrative) so
+# that decision is recorded exactly once, at the point the override is made,
+# and cmd/audit_spec_drift's isGating reads it directly
+# (specdiff.FieldChange.AfterOverridden) instead of needing an entry here to
+# say the same thing a second time. The four pilot actions were converted to
+# route through WithNarrative too (see registries.go's and system.go's own
+# narrative() functions), which is what let every one of the 35 entries come
+# out at once rather than 27 of them.
+#
+# A parameter-level "$title"/"$description" override no longer has an allow-
+# list mechanism to fall back on if this file ever needs one again for that
+# case specifically: none exists today (every declared action's parameter
+# shape matches the vendored specification's own field-level prose exactly),
+# and if one is ever needed, prefer extending TitleOverridden/
+# DescriptionOverridden's approach (a fact recorded once, at the point of the
+# override) over reviving a parallel allow-list entry for it.

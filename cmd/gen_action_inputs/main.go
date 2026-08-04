@@ -58,6 +58,39 @@ func main() {
 	}
 }
 
+// scaffoldedMarkers are the filenames a domain directory carries once this
+// command has written to it at least once — either this task's current
+// names (actions.go, inputs.go) or the pre-freeze *.gen.go/redaction_gen_test.go
+// names a domain scaffolded before P3.2 may still carry until it is next
+// touched. Checking both is what makes domainAlreadyScaffolded correct for a
+// domain mid-migration, not only one already fully renamed.
+var scaffoldedMarkers = []string{
+	"actions.go", "inputs.go", "redaction_test.go",
+	"actions.gen.go", "inputs.gen.go", "redaction_gen_test.go",
+}
+
+// domainAlreadyScaffolded reports whether domainDir already carries any file
+// this command would itself write, and names the first one found.
+//
+// This is the whole premise of the freeze this command now scaffolds
+// into: a domain's actions.go/inputs.go are written once and owned by that
+// domain from that moment (see docs/domain-wave-checklist.md). Regenerating
+// over an already-scaffolded domain would silently discard every hand edit
+// made since — exactly the "own it, then hand-maintain it" workflow this
+// command exists to seed, undone by its own next invocation. run() checks
+// this before doing anything else for a domain, and only -allow-overwrite
+// bypasses it — an explicit, rare "start this domain over from the spec"
+// action, not something an ordinary `make scaffold-domain` run does by
+// accident.
+func domainAlreadyScaffolded(domainDir string) (string, bool) {
+	for _, name := range scaffoldedMarkers {
+		if _, err := os.Stat(filepath.Join(domainDir, name)); err == nil {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 func run(args []string) error {
 	fs := flag.NewFlagSet("gen_action_inputs", flag.ContinueOnError)
 	specPath := fs.String("spec", "api/specs/ee-2.44.0.json", "vendored OpenAPI spec to generate Input structs from")
@@ -67,6 +100,10 @@ func run(args []string) error {
 	toolsDir := fs.String("tools-dir", "internal/tools", "directory holding one subdirectory per domain package")
 	skipDirs := fs.String("skip", "actioncatalog,dynamic,individual,meta",
 		"comma-separated subdirectories of tools-dir that are tool surfaces, not domain packages")
+	allowOverwrite := fs.Bool("allow-overwrite", false,
+		"regenerate a domain that already has scaffolded files (actions.go/inputs.go, or their pre-freeze "+
+			"*.gen.go names), discarding any hand edit made since it was scaffolded; refused by default (see "+
+			"domainAlreadyScaffolded's doc comment)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -192,6 +229,15 @@ func run(args []string) error {
 		}
 
 		domainDir := filepath.Join(*toolsDir, domainName)
+
+		if existing, scaffolded := domainAlreadyScaffolded(domainDir); scaffolded && !*allowOverwrite {
+			fmt.Fprintf(os.Stderr,
+				"domain %s: already scaffolded (%s exists); refusing to overwrite files this domain now owns — "+
+					"pass -allow-overwrite to force regeneration, discarding any hand edit made since\n",
+				domainName, existing)
+			continue
+		}
+
 		overrides, err := scanHandOverrides(domainDir)
 		if err != nil {
 			return fmt.Errorf("domain %s: %w", domainName, err)
@@ -330,7 +376,7 @@ func run(args []string) error {
 				return fmt.Errorf("domain %s: %w", domainName, err)
 			}
 
-			outPath := filepath.Join(domainDir, "inputs.gen.go")
+			outPath := filepath.Join(domainDir, "inputs.go")
 			if err := os.WriteFile(outPath, source, 0o600); err != nil {
 				return fmt.Errorf("write %s: %w", outPath, err)
 			}
@@ -338,12 +384,15 @@ func run(args []string) error {
 			fmt.Fprintf(os.Stderr, "wrote %s (%d struct(s) across %d operation(s))\n", outPath, len(allStructs), len(ops))
 		}
 
-		// The generated redaction guard (see renderRedactionGuardFile). Written
-		// whenever this domain has at least one redaction wrapper, and removed
-		// when it no longer has any — a lingering guard for a wrapper that has
-		// been deleted would not compile, and CI's freshness check
-		// (git diff --exit-code internal/tools/) is what catches a stale one.
-		guardPath := filepath.Join(domainDir, "redaction_gen_test.go")
+		// The scaffolded redaction guard (see renderRedactionGuardFile).
+		// Written whenever this domain has at least one redaction wrapper, and
+		// removed when it no longer has any — a lingering guard for a wrapper
+		// that has been deleted would not compile. This only happens on a
+		// first-time scaffold, or an explicit -allow-overwrite regeneration;
+		// once a domain owns this file, a hand edit that removes its last
+		// wrapper is the domain author's own responsibility to clean up (see
+		// docs/domain-wave-checklist.md's upgrade procedure).
+		guardPath := filepath.Join(domainDir, "redaction_test.go")
 		if len(redactionGuards) > 0 {
 			sort.Slice(redactionGuards, func(i, j int) bool {
 				return redactionGuards[i].OperationID < redactionGuards[j].OperationID
@@ -363,7 +412,7 @@ func run(args []string) error {
 			}
 		}
 
-		actionsPath := filepath.Join(domainDir, "actions.gen.go")
+		actionsPath := filepath.Join(domainDir, "actions.go")
 		if len(handlerSpecs) > 0 {
 			// hasNarrativeHook: whether this domain's own hand-written file
 			// already declares a function named narrative — the same
@@ -384,11 +433,12 @@ func run(args []string) error {
 			fmt.Fprintf(os.Stderr, "wrote %s (%d handler(s) across %d operation(s))\n", actionsPath, len(handlerSpecs), len(ops))
 		} else if _, statErr := os.Stat(actionsPath); statErr == nil {
 			// Every operation this domain covers is now hand-written or
-			// overridden: a previously generated actions.gen.go would be
-			// stale rather than merely empty, and CI's freshness check
-			// (git diff --exit-code internal/tools/) is exactly what would
-			// catch a lingering file this run no longer has any content
-			// for.
+			// overridden: a previously scaffolded actions.go would be stale
+			// rather than merely empty. This branch only runs on a first-time
+			// scaffold or an explicit -allow-overwrite regeneration — the
+			// domain-level refusal above is what stops it from ever reaching
+			// (and silently deleting) an owned domain's file on an ordinary
+			// run.
 			if err := os.Remove(actionsPath); err != nil {
 				return fmt.Errorf("remove stale %s: %w", actionsPath, err)
 			}

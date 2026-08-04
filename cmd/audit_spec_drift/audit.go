@@ -120,23 +120,29 @@ func verifyCanary(compare func(before, after specdiff.OperationShape) []specdiff
 //
 // A hand-authored Title or Description that deliberately improves on the
 // specification's own wording — the tags and registries pilots' own
-// literals, and registries/system's narrative() hooks — is real, permanent
-// divergence, exactly the class this audit's allow-list already exists to
-// excuse for a parameter. It is excused the identical way here: an entry
-// keyed by (operationId, specdiff.TitleSentinel) or (operationId,
-// specdiff.DescriptionSentinel), not by a new ActionSpec field recording
-// "this came from an override" — toolutil.WithNarrative fully replaces
-// Title/Description rather than tagging them, so by the time ShapeFromCatalog
-// reads spec.Title/spec.Description there is nothing left to recognise an
-// override from at that level. The allow-list is not merely convenient here,
-// it is the only mechanism that does not require new plumbing on
-// toolutil.ActionSpec or toolutil.ActionNarrative.
+// narrative() hooks, and registries/system's four directly hand-written
+// literals (EcrDeleteTags, RegistryConfigure, RepositoryTagsDelete,
+// SystemUpgrade) — is real, permanent divergence, but not one this audit
+// needs an allow-list entry to excuse: toolutil.ActionSpec.TitleOverridden /
+// DescriptionOverridden (set by toolutil.WithNarrative — see its own doc
+// comment) is exactly the plumbing an earlier version of this comment said
+// did not exist, added once the cost of adding it was weighed against 35
+// allow-list entries that would otherwise never shrink. c.AfterOverridden
+// (specdiff.FieldChange's own doc comment) carries that fact through
+// Compare, so a ChangeTitle/ChangeOperationDescription finding whose catalog
+// side was deliberately overridden never gates here — while
+// cmd/audit_spec_delta, which calls the identical Compare and reads the
+// identical AfterOverridden, still surfaces the specification's own wording
+// change at upgrade time regardless, exactly as before: Compare tags the
+// finding, it never suppresses it.
 func isGating(c specdiff.FieldChange) bool {
 	switch c.Kind {
 	case specdiff.ChangeAdded, specdiff.ChangeRemoved, specdiff.ChangeType,
 		specdiff.ChangeRequiredness, specdiff.ChangeEnum, specdiff.ChangeOrigin:
 		return true
-	case specdiff.ChangeDescription, specdiff.ChangeTitle, specdiff.ChangeOperationDescription:
+	case specdiff.ChangeTitle, specdiff.ChangeOperationDescription:
+		return c.Before != "" && !c.AfterOverridden
+	case specdiff.ChangeDescription:
 		return c.Before != ""
 	default:
 		return false

@@ -93,6 +93,18 @@ type OperationShape struct {
 	Title       string
 	Description string
 	Fields      []FieldShape
+	// TitleOverridden and DescriptionOverridden report whether Title/
+	// Description were set by a deliberate narrative override
+	// (toolutil.ActionSpec.TitleOverridden/DescriptionOverridden) rather
+	// than mechanically derived from the specification's own summary/
+	// description. ShapeFromCatalog is the only producer that ever sets
+	// either true — ShapeFromSpec's Title/Description are always the
+	// specification's own wording, never an override of anything — and
+	// Compare reads them (see its own doc comment) to mark a resulting
+	// ChangeTitle/ChangeOperationDescription as one a caller has already
+	// decided is a permanent, deliberate divergence.
+	TitleOverridden       bool
+	DescriptionOverridden bool
 }
 
 // ChangeKind classifies one FieldChange. See Compare's doc comment for which
@@ -165,6 +177,18 @@ type FieldChange struct {
 	Kind     ChangeKind
 	Before   string
 	After    string
+	// AfterOverridden is set only for ChangeTitle and ChangeOperationDescription
+	// (from after.TitleOverridden/DescriptionOverridden respectively — see
+	// OperationShape's own doc comment on those two fields), and is
+	// meaningless for every other Kind. A consumer deciding whether this
+	// finding must gate a build (cmd/audit_spec_drift's isGating) can use it
+	// to tell a deliberate, permanent narrative override apart from
+	// accidental drift without a separate allow-list entry recording the
+	// identical decision. A consumer reporting what changed regardless of
+	// whether it was excused (cmd/audit_spec_delta) still sees the finding
+	// either way: Compare never suppresses one because the catalog side
+	// happens to be overridden, it only tags it.
+	AfterOverridden bool
 }
 
 // SpecOperation is one operation as declared by a vendored OpenAPI document,

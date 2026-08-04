@@ -73,6 +73,34 @@ func TestUnit_ShapeFromCatalog_DerivesTitleAndDescriptionFromTheActionSpec(t *te
 	}
 }
 
+// TestUnit_ShapeFromCatalog_CarriesOverriddenFlagsFromActionSpec proves
+// ShapeFromCatalog propagates toolutil.ActionSpec.TitleOverridden/
+// DescriptionOverridden rather than dropping them: TagCreate is a real,
+// production action built through toolutil.WithNarrative (tags/tags.go's
+// narrative() hook), so both must be true here, and Compare's own test
+// (TestUnit_Compare_TitleChange_CarriesAfterOverridden) is what proves the
+// rest of the chain — this is the one link that would silently break the
+// whole mechanism if ShapeFromCatalog ever stopped reading them.
+func TestUnit_ShapeFromCatalog_CarriesOverriddenFlagsFromActionSpec(t *testing.T) {
+	t.Parallel()
+	spec := findSpec(t, tags.Specs(), "TagCreate")
+	if !spec.TitleOverridden || !spec.DescriptionOverridden {
+		t.Fatalf("fixture premise: TagCreate's TitleOverridden/DescriptionOverridden = %v/%v, want both true (tags.go's narrative() hook sets both)",
+			spec.TitleOverridden, spec.DescriptionOverridden)
+	}
+
+	shape, err := ShapeFromCatalog(spec)
+	if err != nil {
+		t.Fatalf("ShapeFromCatalog() error = %v", err)
+	}
+	if !shape.TitleOverridden {
+		t.Error("TitleOverridden = false, want true: ShapeFromCatalog must carry it through from the ActionSpec")
+	}
+	if !shape.DescriptionOverridden {
+		t.Error("DescriptionOverridden = false, want true: ShapeFromCatalog must carry it through from the ActionSpec")
+	}
+}
+
 // TestUnit_ShapeFromCatalog_CollapsesNullableType is the guard for
 // canonicalType: google/jsonschema-go's reflector renders every optional
 // (pointer or slice) Go field's "type" as a two-element array such as

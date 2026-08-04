@@ -35,15 +35,30 @@ type ActionNarrative struct {
 // them at all, so there is no mechanical value to preserve when n leaves
 // them at their zero value.
 //
+// Setting n.Title or n.Description also marks spec.TitleOverridden /
+// spec.DescriptionOverridden — see ActionSpec's own doc comment on those two
+// fields for why: this is what lets cmd/audit_spec_drift tell a deliberate,
+// permanent improvement on the specification's own wording apart from
+// accidental drift, without an allow-list entry recording the same decision
+// a second time. Previously the allow-list was the only mechanism available
+// for this (toolutil.ActionSpec retained no trace of the override at all);
+// task-4's own report
+// (.superpowers/sdd/2026-08-04-p3-2-drift-audit-and-freeze/task-4-report.md)
+// records why recording it here instead, once this field existed to record
+// it in, was judged cheap enough to do rather than leave as a permanent
+// allow-list exception.
+//
 // spec is passed and returned by value, so a caller building a []ActionSpec
 // literal can wrap each entry inline (WithNarrative(ActionSpec{...}, hook(id)))
 // without needing an intermediate variable.
 func WithNarrative(spec ActionSpec, n ActionNarrative) ActionSpec {
 	if n.Title != "" {
 		spec.Title = n.Title
+		spec.TitleOverridden = true
 	}
 	if n.Description != "" {
 		spec.Description = n.Description
+		spec.DescriptionOverridden = true
 	}
 	spec.Usage = n.Usage
 	spec.RelatedActions = n.RelatedActions

@@ -67,7 +67,10 @@ func ShapeFromCatalog(spec toolutil.ActionSpec) (OperationShape, error) {
 	// outright. Either way this is what a model is actually shown — the
 	// same reason ShapeFromCatalog reads a reflected InputSchema instead of
 	// re-deriving one.
-	return OperationShape{OperationID: spec.OperationID, Title: spec.Title, Description: spec.Description, Fields: fields}, nil
+	return OperationShape{
+		OperationID: spec.OperationID, Title: spec.Title, Description: spec.Description, Fields: fields,
+		TitleOverridden: spec.TitleOverridden, DescriptionOverridden: spec.DescriptionOverridden,
+	}, nil
 }
 
 // canonicalType collapses a decoded JSON Schema "type" keyword down to the

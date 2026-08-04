@@ -12,7 +12,7 @@ import (
 // output a reader could mistake for "nothing ran".
 func TestUnit_BuildReport_CleanResult_SaysNoDrift(t *testing.T) {
 	t.Parallel()
-	report := buildReport(&auditResult{ActionsAudited: 19})
+	report := buildReport(&auditResult{ActionsAudited: 19}, &credentialAuditResult{}, &minimumAuditResult{})
 	if !strings.Contains(report, "No drift") {
 		t.Errorf("buildReport() = %q, want it to say plainly that no drift was found", report)
 	}
@@ -35,7 +35,7 @@ func TestUnit_BuildReport_GatingFinding_IsNamed(t *testing.T) {
 			Gating: true,
 		}},
 	}
-	report := buildReport(result)
+	report := buildReport(result, &credentialAuditResult{}, &minimumAuditResult{})
 	for _, want := range []string{"Fixture", "field", "integer", "string", "GATING"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("buildReport() = %q, want it to contain %q", report, want)
@@ -59,7 +59,7 @@ func TestUnit_BuildReport_AllowListedFinding_ShowsReasonAndIsNotHidden(t *testin
 			AllowListAdded:  "2026-08-04",
 		}},
 	}
-	report := buildReport(result)
+	report := buildReport(result, &credentialAuditResult{}, &minimumAuditResult{})
 	if !strings.Contains(report, "ALLOW-LISTED") {
 		t.Errorf("buildReport() = %q, want the ALLOW-LISTED tag", report)
 	}
@@ -82,7 +82,7 @@ func TestUnit_BuildReport_StaleEntry_IsNamed(t *testing.T) {
 			{OperationID: "SystemUpgrade", Field: "field", Reason: "no longer diverges", Added: "2026-08-04"},
 		},
 	}
-	report := buildReport(result)
+	report := buildReport(result, &credentialAuditResult{}, &minimumAuditResult{})
 	if !strings.Contains(report, "Stale allow-list") {
 		t.Errorf("buildReport() = %q, want a stale-entries section", report)
 	}
@@ -105,7 +105,7 @@ func TestUnit_BuildReport_CosmeticFinding_IsMarkedDistinctlyFromGating(t *testin
 			Gating: false,
 		}},
 	}
-	report := buildReport(result)
+	report := buildReport(result, &credentialAuditResult{}, &minimumAuditResult{})
 	if !strings.Contains(report, "cosmetic") {
 		t.Errorf("buildReport() = %q, want the non-gating finding tagged cosmetic", report)
 	}

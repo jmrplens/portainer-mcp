@@ -333,24 +333,37 @@ func TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput(t *te
 }
 
 // TestUnit_ActionSplitter_WireTagsStayByteIdentical is the strongest form of
-// the same proof: it regenerates registries/inputs.gen.go and
-// tags/inputs.gen.go — the only two domains with any Input struct today, so
-// the only two with any wire tag to check — from the real vendored spec, the
-// same way `make gen-action-inputs` does, and asserts the result is
-// byte-for-byte what is already committed. actionInitialisms carrying five
-// entries commonInitialisms does not (GPU, RBAC, CSV, MTLS, CA) is only safe
-// if nothing renderFile emits ever consults that table; this is what would
+// the same proof: it regenerates registries' and tags' Input structs — the
+// only two domains with any Input struct today, so the only two with any
+// wire tag to check — from the real vendored spec, the same way
+// `make scaffold-domain` did the day these two domains were scaffolded, and
+// asserts the result is byte-for-byte what a frozen testdata snapshot
+// captured that day. actionInitialisms carrying five entries
+// commonInitialisms does not (GPU, RBAC, CSV, MTLS, CA) is only safe if
+// nothing renderFile emits ever consults that table; this is what would
 // catch it if it ever did.
+//
+// This compares against testdata/frozen-*-inputs.go.snapshot, not against
+// internal/tools/registries/inputs.go or internal/tools/tags/inputs.go
+// directly. Those two are owned, hand-editable domain files now (see P3.2's
+// freeze) — a legitimate hand edit to either would make this test fail for a
+// reason that has nothing to do with actionInitialisms, exactly the
+// "freshness check gates a real, wanted hand edit" defect retiring
+// CI's generated-action-inputs job exists to stop. The frozen snapshot is a
+// point-in-time copy taken when these domains were scaffolded, kept only to
+// exercise the splitter, and needs no maintenance unless the generator's own
+// tag-rendering logic changes — never because a domain owner edited their
+// file.
 func TestUnit_ActionSplitter_WireTagsStayByteIdentical(t *testing.T) {
 	t.Parallel()
 	for _, domainName := range []string{"registries", "tags"} {
-		committed, err := os.ReadFile("../../internal/tools/" + domainName + "/inputs.gen.go")
+		frozen, err := os.ReadFile("testdata/frozen-" + domainName + "-inputs.go.snapshot")
 		if err != nil {
-			t.Fatalf("read committed inputs.gen.go for %s: %v", domainName, err)
+			t.Fatalf("read frozen snapshot for %s: %v", domainName, err)
 		}
 		regenerated := regenerateInputsFile(t, domainName)
-		if !bytes.Equal(committed, regenerated) {
-			t.Errorf("regenerated %s/inputs.gen.go does not match the committed file byte for byte", domainName)
+		if !bytes.Equal(frozen, regenerated) {
+			t.Errorf("regenerated %s Input structs do not match the frozen testdata snapshot byte for byte", domainName)
 		}
 	}
 }

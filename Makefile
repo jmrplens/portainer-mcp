@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -176,14 +176,26 @@ gen-applicability:
 	go run ./cmd/gen_applicability -history api/specs/history -out internal/apiversion/applicability_gen.go
 	gofmt -w internal/apiversion/applicability_gen.go
 
-# gen-action-inputs regenerates internal/tools/<domain>/inputs.gen.go from the
-# vendored Business Edition specification: one Input struct per operation
-# already declared by a domain package, merging its path parameters, query
-# parameters and request body into the flat, model-facing shape
-# toolutil.ActionSpec.Input expects. See cmd/gen_action_inputs's package doc
-# for what it refuses to guess rather than generate.
-gen-action-inputs:
-	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools
+# scaffold-domain writes a domain's actions once, from the vendored Business
+# Edition specification: one Input struct per operation already declared by a
+# domain package (internal/tools/<domain>/inputs.go), one generated
+# ActionSpec + handler per mechanical operation (actions.go), and a redaction
+# guard test for any credential-shaped response (redaction_test.go). It is a
+# scaffolding tool, not a source of truth kept in sync forever: the domain
+# owns every file this writes from the moment it is written (see P3.2's
+# freeze and docs/domain-wave-checklist.md), and cmd/gen_action_inputs
+# refuses outright to run again over a domain that already has one of them —
+# see domainAlreadyScaffolded's own doc comment — unless FORCE=1 says
+# otherwise, which discards every hand edit made since the domain was
+# scaffolded. See cmd/gen_action_inputs's package doc for what it refuses to
+# guess rather than generate in the first place.
+#
+# Runs over every domain directory under internal/tools it finds not already
+# scaffolded (or, with FORCE=1, every one FORCE applies to) — there is no
+# per-domain filter flag today, since a wave adding one new domain leaves
+# every already-scaffolded domain untouched by the refusal above regardless.
+scaffold-domain:
+	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools $(if $(FORCE),-allow-overwrite,)
 
 # check-spec verifies the committed specifications still match a fresh fetch.
 # It writes into a temporary directory rather than over api/specs, so a failure

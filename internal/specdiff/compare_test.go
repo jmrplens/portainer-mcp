@@ -119,6 +119,51 @@ func withTitleAndDescription(base OperationShape, title, description string) Ope
 	return out
 }
 
+// TestUnit_Compare_TitleChange_CarriesAfterOverridden proves Compare tags a
+// ChangeTitle/ChangeOperationDescription finding with after's own
+// TitleOverridden/DescriptionOverridden, in both directions: true when after
+// is a deliberate narrative override, false when it is not — the
+// discriminating property cmd/audit_spec_drift's isGating depends on to tell
+// the two apart without an allow-list entry. See that command's own
+// TestUnit_IsGating_TitleOverridden_DoesNotGate and
+// TestUnit_IsGating_TitleChangedButNotOverridden_StillGates for the
+// consuming half of this proof.
+func TestUnit_Compare_TitleChange_CarriesAfterOverridden(t *testing.T) {
+	t.Parallel()
+	base := OperationShape{OperationID: "X", Method: "GET", Path: "/x", Title: "Do the X thing", Description: "Does the X thing."}
+
+	overridden := base
+	overridden.Title = "A deliberately overridden title"
+	overridden.Description = "A deliberately overridden description."
+	overridden.TitleOverridden = true
+	overridden.DescriptionOverridden = true
+
+	changes := Compare(base, overridden)
+	if len(changes) != 2 {
+		t.Fatalf("Compare() = %v, want exactly two changes (title and description)", changes)
+	}
+	for _, c := range changes {
+		if !c.AfterOverridden {
+			t.Errorf("Compare() finding %+v: AfterOverridden = false, want true: after.TitleOverridden/DescriptionOverridden are both true", c)
+		}
+	}
+
+	notOverridden := base
+	notOverridden.Title = "A title that just happens to differ"
+	notOverridden.Description = "A description that just happens to differ."
+	// TitleOverridden/DescriptionOverridden deliberately left false.
+
+	changes = Compare(base, notOverridden)
+	if len(changes) != 2 {
+		t.Fatalf("Compare() = %v, want exactly two changes (title and description)", changes)
+	}
+	for _, c := range changes {
+		if c.AfterOverridden {
+			t.Errorf("Compare() finding %+v: AfterOverridden = true, want false: after.TitleOverridden/DescriptionOverridden are both false", c)
+		}
+	}
+}
+
 func TestUnit_Compare_AddedField_ReportsChangeAdded(t *testing.T) {
 	t.Parallel()
 	// The mirror image of "removed" in TestUnit_Compare_DetectsEveryChangeKind:

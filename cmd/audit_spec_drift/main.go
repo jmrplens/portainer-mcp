@@ -77,6 +77,29 @@
 // is itself a build error: see auditResult.StaleEntries's doc comment for
 // why a stale exemption is exactly as dangerous as a missing one.
 //
+// # Credential redaction is checked here too, unconditionally
+//
+// cmd/gen_action_inputs refuses to emit a bare generated handler for an
+// operation whose success response can carry a credential-shaped field (85
+// operations across 17 domains, measured against the vendored Business
+// Edition specification), requiring a domain-supplied redact<OperationID>
+// wrapper instead. After the freeze the generator no longer runs against an
+// owned domain, so that refusal alone can no longer stand between a hand
+// edit and a leaked credential — P2 shipped exactly that bug once, in three
+// hand-written registries handlers, and no fixture carried a password so no
+// test caught it. auditCredentialRedaction (credential_audit.go) is that
+// refusal, moved here: for every action whose vendored response is
+// credential-shaped, it statically confirms the declared Handler's own body
+// calls the required wrapper (see wrapper.go's handlerRedactsCredential, and
+// credential.go for how "credential-shaped" is resolved from the spec
+// without depending on cmd/gen_action_inputs's internals). Unlike a
+// parameter-shape finding, a credential-redaction finding is never
+// allow-listable: there is no legitimate reason for a real credential to
+// reach a model. It has its own canary (verifyCredentialCanary), run
+// alongside verifyCanary, for the identical reason: this mechanism is new
+// with this task and has shipped zero times, which is exactly when a canary
+// is needed, not after.
+//
 // # Never writes to standard output
 //
 // That stream carries the MCP JSON-RPC transport for the real server
@@ -134,6 +157,12 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 	if err := verifyCanary(specdiff.Compare); err != nil {
 		return fmt.Errorf("refusing to report: %w", err)
 	}
+	if err := verifyCredentialCanary(); err != nil {
+		return fmt.Errorf("refusing to report: %w", err)
+	}
+	if err := verifyMinimumCanary(); err != nil {
+		return fmt.Errorf("refusing to report: %w", err)
+	}
 
 	ceData, err := readFileIn(specsDir, ceSpecFile)
 	if err != nil {
@@ -161,18 +190,29 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 		return fmt.Errorf("%s/%s: %w", allowListDir, allowListFile, err)
 	}
 
-	result, err := auditDrift(eeOps, ceOps, wiring.AllSpecs(), allowList)
+	actions := wiring.AllSpecs()
+
+	result, err := auditDrift(eeOps, ceOps, actions, allowList)
+	if err != nil {
+		return err
+	}
+	credResult, err := auditCredentialRedaction(eeOps, ceOps, actions)
+	if err != nil {
+		return err
+	}
+	minResult, err := auditIdentifierMinimum(eeOps, ceOps, actions)
 	if err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprint(w, buildReport(result)); err != nil {
+	if _, err := fmt.Fprint(w, buildReport(result, credResult, minResult)); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 
-	if result.HasDrift() {
-		return fmt.Errorf("%d gating finding(s), %d stale allow-list entr(y/ies): the catalog has drifted from the vendored specification",
-			result.GatingCount, len(result.StaleEntries))
+	if result.HasDrift() || credResult.HasLeaks() || minResult.HasGaps() {
+		return fmt.Errorf(
+			"%d gating finding(s), %d stale allow-list entr(y/ies), %d credential-redaction finding(s), %d identifier-minimum finding(s): the catalog has drifted from the vendored specification",
+			result.GatingCount, len(result.StaleEntries), len(credResult.Findings), len(minResult.Findings))
 	}
 	return nil
 }

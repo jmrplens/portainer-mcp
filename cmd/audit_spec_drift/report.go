@@ -26,19 +26,36 @@ func findingLine(f driftFinding) string {
 	return line
 }
 
-// buildReport renders result as a human-readable summary, written to
-// standard error (see this command's package doc for why never standard
-// output).
+// credentialFindingLine renders one credentialFinding as a report line. There
+// is no "ALLOW-LISTED" tag here, unlike findingLine: a leaked credential is
+// never excused, only fixed.
+func credentialFindingLine(f credentialFinding) string {
+	return fmt.Sprintf("    - %s (%s): success response can carry %v, but Handler never calls %s [GATING]\n",
+		f.OperationID, f.ActionName, f.Fields, f.WrapperName)
+}
+
+// minimumFindingLine renders one minimumFinding as a report line. Never
+// allow-listable, like credentialFindingLine.
+func minimumFindingLine(f minimumFinding) string {
+	return fmt.Sprintf("    - %s (%s): path parameter %q is identifier-shaped but the catalog publishes no \"minimum\": 1 for it [GATING]\n",
+		f.OperationID, f.ActionName, f.ParamName)
+}
+
+// buildReport renders result, credResult and minResult as a human-readable
+// summary, written to standard error (see this command's package doc for why
+// never standard output).
 //
 // Every finding is printed, gating or not, allow-listed or not: an allow-list
 // that can hide an entry from its own report is exactly how it turns from an
 // honesty mechanism into a hiding place, the identical reasoning
 // cmd/audit_1to1's buildReport states for its own allow-list.
-func buildReport(result *auditResult) string {
+func buildReport(result *auditResult, credResult *credentialAuditResult, minResult *minimumAuditResult) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Portainer MCP specification drift audit")
 	fmt.Fprintln(&b, "=========================================")
 	fmt.Fprintln(&b, "Canary self-test: passed (a deliberately perturbed shape was correctly reported as drift).")
+	fmt.Fprintln(&b, "Credential canary self-test: passed (a handler that calls its wrapper and one that does not were told apart).")
+	fmt.Fprintln(&b, "Identifier-minimum canary self-test: passed (an action publishing \"minimum\":1 and one not were told apart).")
 	fmt.Fprintf(&b, "Actions audited: %d\n", result.ActionsAudited)
 	fmt.Fprintf(&b, "Allow-list entries: %d\n\n", result.AllowListCount)
 
@@ -62,12 +79,34 @@ func buildReport(result *auditResult) string {
 		fmt.Fprintln(&b)
 	}
 
+	fmt.Fprintf(&b, "Credential-shaped responses checked: %d\n", credResult.ActionsChecked)
+	if len(credResult.Findings) > 0 {
+		fmt.Fprintln(&b, "Credential redaction findings (never allow-listed):")
+		for _, f := range credResult.Findings {
+			fmt.Fprint(&b, credentialFindingLine(f))
+		}
+		fmt.Fprintln(&b)
+	}
+
+	fmt.Fprintf(&b, "Identifier-shaped path parameters checked: %d\n", minResult.ParamsChecked)
+	if len(minResult.Findings) > 0 {
+		fmt.Fprintln(&b, "Identifier-minimum findings (never allow-listed):")
+		for _, f := range minResult.Findings {
+			fmt.Fprint(&b, minimumFindingLine(f))
+		}
+		fmt.Fprintln(&b)
+	}
+
+	gatingCount := result.GatingCount
+	staleCount := len(result.StaleEntries)
+	credCount := len(credResult.Findings)
+	minCount := len(minResult.Findings)
 	switch {
-	case result.HasDrift():
-		fmt.Fprintf(&b, "%d gating finding(s) and %d stale allow-list entr(y/ies): the catalog has drifted from the vendored specification.\n",
-			result.GatingCount, len(result.StaleEntries))
+	case result.HasDrift() || credResult.HasLeaks() || minResult.HasGaps():
+		fmt.Fprintf(&b, "%d gating finding(s), %d stale allow-list entr(y/ies), %d credential-redaction finding(s) and %d identifier-minimum finding(s): the catalog has drifted from the vendored specification.\n",
+			gatingCount, staleCount, credCount, minCount)
 	default:
-		fmt.Fprintln(&b, "No drift: every audited action's parameter shape matches the vendored specification it was generated from.")
+		fmt.Fprintln(&b, "No drift: every audited action's parameter shape matches the vendored specification it was generated from, every credential-shaped response is redacted, and every identifier-shaped path parameter publishes \"minimum\": 1.")
 	}
 	return b.String()
 }

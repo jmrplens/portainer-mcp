@@ -24,6 +24,13 @@ type specOperation struct {
 	Op         specdiff.SpecOperation
 	Domain     string
 	Deprecated bool
+	// Responses is the operation's raw, undecoded "responses" object, keyed by
+	// status code. It is not part of specdiff.SpecOperation (see that type's
+	// own doc comment: specdiff is deliberately scoped to request parameter
+	// shape, never response shape) but this audit needs it for one further
+	// thing specdiff does not cover at all: whether an operation's success
+	// response can carry a credential-shaped field — see credential.go.
+	Responses map[string]map[string]any
 }
 
 // httpMethods are the OpenAPI verbs that name an operation inside a path
@@ -93,13 +100,14 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 				continue
 			}
 			var op struct {
-				OperationID string           `json:"operationId"`
-				Summary     string           `json:"summary"`
-				Description string           `json:"description"`
-				Tags        []string         `json:"tags"`
-				Deprecated  bool             `json:"deprecated"`
-				Parameters  []map[string]any `json:"parameters"`
-				RequestBody map[string]any   `json:"requestBody"`
+				OperationID string                    `json:"operationId"`
+				Summary     string                    `json:"summary"`
+				Description string                    `json:"description"`
+				Tags        []string                  `json:"tags"`
+				Deprecated  bool                      `json:"deprecated"`
+				Parameters  []map[string]any          `json:"parameters"`
+				RequestBody map[string]any            `json:"requestBody"`
+				Responses   map[string]map[string]any `json:"responses"`
 			}
 			if err := json.Unmarshal(methods[method], &op); err != nil {
 				return nil, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
@@ -131,6 +139,7 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 				},
 				Domain:     domain,
 				Deprecated: op.Deprecated,
+				Responses:  op.Responses,
 			}
 		}
 	}

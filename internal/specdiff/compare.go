@@ -67,10 +67,16 @@ func Compare(before, after OperationShape) []FieldChange {
 	// those constants' own doc comment for why a collision there would be
 	// dangerous, not merely cosmetic).
 	if before.Title != after.Title {
-		changes = append(changes, FieldChange{JSONName: TitleSentinel, Kind: ChangeTitle, Before: before.Title, After: after.Title})
+		changes = append(changes, FieldChange{
+			JSONName: TitleSentinel, Kind: ChangeTitle, Before: before.Title, After: after.Title,
+			AfterOverridden: after.TitleOverridden,
+		})
 	}
 	if before.Description != after.Description {
-		changes = append(changes, FieldChange{JSONName: DescriptionSentinel, Kind: ChangeOperationDescription, Before: before.Description, After: after.Description})
+		changes = append(changes, FieldChange{
+			JSONName: DescriptionSentinel, Kind: ChangeOperationDescription, Before: before.Description, After: after.Description,
+			AfterOverridden: after.DescriptionOverridden,
+		})
 	}
 
 	sort.Slice(changes, func(i, j int) bool {

@@ -153,6 +153,56 @@ func TestUnit_IsGating_OperationDescriptionSpecEmpty_DoesNotGate(t *testing.T) {
 	}
 }
 
+// TestUnit_IsGating_TitleOverridden_DoesNotGate is the mutation proof for
+// this task's own reservation about the 35-entry allow-list: an
+// AfterOverridden ChangeTitle/ChangeOperationDescription finding — the spec
+// had real text, and the catalog's differs because toolutil.WithNarrative
+// deliberately overrode it — must not gate, with no allow-list entry
+// involved at all.
+func TestUnit_IsGating_TitleOverridden_DoesNotGate(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{
+		JSONName: specdiff.TitleSentinel, Kind: specdiff.ChangeTitle,
+		Before: "The spec's own title", After: "A deliberately overridden title",
+		AfterOverridden: true,
+	}
+	if isGating(c) {
+		t.Errorf("isGating(%+v) = true, want false: AfterOverridden marks this as a deliberate, permanent narrative override", c)
+	}
+}
+
+// TestUnit_IsGating_OperationDescriptionOverridden_DoesNotGate is the
+// ChangeOperationDescription sibling of the Title case above.
+func TestUnit_IsGating_OperationDescriptionOverridden_DoesNotGate(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{
+		JSONName: specdiff.DescriptionSentinel, Kind: specdiff.ChangeOperationDescription,
+		Before: "The spec's own description", After: "A deliberately overridden description",
+		AfterOverridden: true,
+	}
+	if isGating(c) {
+		t.Errorf("isGating(%+v) = true, want false: AfterOverridden marks this as a deliberate, permanent narrative override", c)
+	}
+}
+
+// TestUnit_IsGating_TitleChangedButNotOverridden_StillGates is the
+// discriminating half of the same proof: AfterOverridden false (the ordinary
+// case for every action that has never called toolutil.WithNarrative) must
+// still gate exactly as before this field existed — a detector that always
+// treats a Title/Description change as overridden would silently stop
+// catching real drift for every action in the catalog.
+func TestUnit_IsGating_TitleChangedButNotOverridden_StillGates(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{
+		JSONName: specdiff.TitleSentinel, Kind: specdiff.ChangeTitle,
+		Before: "The spec's own title", After: "A title that just happens to differ",
+		AfterOverridden: false,
+	}
+	if !isGating(c) {
+		t.Errorf("isGating(%+v) = false, want true: AfterOverridden is false, so this is ordinary, un-excused drift", c)
+	}
+}
+
 // TestUnit_AuditDrift_NarrativeTitleOverride_IsExcusedByAllowList is the
 // end-to-end proof of this task's chosen mechanism for a deliberate
 // Title/Description override: a domain's narrative() hook (or a fully
