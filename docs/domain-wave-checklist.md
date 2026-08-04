@@ -22,6 +22,30 @@ Every divergence found so far is catalogued in `docs/api-divergences.md`.
 Read your domain's entries there before Step 1; that is also where this
 wave's own findings are recorded, in Step 6.
 
+## Before and after every estate cycle: check this host's edge agent
+
+This machine runs a `portainer_edge_agent` that reports to the owner's Portainer
+at `192.168.0.40`. It is not part of this project and must keep working.
+
+On 2026-08-04 its tunnel stopped connecting and the owner fixed it by restarting
+the container. No mechanism was ever proven — the agent's API port lives inside
+its own network namespace, so an ephemeral container cannot take it, and the
+agent answered correctly on 9001 throughout. But the tunnel made no connection
+attempt between 2026-08-02 12:05 and 2026-08-04 00:37, which overlaps heavy
+estate work, and the tunnel is on-demand so the silence has an innocent reading
+too. Cause unresolved.
+
+Rather than argue it, check it. Before `make e2e-up` and after `make e2e-down`:
+
+```sh
+docker logs --since 15m portainer_edge_agent 2>&1 | grep -E "client: (Connected|Connection error)" | tail -3
+```
+
+A `Connection error` or a long silence where there was activity before is worth
+stopping for. The failure the owner saw was invisible from this side: check-in
+kept succeeding and only the tunnel was broken, so a heartbeat check would have
+said everything was fine.
+
 ## Step 1 — Generate
 
 1. Create `internal/tools/<domain>/<domain>.go` if the domain package does
@@ -58,6 +82,7 @@ wave's own findings are recorded, in Step 6.
    each of these currently lists the pilot domains by hand, and a wave that
    forgets one gets a build that compiles and an audit that silently ignores
    the new domain.
+
 
 ## Step 2 — Read the generated names
 
