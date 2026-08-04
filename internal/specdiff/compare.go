@@ -30,6 +30,14 @@ import (
 // single field of every single operation, which is worse than not checking
 // origin at all.
 //
+// Title and Description are compared too, once each per call rather than
+// once per field: they are operation-level facts (see OperationShape's doc
+// comment), not something a caller supplies as a parameter. A model reads
+// them to decide whether this action is the one it wants, so a hand-
+// maintained Title or Description drifting from the specification it was
+// generated from is exactly the same class of defect as a parameter's type
+// silently widening — just one level up.
+//
 // The result is sorted by JSONName, then by Kind, so two calls over the same
 // inputs — and two consumers calling this engine for drift and for delta —
 // produce byte-identical output.
@@ -50,6 +58,19 @@ func Compare(before, after OperationShape) []FieldChange {
 		if _, ok := beforeByName[name]; !ok {
 			changes = append(changes, FieldChange{JSONName: name, Kind: ChangeAdded, Before: "", After: describeField(a)})
 		}
+	}
+
+	// Title and Description are operation-level facts, not fields — see
+	// OperationShape's doc comment — so they are compared once here, outside
+	// the per-field loop above, using the sentinel JSONNames TitleSentinel
+	// and DescriptionSentinel rather than any real field's wire name (see
+	// those constants' own doc comment for why a collision there would be
+	// dangerous, not merely cosmetic).
+	if before.Title != after.Title {
+		changes = append(changes, FieldChange{JSONName: TitleSentinel, Kind: ChangeTitle, Before: before.Title, After: after.Title})
+	}
+	if before.Description != after.Description {
+		changes = append(changes, FieldChange{JSONName: DescriptionSentinel, Kind: ChangeOperationDescription, Before: before.Description, After: after.Description})
 	}
 
 	sort.Slice(changes, func(i, j int) bool {

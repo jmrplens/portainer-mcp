@@ -59,7 +59,15 @@ func ShapeFromCatalog(spec toolutil.ActionSpec) (OperationShape, error) {
 	// own doc comment on OperationID). A caller that needs Method/Path for a
 	// matched pair already has them from the spec-derived side of the
 	// comparison.
-	return OperationShape{OperationID: spec.OperationID, Fields: fields}, nil
+	//
+	// Title and Description are taken from spec directly, with no further
+	// cleaning: they are already the catalog's final, model-facing text,
+	// whether cmd/gen_action_inputs derived them mechanically from the spec
+	// or a domain's narrative hook (toolutil.WithNarrative) replaced them
+	// outright. Either way this is what a model is actually shown — the
+	// same reason ShapeFromCatalog reads a reflected InputSchema instead of
+	// re-deriving one.
+	return OperationShape{OperationID: spec.OperationID, Title: spec.Title, Description: spec.Description, Fields: fields}, nil
 }
 
 // canonicalType collapses a decoded JSON Schema "type" keyword down to the
@@ -416,7 +424,74 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 	}
 
 	sort.Slice(fields, func(i, j int) bool { return fields[i].JSONName < fields[j].JSONName })
-	return OperationShape{OperationID: op.OperationID, Method: op.Method, Path: op.Path, Fields: fields}, nil
+	title, description := CleanTitleAndDescription(op.Summary, op.Description)
+	return OperationShape{
+		OperationID: op.OperationID, Method: op.Method, Path: op.Path,
+		Title: title, Description: description, Fields: fields,
+	}, nil
+}
+
+// accessPolicyPrefix is the boilerplate line every operation's own
+// "description" in the vendored specification ends with — for all but two
+// of the 442 operations across both specs, its very last line — of the form
+// "**Access policy**: <who may call this>". Verbatim copy of
+// cmd/gen_action_inputs/actionspec.go's identically-named constant; see
+// CleanTitleAndDescription's doc comment for why this is a
+// reimplementation, not an import.
+const accessPolicyPrefix = "**access policy**"
+
+// CleanTitleAndDescription derives an operation-level Title and
+// Description from its raw "summary" and "description" exactly the way
+// cmd/gen_action_inputs's cleanTitleAndDescription does: Title is the
+// summary, trimmed; Description is the description with every
+// "**Access policy**: ..." line stripped (see accessPolicyPrefix) and the
+// remainder trimmed, falling back to Title when that leaves nothing.
+//
+// Reimplemented here, not imported, for the identical reason naming.go's
+// bodyJSONTag and shape.go's own LoadSpecOperation are reimplemented rather
+// than moved: cmd/gen_action_inputs is `package main`, and Go refuses to
+// import a main package from anywhere. Keeping the two in step is not
+// assumed — cmd/gen_action_inputs/actionspec_test.go and this package's own
+// TestUnit_CleanOperationTitleAndDescription_MatchesTheGenerator both run
+// the exact same real-spec fixture (SharedGitUpdate's summary/description,
+// where the description restates the summary with only a capitalisation
+// difference) through each implementation and assert on the identical
+// result, so a future edit to either side that silently diverges from the
+// other fails a test immediately rather than waiting for a report to
+// disagree with itself.
+//
+// Unlike the generator's cleanTitleAndDescription, this function never
+// refuses: the generator cannot catalogue an operation with no derivable
+// name, but ShapeFromSpec's job is only to compare, and an operation
+// genuinely missing a summary (never observed in either vendored
+// specification, but not something this package should crash over) simply
+// compares Title "" against whatever the other side has — a real,
+// reportable difference, not a fatal one.
+func CleanTitleAndDescription(summary, description string) (title, cleanedDescription string) {
+	title = strings.TrimSpace(summary)
+	cleanedDescription = stripAccessPolicyLines(description)
+	if cleanedDescription == "" {
+		cleanedDescription = title
+	}
+	return title, cleanedDescription
+}
+
+// stripAccessPolicyLines removes every line of raw starting with
+// accessPolicyPrefix (case-insensitively, matching leading/trailing
+// whitespace on the line) and trims the remainder. Verbatim copy of
+// cmd/gen_action_inputs/actionspec.go's identically-named function; see
+// CleanTitleAndDescription's doc comment for why reimplemented
+// rather than imported.
+func stripAccessPolicyLines(raw string) string {
+	lines := strings.Split(raw, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), accessPolicyPrefix) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // httpMethods are the OpenAPI verbs that name an operation inside a path
@@ -441,11 +516,12 @@ var httpMethods = map[string]bool{
 // of cmd/ regardless of preference. Second, most of what it does beyond
 // "decode paths and components, find one operation" is generation-only
 // concern this package has no use for — domain-tag grouping
-// (operationsByDomain, checkDomainTagsCoverSpec), Summary/Description
-// carried toward Title/Description derivation, credential and
+// (operationsByDomain, checkDomainTagsCoverSpec), credential and
 // minimum-parameter bookkeeping. What this function reimplements is the
 // small, genuinely shared fraction: decode a document's paths and
-// components, and find one operation by operationId.
+// components, find one operation by operationId, and (like the generator)
+// carry its raw Summary/Description forward — here so ShapeFromSpec can
+// clean them into Title/Description via CleanTitleAndDescription.
 func LoadSpecOperation(data []byte, operationID string) (SpecOperation, error) {
 	var doc struct {
 		Paths      map[string]map[string]json.RawMessage `json:"paths"`
@@ -482,6 +558,8 @@ func LoadSpecOperation(data []byte, operationID string) (SpecOperation, error) {
 			}
 			var op struct {
 				OperationID string           `json:"operationId"`
+				Summary     string           `json:"summary"`
+				Description string           `json:"description"`
 				Parameters  []map[string]any `json:"parameters"`
 				RequestBody map[string]any   `json:"requestBody"`
 			}
@@ -495,6 +573,8 @@ func LoadSpecOperation(data []byte, operationID string) (SpecOperation, error) {
 				OperationID:   op.OperationID,
 				Method:        strings.ToUpper(method),
 				Path:          path,
+				Summary:       op.Summary,
+				Description:   op.Description,
 				Parameters:    op.Parameters,
 				RequestBody:   op.RequestBody,
 				Schemas:       doc.Components.Schemas,

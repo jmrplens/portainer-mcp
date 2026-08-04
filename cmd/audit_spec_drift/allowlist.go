@@ -14,6 +14,19 @@ import (
 // different shape, and forgiving the whole operation would also forgive any
 // unrelated field that happens to drift later.
 //
+// Field also accepts specdiff.TitleSentinel ("$title") or
+// specdiff.DescriptionSentinel ("$description") to excuse a deliberately
+// hand-authored operation-level Title or Description — the tags and
+// registries pilots' own ActionSpec literals, and registries/system's
+// narrative() hooks, all replace the vendored specification's own summary/
+// description with improved prose on purpose. This is the same mechanism
+// excusing a parameter's narrower type, not a new one: toolutil.WithNarrative
+// fully replaces Title/Description rather than tagging which fields it
+// touched, so there is nothing left on toolutil.ActionSpec by the time
+// ShapeFromCatalog reads it to recognise "this was a deliberate override"
+// from — the allow-list is what records that decision instead, the same way
+// it already does for a parameter.
+//
 // Every field is required, mirroring cmd/audit_1to1's allowListEntry
 // exactly and for the identical reason: Reason is read by a human deciding
 // whether the exclusion still makes sense, and Added dates the entry so

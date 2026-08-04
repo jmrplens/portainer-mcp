@@ -94,6 +94,8 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 			}
 			var op struct {
 				OperationID string           `json:"operationId"`
+				Summary     string           `json:"summary"`
+				Description string           `json:"description"`
 				Tags        []string         `json:"tags"`
 				Deprecated  bool             `json:"deprecated"`
 				Parameters  []map[string]any `json:"parameters"`
@@ -120,6 +122,8 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 					OperationID:   name,
 					Method:        strings.ToUpper(method),
 					Path:          path,
+					Summary:       op.Summary,
+					Description:   op.Description,
 					Parameters:    op.Parameters,
 					RequestBody:   op.RequestBody,
 					Schemas:       doc.Components.Schemas,

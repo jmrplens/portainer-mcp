@@ -71,10 +71,27 @@ type FieldShape struct {
 // routed to a handler whole) and it is not part of what ShapeFromCatalog can
 // even see: toolutil.ActionSpec's reflected InputSchema, like the generated
 // Input struct it comes from, only names its own top-level properties.
+//
+// Title and Description are the operation-level, model-facing name and
+// narrative — toolutil.ActionSpec.Title/Description on the catalog side, the
+// vendored specification's own "summary"/"description" (cleaned the
+// identical way cmd/gen_action_inputs's cleanTitleAndDescription cleans them
+// — see ShapeFromSpec) on the spec side. They are operation-level facts, not
+// FieldShape entries: a caller does not supply a title or a description, a
+// model reads them to decide whether this action is the one it wants. Added
+// alongside Fields for the identical reason cmd/gen_action_inputs's own
+// jsonschema-struct-tag omission went unnoticed for a full phase (see this
+// package's git history): a generator deriving model-facing text from the
+// specification is only as trustworthy as the audit checking it still
+// matches, and until this field existed nothing checked whether a
+// hand-maintained Title or Description had drifted from the specification
+// it was generated from.
 type OperationShape struct {
 	OperationID string
 	Method      string
 	Path        string
+	Title       string
+	Description string
 	Fields      []FieldShape
 }
 
@@ -101,6 +118,38 @@ const (
 	ChangeDescription ChangeKind = "description"
 	// ChangeOrigin means the field moved between path, query and body.
 	ChangeOrigin ChangeKind = "origin"
+	// ChangeTitle means OperationShape.Title differs — an operation-level
+	// fact, not a field, so its FieldChange carries the sentinel JSONName
+	// titleSentinel rather than naming any real path/query/body field. See
+	// Compare's doc comment for why a sentinel, not an empty JSONName tied
+	// to nothing, and internal/specdiff's own real vendored specifications
+	// for why no field is ever named that way.
+	ChangeTitle ChangeKind = "title"
+	// ChangeOperationDescription means OperationShape.Description differs.
+	// Named distinctly from ChangeDescription (a single field's own prose)
+	// so a consumer can tell "this parameter's description changed" from
+	// "the operation's own model-facing narrative changed" from the Kind
+	// alone, without inspecting JSONName.
+	ChangeOperationDescription ChangeKind = "operation_description"
+)
+
+// TitleSentinel and DescriptionSentinel are the FieldChange.JSONName values
+// Compare uses for ChangeTitle and ChangeOperationDescription — operation-
+// level facts, not real fields, so they cannot reuse a real field's wire
+// name without risking exactly the collision this whole package exists to
+// avoid: a body property that happens to be named "description" (several
+// Portainer resources have one) must never be confused with the operation's
+// own model-facing Description changing. Both sentinels are prefixed with
+// "$", a character no JSON property name in either vendored specification
+// uses (verified directly), so neither can collide with a real field's
+// JSONName. Exported so a consumer keying off JSONName — cmd/audit_spec_drift's
+// allow-list, keyed by (operationId, field) — references these constants
+// rather than hardcoding the same two strings a second time; see that
+// command's package doc for why the allow-list, not a new ActionSpec field,
+// is how a deliberate Title/Description override is recognised.
+const (
+	TitleSentinel       = "$title"
+	DescriptionSentinel = "$description"
 )
 
 // FieldChange is one detected difference between a before and an after
@@ -133,6 +182,15 @@ type SpecOperation struct {
 	OperationID string
 	Method      string
 	Path        string
+	// Summary and Description are the operation's own raw, uncleaned
+	// "summary" and "description" fields — the same two the vendored
+	// specification carries for exactly this purpose (see
+	// cmd/gen_action_inputs's cleanTitleAndDescription). ShapeFromSpec
+	// cleans them into OperationShape.Title/Description; left raw here so
+	// that cleaning happens in exactly one place rather than in every
+	// caller that populates a SpecOperation.
+	Summary     string
+	Description string
 	// Parameters are the operation's raw, undecoded "parameters" array
 	// entries (each a "name"/"in"/"required"/"schema"/"description" object),
 	// left raw so ShapeFromSpec can resolve each entry's own schema node

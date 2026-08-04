@@ -108,6 +108,101 @@ func TestUnit_IsGating_DescriptionSpecNeverDescribed_DoesNotGate(t *testing.T) {
 	}
 }
 
+// TestUnit_IsGating_TitleSpecHadText_Gates and
+// TestUnit_IsGating_OperationDescriptionSpecHadText_Gates prove the
+// operation-level kinds gate the same way ChangeDescription does when the
+// spec's own side is non-empty — real drift, worth catching.
+func TestUnit_IsGating_TitleSpecHadText_Gates(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{JSONName: specdiff.TitleSentinel, Kind: specdiff.ChangeTitle, Before: "Create a new tag", After: "Create a tag, differently"}
+	if !isGating(c) {
+		t.Errorf("isGating(%+v) = false, want true: the spec's own title changed, and the catalog's no longer matches it", c)
+	}
+}
+
+func TestUnit_IsGating_OperationDescriptionSpecHadText_Gates(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{JSONName: specdiff.DescriptionSentinel, Kind: specdiff.ChangeOperationDescription, Before: "Create a new tag.", After: "Create a tag, worded differently."}
+	if !isGating(c) {
+		t.Errorf("isGating(%+v) = false, want true: the spec's own description changed, and the catalog's no longer matches it", c)
+	}
+}
+
+// TestUnit_IsGating_TitleSpecEmpty_DoesNotGate and
+// TestUnit_IsGating_OperationDescriptionSpecEmpty_DoesNotGate cover the
+// hypothetical mirror of ChangeDescription's own silent-spec case: this
+// never happens for a real vendored operation today (every one has a
+// non-empty summary — see cmd/gen_action_inputs's own
+// TestUnit_CleanTitleAndDescription_EveryRealOperationHasANonEmptySummary),
+// but specdiff.ShapeFromSpec is deliberately lenient rather than refusing
+// (see its own doc comment), so this branch is reachable in principle and
+// must not gate a Title/Description the spec genuinely never stated.
+func TestUnit_IsGating_TitleSpecEmpty_DoesNotGate(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{JSONName: specdiff.TitleSentinel, Kind: specdiff.ChangeTitle, Before: "", After: "A hand-written title"}
+	if isGating(c) {
+		t.Errorf("isGating(%+v) = true, want false: the spec stated no title at all, so there is nothing to have drifted from", c)
+	}
+}
+
+func TestUnit_IsGating_OperationDescriptionSpecEmpty_DoesNotGate(t *testing.T) {
+	t.Parallel()
+	c := specdiff.FieldChange{JSONName: specdiff.DescriptionSentinel, Kind: specdiff.ChangeOperationDescription, Before: "", After: "A hand-written description"}
+	if isGating(c) {
+		t.Errorf("isGating(%+v) = true, want false: the spec stated no description at all, so there is nothing to have drifted from", c)
+	}
+}
+
+// TestUnit_AuditDrift_NarrativeTitleOverride_IsExcusedByAllowList is the
+// end-to-end proof of this task's chosen mechanism for a deliberate
+// Title/Description override: a domain's narrative() hook (or a fully
+// hand-written ActionSpec literal) replaces the vendored specification's
+// own title outright, toolutil.ActionSpec retains no trace that this was a
+// deliberate override rather than accidental drift, and the allow-list —
+// keyed by (operationId, specdiff.TitleSentinel) — is what records that
+// decision and keeps the build green without hiding the finding from the
+// report.
+func TestUnit_AuditDrift_NarrativeTitleOverride_IsExcusedByAllowList(t *testing.T) {
+	t.Parallel()
+	// Deliberately built rather than reusing singleFieldSpec: this test needs
+	// the spec's own Summary to differ from fixtureAction's Title ("Fixture
+	// action") so there is an actual ChangeTitle finding to excuse — reusing
+	// singleFieldSpec, whose Summary matches on purpose (see its own doc
+	// comment), would produce no finding at all here.
+	eeOps := map[string]specOperation{
+		fixtureOperationID: {Op: specdiff.SpecOperation{
+			OperationID: fixtureOperationID, Method: http.MethodGet, Path: "/" + fixtureOperationID,
+			Summary: "A narrative override replaced this title", Description: "d",
+			Parameters: []map[string]any{{"name": fixtureFieldName, "in": "query", "required": false, "schema": map[string]any{"type": "string"}}},
+		}},
+	}
+	actions := []toolutil.ActionSpec{fixtureAction("Fixture", fixtureInputNoDescription{})}
+	allowList := []allowListEntry{{
+		OperationID: fixtureOperationID, Field: specdiff.TitleSentinel,
+		Reason: "narrative override, deliberately improved wording", Added: "2026-08-04",
+	}}
+
+	result, err := auditDrift(eeOps, map[string]specOperation{}, actions, allowList)
+	if err != nil {
+		t.Fatalf("auditDrift() error = %v", err)
+	}
+	if result.HasDrift() {
+		t.Errorf("auditDrift() HasDrift() = true, want false: the only gating finding is excused by the allow-list; Findings = %+v", result.Findings)
+	}
+	found := false
+	for _, f := range result.Findings {
+		if f.Change.Kind == specdiff.ChangeTitle {
+			found = true
+			if !f.AllowListed {
+				t.Errorf("Findings entry for ChangeTitle = %+v, want AllowListed true", f)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("auditDrift() Findings has no ChangeTitle entry at all: the allow-list must not hide a finding from the report, only from the failure")
+	}
+}
+
 // --- auditDrift ---
 
 // fixtureOperationID is the one operationId every audit_test.go fixture
@@ -124,6 +219,16 @@ const (
 // the given type, with the given description ("" omits the key entirely,
 // matching how a real vendored operation with no description for a
 // parameter looks).
+// singleFieldSpec's Summary/Description are set to exactly fixtureAction's
+// Title ("Fixture action") and Description ("d") — not left blank — so that
+// specdiff.ShapeFromSpec's cleaned operation-level Title/Description agree
+// with the catalog side by construction. Every test built on this fixture
+// exercises one field's drift in isolation; if this operation-level text
+// disagreed instead, every one of those tests would also see an unrelated
+// ChangeTitle/ChangeOperationDescription finding alongside whatever it means
+// to test, silently inflating GatingCount and len(Findings) for a reason
+// that has nothing to do with what the test's name says it proves — exactly
+// the "changed more than one thing at once" trap a fixture must not set.
 func singleFieldSpec(typ, description string) map[string]specOperation {
 	param := map[string]any{"name": fixtureFieldName, "in": "query", "required": false, "schema": map[string]any{"type": typ}}
 	if description != "" {
@@ -135,6 +240,8 @@ func singleFieldSpec(typ, description string) map[string]specOperation {
 				OperationID: fixtureOperationID,
 				Method:      http.MethodGet,
 				Path:        "/" + fixtureOperationID,
+				Summary:     "Fixture action",
+				Description: "d",
 				Parameters:  []map[string]any{param},
 			},
 			Domain: "fixture",
@@ -334,6 +441,36 @@ func TestUnit_AuditDrift_StaleAllowListEntry_IsItselfAnError(t *testing.T) {
 	}
 }
 
+// TestUnit_AuditDrift_StaleTitleAllowListEntry_IsItselfAnError proves the
+// stale-entry check above is not merely a property of the generic
+// (operationId, field) mechanism exercised only for a real parameter name —
+// it is exercised here for the sentinel field specdiff.TitleSentinel too, a
+// distinct wire shape (starts with "$", never a real JSON property name)
+// that a less careful implementation could have special-cased differently.
+// singleFieldSpec's Summary matches fixtureAction's Title exactly (see its
+// own doc comment), so there is genuinely no ChangeTitle finding for this
+// allow-list entry to excuse.
+func TestUnit_AuditDrift_StaleTitleAllowListEntry_IsItselfAnError(t *testing.T) {
+	t.Parallel()
+	eeOps := singleFieldSpec("string", "")
+	actions := []toolutil.ActionSpec{fixtureAction("Fixture", fixtureInputNoDescription{})}
+	allowList := []allowListEntry{{
+		OperationID: "Fixture", Field: specdiff.TitleSentinel,
+		Reason: "used to diverge, no longer does", Added: "2026-08-04",
+	}}
+
+	result, err := auditDrift(eeOps, map[string]specOperation{}, actions, allowList)
+	if err != nil {
+		t.Fatalf("auditDrift() error = %v", err)
+	}
+	if len(result.StaleEntries) != 1 {
+		t.Fatalf("auditDrift() StaleEntries = %+v, want exactly one: the $title entry excuses nothing, Title matches on both sides", result.StaleEntries)
+	}
+	if !result.HasDrift() {
+		t.Error("auditDrift() HasDrift() = false, want true: a stale $title allow-list entry must fail the build on its own")
+	}
+}
+
 // TestUnit_AuditDrift_UnresolvableOperationID_ReturnsError covers the fatal
 // input error: an action whose OperationID resolves in neither vendored
 // spec cannot be classified as a finding at all.
@@ -355,7 +492,16 @@ func TestUnit_AuditDrift_EnumChange_Gates(t *testing.T) {
 		"schema": map[string]any{"type": "integer", "enum": []any{float64(1), float64(2), float64(3)}},
 	}
 	eeOps := map[string]specOperation{
-		"Fixture": {Op: specdiff.SpecOperation{OperationID: "Fixture", Method: http.MethodGet, Path: "/fixture", Parameters: []map[string]any{param}}},
+		// Summary/Description match fixtureAction's Title/Description exactly
+		// — see singleFieldSpec's doc comment for why: otherwise this test
+		// would also pick up an unrelated ChangeTitle/ChangeOperationDescription
+		// finding and its GatingCount==1 assertion below would be testing two
+		// things at once.
+		"Fixture": {Op: specdiff.SpecOperation{
+			OperationID: "Fixture", Method: http.MethodGet, Path: "/fixture",
+			Summary: "Fixture action", Description: "d",
+			Parameters: []map[string]any{param},
+		}},
 	}
 	actions := []toolutil.ActionSpec{fixtureAction("Fixture", fixtureInputInt{})}
 

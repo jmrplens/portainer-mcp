@@ -119,12 +119,22 @@ type deltaResult struct {
 // schema only": ChangeEnum and ChangeDescription are schema-only there
 // because neither one changes a Go field's name or type, only the
 // constraint or prose a model is shown alongside it.
+//
+// ChangeTitle and ChangeOperationDescription are schema-only for the
+// identical reason, one level up: OperationShape.Title/Description are
+// toolutil.ActionSpec.Title/Description, model-facing text a domain author
+// copy-pastes from the new specification's summary/description — never a
+// Go struct field, so never structural. This is exactly the distinction
+// that lets the seven operations named in this command's package doc (only
+// an operation-level summary/description changed, no parameter moved at
+// all) land in ChangedCosmetic rather than being invisible, the way they
+// were before OperationShape carried these two fields at all.
 func isStructKind(kind specdiff.ChangeKind) bool {
 	switch kind {
 	case specdiff.ChangeAdded, specdiff.ChangeRemoved, specdiff.ChangeType,
 		specdiff.ChangeRequiredness, specdiff.ChangeOrigin:
 		return true
-	case specdiff.ChangeEnum, specdiff.ChangeDescription:
+	case specdiff.ChangeEnum, specdiff.ChangeDescription, specdiff.ChangeTitle, specdiff.ChangeOperationDescription:
 		return false
 	default:
 		return false

@@ -1,6 +1,7 @@
 package specdiff
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
@@ -43,6 +44,32 @@ func TestUnit_ShapeFromCatalog_DerivesFieldTypeRequirednessAndDescription(t *tes
 	}
 	if f.Origin != "" {
 		t.Errorf("Fields[0].Origin = %q, want empty: ActionSpec carries no path/query/body routing information", f.Origin)
+	}
+}
+
+// TestUnit_ShapeFromCatalog_DerivesTitleAndDescriptionFromTheActionSpec
+// proves the operation-level fields come straight from spec.Title/
+// spec.Description, unmodified — TagCreate's hand-authored ActionSpec
+// literal (internal/tools/tags/tags.go) carries deliberately different
+// prose from the vendored specification's own summary/description, and
+// ShapeFromCatalog must publish exactly that hand-authored text, not
+// re-derive anything from the spec itself.
+func TestUnit_ShapeFromCatalog_DerivesTitleAndDescriptionFromTheActionSpec(t *testing.T) {
+	t.Parallel()
+	spec := findSpec(t, tags.Specs(), "TagCreate")
+
+	shape, err := ShapeFromCatalog(spec)
+	if err != nil {
+		t.Fatalf("ShapeFromCatalog() error = %v", err)
+	}
+	if shape.Title != spec.Title {
+		t.Errorf("Title = %q, want spec.Title %q", shape.Title, spec.Title)
+	}
+	if shape.Description != spec.Description {
+		t.Errorf("Description = %q, want spec.Description %q", shape.Description, spec.Description)
+	}
+	if shape.Title == "" || shape.Description == "" {
+		t.Fatalf("Title/Description = %q/%q, want this fixture's action to carry both (TagCreate's own ActionSpec literal always sets them)", shape.Title, shape.Description)
 	}
 }
 
@@ -149,6 +176,28 @@ func TestUnit_ShapeFromSpec_FlattensPathAndQueryParameters(t *testing.T) {
 	}
 }
 
+// TestUnit_ShapeFromSpec_DerivesTitleAndStripsAccessPolicyFromDescription is
+// the real-world proof that ShapeFromSpec's Title/Description agree with
+// what cmd/gen_action_inputs's cleanTitleAndDescription would derive from
+// the identical real operation: RegistryInspect's own vendored description
+// ends with a "**Access policy**: restricted" line (verified directly
+// against api/specs/ee-2.44.0.json), which must not survive into
+// Description, and Title must be the vendored "summary" exactly.
+func TestUnit_ShapeFromSpec_DerivesTitleAndStripsAccessPolicyFromDescription(t *testing.T) {
+	t.Parallel()
+	shape := realShapeFromVendoredSpec(t, "RegistryInspect")
+	if shape.Title != "Inspect a registry" {
+		t.Errorf("Title = %q, want the vendored summary verbatim", shape.Title)
+	}
+	if strings.Contains(strings.ToLower(shape.Description), "access policy") {
+		t.Errorf("Description = %q, must not still mention access policy", shape.Description)
+	}
+	want := "Retrieve details about a registry. If endpointId is provided, applies policy overrides for that environment."
+	if shape.Description != want {
+		t.Errorf("Description = %q, want %q", shape.Description, want)
+	}
+}
+
 func TestUnit_ShapeFromSpec_RendersBodyPropertyAsWireJSONTag(t *testing.T) {
 	t.Parallel()
 	// TagCreate's request body declares its property as "Name" (the
@@ -182,6 +231,17 @@ func TestUnit_ShapeFromSpec_RendersBodyPropertyAsWireJSONTag(t *testing.T) {
 // is a genuine finding worth carrying into Task 2's design, not a defect in
 // this comparison engine — the engine reports it precisely because it is
 // real.
+//
+// ChangeTitle and ChangeOperationDescription are excluded for the identical
+// reason, discovered the same way: all three of these operations are
+// hand-authored ActionSpec literals (internal/tools/tags/tags.go,
+// internal/tools/registries/registries.go), not generated output, and their
+// Title/Description are deliberately improved prose ("Create a tag" /
+// "Creates a new environment tag with the given name." here, versus the
+// spec's own "Create a new tag" / "Create a new tag.") — a real, permanent
+// divergence from the specification's own wording, exactly the class of
+// thing cmd/audit_spec_drift's allow-list exists to excuse for a parameter,
+// now excused here the same way at the operation level too.
 func TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeStructurallyForPilotDomain(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -203,9 +263,10 @@ func TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeStructurallyForPilotDomain(t
 
 			var structural []FieldChange
 			for _, c := range Compare(catalogShape, specShape) {
-				if c.Kind != ChangeDescription {
-					structural = append(structural, c)
+				if c.Kind == ChangeDescription || c.Kind == ChangeTitle || c.Kind == ChangeOperationDescription {
+					continue
 				}
+				structural = append(structural, c)
 			}
 			if len(structural) != 0 {
 				t.Errorf("Compare(catalog, spec) structural changes = %v, want none for an operation nothing has changed for", structural)

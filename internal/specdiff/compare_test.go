@@ -60,8 +60,11 @@ func realShapeFromVendoredSpec(t *testing.T, operationID string) OperationShape 
 func TestUnit_Compare_DetectsEveryChangeKind(t *testing.T) {
 	t.Parallel()
 	// One case per kind, each differing from the baseline in exactly one way,
-	// so a Compare that reports a blanket "changed" cannot pass.
-	base := OperationShape{OperationID: "X", Method: "GET", Path: "/x", Fields: []FieldShape{
+	// so a Compare that reports a blanket "changed" cannot pass. Title and
+	// Description are set on base (and left untouched by every case below
+	// except the two that test them) so a spurious operation-level finding
+	// cannot sneak into an otherwise single-field case and inflate len(got).
+	base := OperationShape{OperationID: "X", Method: "GET", Path: "/x", Title: "Do the X thing", Description: "Does the X thing to the named resource.", Fields: []FieldShape{
 		{JSONName: "id", Type: "integer", Required: true, Origin: "path", Description: "The id"},
 	}}
 	for _, tc := range []struct {
@@ -73,7 +76,9 @@ func TestUnit_Compare_DetectsEveryChangeKind(t *testing.T) {
 		{"became optional", withField(base, FieldShape{JSONName: "id", Type: "integer", Required: false, Origin: "path", Description: "The id"}), ChangeRequiredness},
 		{"moved to query", withField(base, FieldShape{JSONName: "id", Type: "integer", Required: true, Origin: "query", Description: "The id"}), ChangeOrigin},
 		{"reworded", withField(base, FieldShape{JSONName: "id", Type: "integer", Required: true, Origin: "path", Description: "Identifier"}), ChangeDescription},
-		{"removed", OperationShape{OperationID: "X", Method: "GET", Path: "/x"}, ChangeRemoved},
+		{"removed", withTitleAndDescription(OperationShape{OperationID: "X", Method: "GET", Path: "/x"}, base.Title, base.Description), ChangeRemoved},
+		{"title reworded", withTitle(base, "Do the Y thing"), ChangeTitle},
+		{"operation description reworded", withDescription(base, "Does the X thing, but described differently."), ChangeOperationDescription},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Compare(base, tc.after)
@@ -85,6 +90,33 @@ func TestUnit_Compare_DetectsEveryChangeKind(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withTitle and withDescription return a copy of base with only Title or
+// only Description replaced — the operation-level equivalent of withField,
+// so a table case that means to exercise ChangeTitle in isolation cannot
+// incidentally also change Description (or vice versa) and mask which kind
+// actually fired. withTitleAndDescription sets both at once, used only to
+// build the "removed" case's baseline Title/Description so that case's
+// single field removal is not itself accompanied by a spurious Title/
+// Description diff against base.
+func withTitle(base OperationShape, title string) OperationShape {
+	out := base
+	out.Title = title
+	return out
+}
+
+func withDescription(base OperationShape, description string) OperationShape {
+	out := base
+	out.Description = description
+	return out
+}
+
+func withTitleAndDescription(base OperationShape, title, description string) OperationShape {
+	out := base
+	out.Title = title
+	out.Description = description
+	return out
 }
 
 func TestUnit_Compare_AddedField_ReportsChangeAdded(t *testing.T) {

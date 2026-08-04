@@ -20,6 +20,8 @@ func TestUnit_IsStructKind_ClassifiesEveryChangeKind(t *testing.T) {
 		{specdiff.ChangeOrigin, true, true},
 		{specdiff.ChangeEnum, false, true},
 		{specdiff.ChangeDescription, false, true},
+		{specdiff.ChangeTitle, false, true},
+		{specdiff.ChangeOperationDescription, false, true},
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			t.Parallel()
@@ -202,6 +204,86 @@ func TestUnit_ComputeDelta_GroupsAddedRemovedByDomain(t *testing.T) {
 	}
 	if len(gizmos.Added) != 1 || gizmos.Added[0].OperationID != "newDomainOp" {
 		t.Errorf("gizmos.Added = %+v, want exactly [newDomainOp]", gizmos.Added)
+	}
+}
+
+// summaryOnlyFixtureBefore/After declare one operation, "summaryOnlyOp",
+// whose parameters are byte-identical on both sides — only the operation's
+// own "summary" differs. The operation-level "description" is given its own
+// explicit, identical literal text on both sides ("A description that never
+// changes."), deliberately not left absent: an absent description would
+// fall back to Title (specdiff.CleanTitleAndDescription's own rule), which
+// itself differs before/after, and would make ChangeOperationDescription
+// fire too — the exact "changed more than one thing at once" trap this
+// project's standing warning names. With an explicit, unchanging
+// description, only Title moves, isolating ChangeTitle in exactly the way a
+// test claiming to prove that one kind is detected must. This is the exact
+// real-world case Step 5 could not report before OperationShape carried
+// Title/Description at all: an operation-level summary change with no
+// parameter or body change whatsoever, invisible to a parameter-only
+// comparison.
+const summaryOnlyFixtureBefore = `{
+  "paths": {
+    "/summary-only": {"get": {"operationId": "summaryOnlyOp", "tags": ["widgets"], "summary": "Old summary text", "description": "A description that never changes.",
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}, "description": "ID"}]}}
+  }
+}`
+
+const summaryOnlyFixtureAfter = `{
+  "paths": {
+    "/summary-only": {"get": {"operationId": "summaryOnlyOp", "tags": ["widgets"], "summary": "New summary text", "description": "A description that never changes.",
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}, "description": "ID"}]}}
+  }
+}`
+
+// TestUnit_ComputeDelta_SummaryOnlyChange_LandsInChangedCosmetic is the
+// direct regression test for the gap this task's coordinator identified:
+// before OperationShape carried Title/Description, an operation whose only
+// difference between two spec versions was its own summary/description
+// text was completely invisible to this tool — not merely miscategorised,
+// absent. It must now appear, classified as cosmetic (a Title/Description
+// change is a copy-paste, never a Go struct edit — see isStructKind's own
+// doc comment), never as struct-touching and never silently dropped.
+func TestUnit_ComputeDelta_SummaryOnlyChange_LandsInChangedCosmetic(t *testing.T) {
+	t.Parallel()
+	before, err := parseSpecOperations([]byte(summaryOnlyFixtureBefore))
+	if err != nil {
+		t.Fatalf("parseSpecOperations(before) error = %v", err)
+	}
+	after, err := parseSpecOperations([]byte(summaryOnlyFixtureAfter))
+	if err != nil {
+		t.Fatalf("parseSpecOperations(after) error = %v", err)
+	}
+
+	result, err := computeDelta(before, after, deltaFixtureDomainTags)
+	if err != nil {
+		t.Fatalf("computeDelta() error = %v", err)
+	}
+	if result.ChangedCount != 1 {
+		t.Fatalf("ChangedCount = %d, want 1", result.ChangedCount)
+	}
+	if result.ChangedStructCount != 0 {
+		t.Errorf("ChangedStructCount = %d, want 0: a Title change alone must not count as struct-touching", result.ChangedStructCount)
+	}
+
+	var widgets *domainGroup
+	for i := range result.Domains {
+		if result.Domains[i].Domain == "widgets" {
+			widgets = &result.Domains[i]
+		}
+	}
+	if widgets == nil {
+		t.Fatalf("result.Domains has no \"widgets\" entry: %+v", result.Domains)
+	}
+	if len(widgets.ChangedStruct) != 0 {
+		t.Errorf("widgets.ChangedStruct = %+v, want none", widgets.ChangedStruct)
+	}
+	if len(widgets.ChangedCosmetic) != 1 || widgets.ChangedCosmetic[0].OperationID != "summaryOnlyOp" {
+		t.Fatalf("widgets.ChangedCosmetic = %+v, want exactly [summaryOnlyOp]", widgets.ChangedCosmetic)
+	}
+	changes := widgets.ChangedCosmetic[0].Changes
+	if len(changes) != 1 || changes[0].Kind != specdiff.ChangeTitle {
+		t.Fatalf("summaryOnlyOp.Changes = %+v, want exactly one ChangeTitle (description falls back to title unchanged on both sides, so it must not also fire)", changes)
 	}
 }
 

@@ -33,40 +33,42 @@
 //
 // This was not assumed — it was checked, and the two independent numbers
 // disagreed enough that the disagreement itself had to be run down (see this
-// task's own report for the full trace). plan/research/version-delta-analysis.md
-// measured the real 2.43.0 -> 2.44.0 Business Edition pair with a full
-// operation-node diff: 20 added, 5 removed, 84 "changed, same operationId",
-// split by impact into 12 "alters generated input struct" and 26 total
-// "alters input JSON schema" (the 12 plus 14 more that are description/enum
-// text only). Run against the same two documents (2.43.0 bundled fresh with
+// task's own report for the full trace, and OperationShape's own doc
+// comment for why Title/Description were added to it after the first pass
+// through this exercise). plan/research/version-delta-analysis.md measured
+// the real 2.43.0 -> 2.44.0 Business Edition pair with a full operation-node
+// diff: 20 added, 5 removed, 84 "changed, same operationId", split by impact
+// into 12 "alters generated input struct" and 26 total "alters input JSON
+// schema" (the 12 plus 14 more that are description/enum text only). Run
+// against the same two documents (2.43.0 bundled fresh with
 // plan/research/specs/bundle.py into a scratch path, 2.44.0 the vendored
 // api/specs/ee-2.44.0.json), this command reports 20 added and 5 removed —
-// exact agreement — but only 13 changed operations, 11 of them touching the
-// generated input struct, not 26 and 12.
+// exact agreement — and 19 changed operations, 11 of them touching the
+// generated input struct: closer than its first pass (13 changed, before
+// OperationShape carried Title/Description) but still not 26 and 12.
 //
 // The added/removed agreement, plus a from-scratch reimplementation of the
 // same top-level-field comparison (a second script, sharing no code with
 // internal/specdiff, written solely to referee this disagreement) landing on
-// the identical 13/11 split, rules out a bug in this command's own counting.
-// What explains the remaining gap is scope, not error: internal/specdiff's
-// OperationShape carries no field for an operation's own summary or
-// top-level description (see that type's doc comment — it has OperationID,
-// Method, Path and Fields, nothing else), only per-field descriptions inside
-// Fields. Checked directly against the same two documents: 7 of the 421
+// the identical struct/cosmetic split at every stage, rules out a bug in
+// this command's own counting. What explains the remaining gap is scope,
+// not error. Checked directly against the same two documents: 7 of the 421
 // operations present in both carry a changed operation-level summary or
 // description with no parameter or body change at all (DeleteKubernetesNamespace,
 // GitOpsSourceGet, HelmShow, both TeamMembership list/create/delete
-// operations, among them) — real content drift the research script's
-// broader "alters input JSON schema" bucket counts and this command
-// structurally cannot, because that text is not part of a generated Input
-// struct or its published parameter schema, which is what this tool exists
-// to size. The remainder of the gap is nested-body-only and response-only
-// change bleeding into the research script's coarser per-operation
-// "changed" classification in ways this repository's own worked example
-// already documents (plan/research/version-delta-analysis.md's own
-// breakdown table). Both measurements are correct for what they count; only
-// one of them — parameter shape a generated Input struct and a published
-// JSON Schema actually carry — is this tool's job.
+// operations, and GitOpsWorkflowsList — the last of which was already
+// counted, since its query parameters also changed). OperationShape's
+// Title/Description (added specifically because of this finding — see that
+// type's own doc comment) now catch exactly this: 6 of those 7 are brand new
+// entries, moving the changed count 13 -> 19, all landing in ChangedCosmetic
+// (a Title/Description edit is a copy-paste, never a Go struct change — see
+// isStructKind). The remainder of the gap against 26 is nested-body-only and
+// response-only change bleeding into the research script's coarser
+// per-operation "changed" classification, exactly as this repository's own
+// worked example already documents (plan/research/version-delta-analysis.md's
+// own breakdown table) — neither one reaches a generated Input struct or its
+// published parameter schema, which is what this tool exists to size. Both
+// measurements are correct for what they count.
 //
 // # Judgement versus mechanics
 //

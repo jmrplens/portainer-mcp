@@ -100,12 +100,43 @@ func verifyCanary(compare func(before, after specdiff.OperationShape) []specdiff
 // there means the catalog fell out of sync with prose the specification
 // still states — worth surfacing as a real, if cosmetic, finding rather than
 // silently dropped.
+//
+// ChangeTitle and ChangeOperationDescription apply the identical
+// non-empty-spec-text rule as ChangeDescription, for the same reason and one
+// more: c.Before is the vendored specification's own cleaned Title/
+// Description (specdiff.ShapeFromSpec always calls
+// specdiff.CleanTitleAndDescription — see that function's doc comment), and
+// in every real operation across both vendored specifications that text is
+// non-empty (cmd/gen_action_inputs's own
+// TestUnit_CleanTitleAndDescription_EveryRealOperationHasANonEmptySummary
+// proves this for the 442-operation Business Edition document and its
+// Community Edition counterpart), so this branch gates unconditionally in
+// practice today. It is written as the same conditional as ChangeDescription
+// rather than an unconditional "return true", because specdiff.ShapeFromSpec
+// does not itself refuse an empty summary (see that function's own doc
+// comment for why it is lenient where the generator is not) — a real
+// distinction between the two, not merely a stylistic one, and treating
+// both alike where they are alike is what this audit already committed to.
+//
+// A hand-authored Title or Description that deliberately improves on the
+// specification's own wording — the tags and registries pilots' own
+// literals, and registries/system's narrative() hooks — is real, permanent
+// divergence, exactly the class this audit's allow-list already exists to
+// excuse for a parameter. It is excused the identical way here: an entry
+// keyed by (operationId, specdiff.TitleSentinel) or (operationId,
+// specdiff.DescriptionSentinel), not by a new ActionSpec field recording
+// "this came from an override" — toolutil.WithNarrative fully replaces
+// Title/Description rather than tagging them, so by the time ShapeFromCatalog
+// reads spec.Title/spec.Description there is nothing left to recognise an
+// override from at that level. The allow-list is not merely convenient here,
+// it is the only mechanism that does not require new plumbing on
+// toolutil.ActionSpec or toolutil.ActionNarrative.
 func isGating(c specdiff.FieldChange) bool {
 	switch c.Kind {
 	case specdiff.ChangeAdded, specdiff.ChangeRemoved, specdiff.ChangeType,
 		specdiff.ChangeRequiredness, specdiff.ChangeEnum, specdiff.ChangeOrigin:
 		return true
-	case specdiff.ChangeDescription:
+	case specdiff.ChangeDescription, specdiff.ChangeTitle, specdiff.ChangeOperationDescription:
 		return c.Before != ""
 	default:
 		return false
