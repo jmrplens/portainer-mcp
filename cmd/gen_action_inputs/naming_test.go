@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -448,12 +449,92 @@ func TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable(t *tes
 // handlerFuncName take a bare operationID string and know nothing about
 // domains or which of the two specs it came from, so this is the actual
 // blast radius the tokenizer switch (naming.go's actionGoFieldName) has to
-// answer for: 445 raw operationIds across both specs collapse to 444 once
-// exported, because the two specs spell one operation's raw id
-// ("getAllKubernetesApplicationsCount" in one,
-// "GetAllKubernetesApplicationsCount" in the other) with a different leading
-// letter case — a pre-existing spec quirk this function's dedup absorbs
-// exactly the way exportedName's own single-rune change is meant to.
+// answer for.
+//
+// The two specs spell one operation's raw id with a different leading letter
+// case ("getAllKubernetesApplicationsCount" in EE,
+// "GetAllKubernetesApplicationsCount" in CE), so the raw JSON holds 445
+// distinct ids where there are only 444 operations. That collapse is NOT
+// this function's to make: operationsByDomain already stores
+// exportedName(operationId) (spec.go:133), so every id reaching this loop is
+// exported-cased and the two variants arrive as one. Deduplicating on the
+// raw key here is therefore exact, and re-applying exportedName to it would
+// be a second, provably idempotent call over the same 444 ids — dead code
+// dressed as a guard.
+// TestUnit_OperationsByDomain_NormalisesEveryOperationIDToItsExportedForm
+// pins the invariant unionOperationIDs' raw-key dedup rests on, and which
+// was until now only asserted in prose: operationsByDomain stores
+// exportedName(operationId), never the spec's raw spelling.
+//
+// It is load-bearing beyond naming. Both vendored specs declare
+// GetAllKubernetesApplicationsCount, but EE spells the raw id with a leading
+// lowercase letter — so the raw JSON holds 445 ids for 444 operations. Every
+// consumer that keys on operation.OperationID (the 444 constant below,
+// ResolveActionName's override table, handlerFuncName's scan) would see the
+// two spellings as two operations if spec.go:133 ever stopped normalising.
+func TestUnit_OperationsByDomain_NormalisesEveryOperationIDToItsExportedForm(t *testing.T) {
+	t.Parallel()
+	for _, specPath := range []string{"../../api/specs/ce-2.44.0.json", "../../api/specs/ee-2.44.0.json"} {
+		t.Run(filepath.Base(specPath), func(t *testing.T) {
+			t.Parallel()
+			_, paths, err := loadDocument(specPath)
+			if err != nil {
+				t.Fatalf("loadDocument(%q) error = %v", specPath, err)
+			}
+			byDomain, err := operationsByDomain(paths)
+			if err != nil {
+				t.Fatalf("operationsByDomain(%q) error = %v", specPath, err)
+			}
+			raw := rawOperationIDsByExportedName(paths)
+			checked := 0
+			for _, ops := range byDomain {
+				for _, op := range ops {
+					if got := exportedName(op.OperationID); got != op.OperationID {
+						t.Errorf("operationsByDomain kept %q, want its exported form %q", op.OperationID, got)
+					}
+					if _, ok := raw[op.OperationID]; !ok {
+						t.Errorf("operationsByDomain produced %q, which no raw operationId in the spec exports to", op.OperationID)
+					}
+					checked++
+				}
+			}
+			if checked == 0 {
+				t.Fatal("checked 0 operations; the loop above proves nothing")
+			}
+		})
+	}
+}
+
+// TestUnit_OperationsByDomain_CollapsesTheOneCrossSpecCaseDisagreement
+// measures the collision itself rather than trusting the comment: the two
+// vendored specs disagree on the leading case of exactly one raw
+// operationId, and normalisation is what makes 445 raw ids read as 444
+// operations. If Portainer ever fixes the spec, this test says so plainly
+// instead of leaving a stale claim in a comment.
+func TestUnit_OperationsByDomain_CollapsesTheOneCrossSpecCaseDisagreement(t *testing.T) {
+	t.Parallel()
+	rawIDs := map[string]bool{}
+	exported := map[string]bool{}
+	for _, specPath := range []string{"../../api/specs/ce-2.44.0.json", "../../api/specs/ee-2.44.0.json"} {
+		_, paths, err := loadDocument(specPath)
+		if err != nil {
+			t.Fatalf("loadDocument(%q) error = %v", specPath, err)
+		}
+		for exp, raw := range rawOperationIDsByExportedName(paths) {
+			rawIDs[raw] = true
+			exported[exp] = true
+		}
+	}
+	if len(rawIDs) != 445 || len(exported) != 444 {
+		t.Fatalf("raw operationIds = %d, exported = %d; want 445 and 444 (one cross-spec leading-case disagreement)", len(rawIDs), len(exported))
+	}
+	for _, want := range []string{"getAllKubernetesApplicationsCount", "GetAllKubernetesApplicationsCount"} {
+		if !rawIDs[want] {
+			t.Errorf("raw operationId %q absent; the collapse this package relies on is no longer the one documented", want)
+		}
+	}
+}
+
 func unionOperationIDs(t *testing.T) []string {
 	t.Helper()
 	seen := map[string]bool{}
@@ -469,6 +550,10 @@ func unionOperationIDs(t *testing.T) []string {
 		}
 		for _, ops := range byDomain {
 			for _, op := range ops {
+				// op.OperationID is already exportedName'd by
+				// operationsByDomain, so this key collapses the one operation
+				// the two specs spell with different leading case. See the
+				// function comment.
 				if seen[op.OperationID] {
 					continue
 				}

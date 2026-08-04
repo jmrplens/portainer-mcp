@@ -437,8 +437,8 @@ func TestUnit_ShapeFromSpec_MultipartFormDataBody_ResolvesFileUploadField(t *tes
 			if tc.wantType != "" && field.Type != tc.wantType {
 				t.Errorf("Fields[%q].Type = %q, want %q", tc.name, field.Type, tc.wantType)
 			}
-			if tc.wantRequired && !field.Required {
-				t.Errorf("Fields[%q].Required = false, want true", tc.name)
+			if field.Required != tc.wantRequired {
+				t.Errorf("Fields[%q].Required = %v, want %v", tc.name, field.Required, tc.wantRequired)
 			}
 			if field.Origin != tc.wantOrigin {
 				t.Errorf("Fields[%q].Origin = %q, want %q", tc.name, field.Origin, tc.wantOrigin)

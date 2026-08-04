@@ -146,10 +146,11 @@ func TestUnit_FieldEditions_NilOrNonStruct_ReturnsNil(t *testing.T) {
 		name    string
 		rt      reflect.Type
 		wantLen int
+		wantNil bool
 	}{
-		{"nil type", nil, 0},
-		{"non-struct type", reflect.TypeOf(""), 0},
-		{"pointer to struct", reflect.TypeOf(&input{}), 1},
+		{"nil type", nil, 0, true},
+		{"non-struct type", reflect.TypeOf(""), 0, true},
+		{"pointer to struct", reflect.TypeOf(&input{}), 1, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,6 +161,11 @@ func TestUnit_FieldEditions_NilOrNonStruct_ReturnsNil(t *testing.T) {
 			}
 			if len(got) != tc.wantLen {
 				t.Errorf("FieldEditions() = %v, want %d gated field(s)", got, tc.wantLen)
+			}
+			// len(got) == 0 is true for both nil and an empty map, so the
+			// documented nil contract needs its own assertion.
+			if tc.wantNil && got != nil {
+				t.Errorf("FieldEditions() = %v, want nil", got)
 			}
 		})
 	}

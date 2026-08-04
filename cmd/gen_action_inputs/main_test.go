@@ -412,9 +412,25 @@ func TestUnit_Run_DeprecatedOperation_SkippedByDefaultUnlessOverridden(t *testin
 				}
 			}
 
+			// run's error is asserted, not discarded: a deferred refusal
+			// elsewhere in the spec leaves the expected files in place, so a
+			// test that only inspects artefacts passes without ever proving
+			// the deprecated-operation path completed.
+			var runErr error
 			stderr := captureStderr(t, func() {
-				_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+				runErr = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
 			})
+			// run's error is asserted rather than discarded. It is expected
+			// to be non-nil here — the endpoints domain legitimately refuses
+			// several operations and the generator exits non-zero whenever it
+			// does — but asserting its shape means any *other* failure, which
+			// would leave the same artefacts in place, is distinguishable.
+			if runErr == nil {
+				t.Fatal("run() error = nil, want the refusal summary this domain always produces")
+			}
+			if !strings.Contains(runErr.Error(), "refused generation across") {
+				t.Fatalf("run() error = %v, want the refusal summary rather than an unrelated failure", runErr)
+			}
 
 			skipLine := "  - DELETE /endpoints (operationId EndpointDeleteBatchDeprecated)"
 			inputsSrc, err := os.ReadFile(filepath.Join(domainDir, "inputs.go"))
