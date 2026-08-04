@@ -1,0 +1,37 @@
+# Deliberate divergences cmd/audit_spec_drift will never gate the build on.
+#
+# Every entry requires:
+#   operation_id  the exported Go identifier oapi-codegen assigns to the
+#                 operation (e.g. "TagDelete" for the raw operationId
+#                 "tagDelete") — the same form toolutil.ActionSpec.OperationID
+#                 and internal/specdiff.OperationShape.OperationID use, so
+#                 this file and a reported finding can be compared directly.
+#   field         the JSON wire name of exactly one field of that operation —
+#                 never the whole operation. A hand-written action that takes
+#                 a deliberately narrower type does so for one or two fields,
+#                 not its entire shape, and excusing the whole operation would
+#                 also excuse any unrelated field that starts drifting later
+#                 under the same entry's forgiveness.
+#   reason        why this field will always differ from the vendored
+#                 specification.
+#   added         the ISO 8601 date (YYYY-MM-DD) the entry was added.
+#
+# audit_spec_drift excludes every entry here from its pass/fail gate but
+# always prints every finding, allow-listed or not, alongside the audit
+# summary: an allow-list that can hide an entry from its own report is how
+# drift decays while the check still looks clean. An entry that excuses
+# nothing a real run currently finds gating is itself a build error — the
+# operation may no longer exist, the field may no longer diverge, or the
+# entry may simply be a typo that never matched anything — because a stale
+# entry would otherwise keep forgiving something that no longer needs it,
+# and a real, unrelated divergence on the same field could later inherit
+# that forgiveness silently.
+#
+# Empty today, deliberately: as of this file's introduction every declared
+# action (system, tags, registries) was generated from, or hand-written
+# directly against, the vendored specification this audit checks it against,
+# so there is no known, examined divergence yet to record here. An entry
+# belongs here only once a specific field has been examined and found
+# genuinely, permanently different on purpose — never as a shortcut to make
+# a real finding stop failing the build before that examination happens.
+[]

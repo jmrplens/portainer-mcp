@@ -172,3 +172,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Report 1:1 coverage of both vendored specs by the action catalog, gated on the ratchet
         run: make audit-1to1-ratchet
+
+  audit-spec-drift:
+    name: "Catalog matches the vendored specification (no ratchet)"
+    runs-on: ubuntu-latest
+    # Unlike audit-1to1 above, this gate requires a clean result from day
+    # one, not a ratchet: every declared action was generated from (or, for
+    # the hand-written pilots, checked directly against) the vendored
+    # specification this job compares it to, so there is no partial-coverage
+    # period to phase in — see cmd/audit_spec_drift's package doc for the
+    # full reasoning, including its mandatory canary self-test and its
+    # conditional treatment of description-only findings.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Report drift between the catalog and the vendored specification it was generated from
+        run: make audit-spec-drift

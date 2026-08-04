@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -114,6 +114,19 @@ audit-1to1-ratchet:
 # at all — no estate, an unreadable spec, or a failed self-test.
 audit-spec-reality:
 	go run ./cmd/audit_spec_reality -spec-version=$(SPEC_VERSION)
+
+# audit-spec-drift fails when a declared catalog action's parameter shape no
+# longer matches the vendored specification operation it was generated from
+# — a field renamed, a type widened, a "required" dropped. Unlike
+# audit-spec-reality this gates: drift against the vendored specification is
+# a defect in this project's own code, not a fact about Portainer, and it
+# starts clean today because every action was generated from that
+# specification. See cmd/audit_spec_drift's package doc for the mandatory
+# canary self-test every run performs first, and for why a description-only
+# change gates only when the specification itself published the text that
+# drifted.
+audit-spec-drift:
+	go run ./cmd/audit_spec_drift -spec-version=$(SPEC_VERSION)
 
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
