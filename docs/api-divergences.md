@@ -31,6 +31,45 @@ Anything in the working scratch pad that a future contributor would need and
 could not reconstruct belongs here instead. The scratch pad is one fresh
 clone away from not existing.
 
+
+## The `jwt`-only security declaration is a documentation defect
+
+**Measured 2026-08-04 against an ephemeral Portainer 2.44.0 Community Edition, with an API key.**
+
+Sixteen operations in the vendored EE specification declare `security: [{jwt: []}]` with no
+`ApiKeyAuth` alternative, against 402 that declare both and 24 that inherit. By tag: `docker` 8,
+`endpoints` 4, `registries` 2, `stacks` 1, `users` 1.
+
+This server authenticates with `X-API-Key` and nothing else (`internal/portainer/client.go`). Taken
+at face value, the declaration would make all eight `docker`-tag operations uncallable by this
+binary — the whole domain.
+
+It is not true. Probed with an API key against a live server:
+
+```
+GET /api/docker/{env}/dashboard   -> 200
+GET /api/docker/{env}/images      -> 200
+GET /api/docker/{env}/snapshot            -> 404   (no snapshot yet; 404 means auth passed)
+GET /api/docker/{env}/snapshot/containers -> 404   (same)
+GET /api/stacks/{id}/images_status        -> 404   (no stack yet; same)
+```
+
+A rejected key answers 401. Every probe got past authentication. The `jwt`-only declaration
+describes nothing the server enforces.
+
+**Why this was nearly missed, and why it is recorded here rather than left to be rediscovered.**
+Neither existing audit can see it. `audit_spec_reality` classifies a route by whether it answers
+Go's plain-text `404 page not found` or a JSON body, so a 401 from an API-key-rejecting route would
+read as "route exists". And the only two `jwt`-only operations already in the catalog —
+`registries.ecr_delete_repository` and `registries.ecr_delete_tags` — are exercised by a test that
+asserts the call *fails*, so a 401 is indistinguishable from the expected "no real ECR backend"
+error. The existing green test is not evidence either way.
+
+**Consequence for planning:** treat the `security` field as unreliable. Do not gate work on it, and
+do not add an allow-list entry for it — nothing in the toolchain reads it today, and nothing should
+start.
+
+
 ## How a claim here is traced
 
 Every entry carries an evidence label. There are three, and nothing is
