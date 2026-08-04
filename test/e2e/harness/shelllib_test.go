@@ -42,9 +42,13 @@ func writeEnv(t *testing.T, contents string) string {
 
 func TestUnit_ReadEnvVar_ReadsOnlyTheRequestedKey(t *testing.T) {
 	t.Parallel()
-	root := writeEnv(t, "NOT_PORTAINER_LICENSE=wrong\nPORTAINER_LICENSE=\"lic-123\"\nPORTAINER_E2E_DOCKER_SSH=truenas\nOTHER=nope\n")
+	root := writeEnv(t, "NOT_PORTAINER_LICENSE=wrong\nPORTAINER_LICENSE=\"lic-123\"\nPORTAINER_E2E_DOCKER_SSH=truenas\nOTHER=nope\nQUOTED_OTHER=\"quoted-value\"\n")
 	for _, tc := range []struct{ name, key, want string }{
-		{"quoted value has its quotes stripped", "PORTAINER_LICENSE", "lic-123"},
+		// Deliberately a different key from the anchor case below: this row
+		// and that one used to both assert on PORTAINER_LICENSE against the
+		// same fixture, so they could only ever pass or fail together and
+		// neither one's intent was pinned down on its own.
+		{"quoted value has its quotes stripped", "QUOTED_OTHER", "quoted-value"},
 		{"unquoted value is read verbatim", "PORTAINER_E2E_DOCKER_SSH", "truenas"},
 		{"absent key yields empty", "PORTAINER_E2E_NOT_SET", ""},
 		// A key that is a SUFFIX of another key must not match that other
@@ -104,6 +108,19 @@ func TestUnit_DockerSSHDest_NeedsBothTheFlagAndTheKey(t *testing.T) {
 	}
 }
 
+// TestUnit_DockerHostMarker_DefaultsUnderCurrentDirectory pins the branch
+// every other marker test overrides away: with
+// PORTAINER_E2E_DOCKER_HOST_FILE unset, docker_host_marker must fall back to
+// a path under the current directory rather than, say, an empty string or an
+// absolute constant that ignores where the scripts are run from.
+func TestUnit_DockerHostMarker_DefaultsUnderCurrentDirectory(t *testing.T) {
+	t.Parallel()
+	got := strings.TrimRight(sourceLib(t, `unset PORTAINER_E2E_DOCKER_HOST_FILE; docker_host_marker`), "\n")
+	if !strings.HasSuffix(got, "/.docker-host") {
+		t.Errorf("docker_host_marker with no override = %q, want suffix %q", got, "/.docker-host")
+	}
+}
+
 func TestUnit_DockerHostMarker_CarriesTheDestinationFromUpToDown(t *testing.T) {
 	t.Parallel()
 	marker := filepath.Join(t.TempDir(), ".docker-host")
@@ -146,6 +163,47 @@ func TestUnit_OnDockerHost_NonEmptyDestinationInvokesSSH(t *testing.T) {
 	}
 	if !strings.Contains(got, "somehost") {
 		t.Errorf("ssh was invoked without the destination; got %q", got)
+	}
+}
+
+// TestUnit_WriteToDockerHost_EmptyDestinationWritesLocally proves the local
+// branch actually writes the file's real content, not merely that it exits
+// zero: a `cat > "$path"` swapped for `cat > /dev/null` would still succeed
+// silently.
+func TestUnit_WriteToDockerHost_EmptyDestinationWritesLocally(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "output.txt")
+	sourceLib(t, `printf '%s' 'hello-content' | write_to_docker_host "" "`+path+`"`)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file written by write_to_docker_host: %v", err)
+	}
+	if string(got) != "hello-content" {
+		t.Errorf("write_to_docker_host wrote %q, want %q", string(got), "hello-content")
+	}
+}
+
+// TestUnit_WriteToDockerHost_NonEmptyDestinationInvokesSSH mirrors
+// TestUnit_OnDockerHost_NonEmptyDestinationInvokesSSH's stub-ssh-on-PATH
+// technique. It asserts both the destination and the remote path appear in
+// the invocation: checking only that ssh ran would miss a function that
+// invoked ssh but forwarded the wrong remote path.
+func TestUnit_WriteToDockerHost_NonEmptyDestinationInvokesSSH(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(stub, []byte("#!/usr/bin/env bash\necho \"ssh-called dest=$*\"\n"), 0o700); err != nil {
+		t.Fatalf("writing ssh stub: %v", err)
+	}
+	got := sourceLib(t, `echo ignored | PATH=`+dir+`:$PATH write_to_docker_host "somehost" "/remote/cdi.yaml"`)
+	if !strings.Contains(got, "ssh-called") {
+		t.Fatalf("write_to_docker_host with a destination did not invoke ssh; got %q", got)
+	}
+	if !strings.Contains(got, "somehost") {
+		t.Errorf("ssh was invoked without the destination; got %q", got)
+	}
+	if !strings.Contains(got, "/remote/cdi.yaml") {
+		t.Errorf("ssh was invoked without the remote path; got %q", got)
 	}
 }
 
