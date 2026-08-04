@@ -524,7 +524,60 @@ an audit key from. They are therefore invisible to coverage figures as well
 as to the reality audit, and are the reason the probed totals are 251 and
 441 rather than 265 and 442.
 
-### 6.3 `ecrDeleteTags.RepositoryName` was typed wrong
+### 6.3 Four identifiers declared `integer` that Portainer never treats as a number
+
+**Evidence: vendored spec** for the declaration; **diagnosed** for what Portainer actually does with
+each value, from the shape of the identifier itself and Docker's/Docker Swarm's own ID conventions;
+recorded 2026-08-04 (P3.3 task 7).
+
+Four path parameters across three `docker`-tagged operations and one endpoint-scoped one declare
+`"type": "integer"` in the vendored Business Edition specification, yet the identifier each one
+names is never actually a number:
+
+| Operation ID | Route | Parameter | Real shape |
+|---|---|---|---|
+| `dockerContainerGpusInspect` | `GET /docker/{environmentId}/containers/{containerId}/gpus` | `containerId` | Docker's 64-character hex container ID |
+| `containerImageStatus` | `GET /docker/{environmentId}/containers/{containerId}/image_status` | `containerId` | same |
+| `snapshotContainerInspect` | `GET /docker/{environmentId}/snapshot/containers/{containerId}` | `containerId` | same |
+| `ServiceImageStatus` | `GET /docker/{environmentId}/services/{serviceId}/image_status` | `serviceId` | Docker Swarm's own alphanumeric service ID (e.g. `9mnpnzenvg8p8tdbtq4wvbkcz`) |
+
+Left as generated, all four actions were uncallable: `cmd/gen_action_inputs` rendered each field as
+Go `int`, publishing JSON Schema `"type": "integer"`, and `toolutil.ActionSpec.ValidateInput` (the
+same check every real tool call goes through, via `tools.Execute`) refused the only values that could
+ever work — neither identifier round-trips through an integer at all, let alone the specific one
+Docker or Swarm assigned. `cmd/gen_action_inputs/fields.go`'s `pathParamTypeOverrides` now renders
+all four as `string` instead; see that table's own doc comment for the mechanism, and
+`pathParamMinimumExceptions`'s doc comment for why the pre-existing `containerId` carve-out there
+(which suppressed a numeric `"minimum"`, not the type itself) needed a type-level fix on top, and why
+`serviceId` needed a fifth minimum-exception entry once its own type changed.
+
+This does not, on its own, make the four operations generatable. Every generated client method
+(`internal/portainer/gen`, built by `oapi-codegen` from the identical wrong declaration) *also* takes
+`containerId`/`serviceId` as a Go `int` — the wrong type is baked into two independently generated
+layers, not one. `cmd/gen_action_inputs/handler.go`'s own path-argument type check
+(`goTypeMatchesReflectType`) refuses to bind a `string` Input field to an `int` client parameter, so
+once a fixed `docker`/`endpoints` domain is scaffolded, all four of these operations will refuse
+generation there too — correctly: no automatically generated handler can call any of them, whichever
+type is published, because the generated client's own signature cannot carry the real identifier
+either. Whoever scaffolds `docker`/`endpoints` must hand-write these four handlers, the same way the
+four existing pilot actions (`EcrDeleteTags`, `RegistryConfigure`, `RepositoryTagsDelete`,
+`SystemUpgrade`) already bypass generation for their own reasons — building the HTTP request directly
+with the real string identifier rather than going through the generated client's typed wrapper.
+
+**The cheat this is written down to forbid.** `docker.service_image_status`'s `serviceId` can be made
+to look correct without actually being correct: label a probe container (or a Swarm service, in the
+e2e estate) `com.docker.swarm.service.id=1` and pass the plain integer `1` as `serviceId`. That value
+is a real, resolvable service ID on that specific probe — so a test that only checks "a value I chose
+resolves successfully" passes — while the schema underneath is still wrong for every service Portainer
+did not have a test author hand-label. A real deployment's Swarm service IDs are assigned by Swarm,
+never `1`. `containerId` has no equivalent shortcut at all: Docker, not a test author, assigns the
+64-hex container ID, so there is no small integer that could ever be a real one to fake acceptance
+with. That asymmetry is exactly why the string fix above is not optional for either field, and why
+any handler or test written against these four operations must validate with a realistic, non-trivial
+identifier and must separately assert that a plain integer is refused — accepting a realistic string
+alone proves nothing that an unfixed, still-`"integer"` schema could not also have passed by coincidence.
+
+### 6.4 `ecrDeleteTags.RepositoryName` was typed wrong
 
 Named in `cmd/audit_spec_reality`'s package doc as the fourth of the four
 spec defects found by accident before that tool existed — "a field typed
@@ -572,7 +625,7 @@ question for a settled fact.
 5. **`licensesInfo` was never separately measured** for the leak that
    `licensesList` demonstrably has (§4.1). Assume it leaks until measured.
 6. **`ecrDeleteTags.RepositoryName`'s original defect is not recoverable**
-   from the working notes (§6.3).
+   from the working notes (§6.4).
 7. **The Kubernetes leg has never been probed for route existence** (§1.7).
    The reasoning for skipping it is sound for route existence only; if a
    wave ever finds a route that exists only under a Helm deployment, that

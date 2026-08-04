@@ -73,7 +73,16 @@ type registryCreateInput struct {
 	// Ecr ECR specific details, required when type = 7
 	Ecr *registryCreateInputEcr `json:"ecr,omitempty" jsonschema:"ECR specific details, required when type = 7"`
 	// Github Github specific details, required when type = 8
-	Github *registryCreateInputGithub `json:"github,omitempty" jsonschema:"Github specific details, required when type = 8"`
+	//
+	// Business Edition only: absent from the Community Edition operation's
+	// resolved schema (checked directly against api/specs/ce-2.44.0.json — a
+	// Community server has never heard of a GitHub registry provider), so it
+	// carries the `edition:"EE"` tag by hand. registries was frozen before
+	// P3.3 task 2 added edition-gating (cmd/gen_action_inputs/fields.go's
+	// ceEEFieldDiff/applyFieldEditionGate), so the generator will never
+	// revisit this file to add the tag mechanically — see this domain's own
+	// P3.2 freeze note above.
+	Github *registryCreateInputGithub `json:"github,omitempty" jsonschema:"Github specific details, required when type = 8" edition:"EE"`
 	// Gitlab Gitlab specific details, required when type = 4
 	Gitlab *registryCreateInputGitlab `json:"gitlab,omitempty" jsonschema:"Gitlab specific details, required when type = 4"`
 	// Name Name that will be used to identify this registry
@@ -145,7 +154,13 @@ func (registryDeleteInput) MinimumParams() map[string]int {
 // registryInspectInput is the parameter shape for operation RegistryInspect (GET /registries/{id}).
 type registryInspectInput struct {
 	// EndpointID Environment identifier (applies policy overrides if provided)
-	EndpointID *int `json:"endpointId,omitempty" jsonschema:"Environment identifier (applies policy overrides if provided)"`
+	//
+	// Business Edition only: absent from the Community Edition operation's
+	// resolved schema (api/specs/ce-2.44.0.json's registryInspect declares no
+	// endpointId query parameter at all) — see registryCreateInput's Github
+	// field for the full reasoning on why this is hand-tagged rather than
+	// generator-applied.
+	EndpointID *int `json:"endpointId,omitempty" jsonschema:"Environment identifier (applies policy overrides if provided)" edition:"EE"`
 	// ID Registry identifier
 	ID int `json:"id" jsonschema:"Registry identifier"`
 }
@@ -186,10 +201,13 @@ func (registryPingInput) EnumParams() map[string][]any {
 
 // registryUpdateInput is the parameter shape for operation RegistryUpdate (PUT /registries/{id}).
 type registryUpdateInput struct {
-	Authentication bool                       `json:"authentication"`
-	BaseURL        *string                    `json:"baseUrl,omitempty"`
-	Ecr            *registryUpdateInputEcr    `json:"ecr,omitempty"`
-	Github         *registryUpdateInputGithub `json:"github,omitempty"`
+	Authentication bool                    `json:"authentication"`
+	BaseURL        *string                 `json:"baseUrl,omitempty"`
+	Ecr            *registryUpdateInputEcr `json:"ecr,omitempty"`
+	// Github is Business Edition only: absent from the Community Edition
+	// operation's resolved schema (api/specs/ce-2.44.0.json) — see
+	// registryCreateInput's identical Github field for the full reasoning.
+	Github *registryUpdateInputGithub `json:"github,omitempty" edition:"EE"`
 	// ID Registry identifier
 	ID               int                                                 `json:"id" jsonschema:"Registry identifier"`
 	Name             string                                              `json:"name"`

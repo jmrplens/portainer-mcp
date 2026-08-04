@@ -148,19 +148,31 @@ type pathParamKey struct {
 //     everywhere else it appears (endpointRegistryAccess, and the registries
 //     domain's own routes), where zero really is invalid.
 //
-//   - containerId on the three operations below: declared "integer" in the
-//     vendored spec, but Portainer reads it as a string and passes it
-//     straight through to Docker as a hex container ID. This is the same
+//   - containerId on three operations, and serviceId on a fourth, below:
+//     declared "integer" in the vendored spec, but Portainer reads each as a
+//     string and passes it straight through to Docker (a hex container ID)
+//     or Docker Swarm (an alphanumeric service ID). This is the same
 //     documented-wrong-type defect "repositoryName" is excluded for, and it
-//     was simply never examined when the suffix rule was written. A hex ID is
-//     not reliably parseable as an integer at all, so a numeric lower bound
-//     asserts a guarantee about a value that is not a number; this generator
-//     refuses to mislabel an upstream defect as a constraint.
+//     was simply never examined when the suffix rule was written. Neither
+//     shape is reliably parseable as an integer at all, so a numeric lower
+//     bound asserts a guarantee about a value that is not a number; this
+//     generator refuses to mislabel an upstream defect as a constraint. All
+//     four also carry the identical entry in pathParamTypeOverrides above,
+//     which is what changes their rendered Go/JSON Schema type from "int" to
+//     "string" in the first place — a field whose published type is no
+//     longer a number cannot meaningfully publish a numeric "minimum" either,
+//     which is the only reason serviceId is named here at all: unlike the
+//     containerId trio, nothing about serviceId's own zero-vs-positive range
+//     is in question, only that "minimum" on a string is a constraint
+//     encoding/jsonschema silently ignores (see pathParamTypeOverrides'
+//     own doc comment for the fuller reasoning and the cheat this guards
+//     against).
 var pathParamMinimumExceptions = map[pathParamKey]string{
 	{OperationID: "EndpointDockerhubStatus", ParamName: "registryId"}:     "registryId 0 is Portainer's sentinel for the anonymous DockerHub registry (GET /endpoints/{id}/dockerhub/{registryId}); a positive lower bound would refuse the one value guaranteed to resolve",
 	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/gpus); no numeric bound is meaningful",
 	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/image_status); no numeric bound is meaningful",
 	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/snapshot/containers/{containerId}); no numeric bound is meaningful",
+	{OperationID: "ServiceImageStatus", ParamName: "serviceId"}:           "serviceId now publishes \"string\" (pathParamTypeOverrides); a numeric \"minimum\" on a string field is a constraint JSON Schema ignores, so the vestige is dropped rather than left to outlive its reason",
 }
 
 // pathParamTakesMinimum decides whether this generator stamps a positive lower
@@ -172,6 +184,58 @@ func pathParamTakesMinimum(operationID, paramName string) bool {
 	}
 	_, excepted := pathParamMinimumExceptions[pathParamKey{OperationID: operationID, ParamName: paramName}]
 	return !excepted
+}
+
+// pathParamTypeOverrides are the (operationId, path parameter) pairs where the
+// vendored specification's declared "integer" type is simply wrong about what
+// Portainer accepts on the wire: three of these are the identical
+// containerId trio pathParamMinimumExceptions above already carves out of the
+// minimum bound (declared "integer" upstream, but Portainer reads it as a
+// string and passes it straight through to Docker as a 64-character hex
+// container ID — no integer can represent one), and the fourth,
+// ServiceImageStatus's serviceId, is Docker Swarm's own service ID: an
+// alphanumeric token such as "9mnpnzenvg8p8tdbtq4wvbkcz", never a number
+// either. Left at the generator's ordinary "integer" -> "int" rendering, all
+// four actions are uncallable: tools.Execute's schema validation (via
+// toolutil.ActionSpec.ValidateInput) rejects the only values that could ever
+// work, since neither a hex container ID nor a Swarm service ID round-trips
+// through Go's int at all, let alone the specific one Docker assigned.
+//
+// This is not the same decision pathParamMinimumExceptions records. That
+// table suppresses a constraint this generator adds on top of the spec's own
+// type (a positive lower bound); this one overrides the spec's own type
+// itself, because the spec's declared type cannot be called against the real
+// server no matter what bound is or is not stamped on it. A field named here
+// keeps node.Type == "integer" for every other purpose (isIdentifierPathParam,
+// the minimum-exception cross-check test, and the doc comment three lines
+// above every entry below) — only the rendered Go field type and therefore
+// the published JSON Schema "type" change to "string". See docs/api-
+// divergences.md for the fuller account, including why a test that only
+// proves a realistic string identifier validates is not enough: Docker
+// chooses containerId, so nothing this project controls could fake one, but
+// serviceId's own probe container can be labelled with any string a test
+// author picks — including the digit "1", which would also satisfy a schema
+// that had wrongly stayed "integer". Only asserting that an *integer* is
+// refused proves the type actually changed.
+var pathParamTypeOverrides = map[pathParamKey]string{
+	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/gpus); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/containers/{containerId}/image_status); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   "containerId is a Docker hex container ID declared \"integer\" upstream (GET /docker/{environmentId}/snapshot/containers/{containerId}); Docker assigns a 64-character hex string no int can carry",
+	{OperationID: "ServiceImageStatus", ParamName: "serviceId"}:           "serviceId is a Docker Swarm service ID declared \"integer\" upstream (GET /docker/{environmentId}/services/{serviceId}/image_status); Swarm assigns an alphanumeric token no int can carry",
+}
+
+// pathParamGoType returns the Go type assembleOperationFields renders for one
+// required path parameter: defaultGoType (typeOf's ordinary derivation from
+// the resolved schema node) unless pathParamTypeOverrides names this exact
+// (operationId, parameter) pair, in which case it is always "string" — the
+// only override this table has ever needed, since every entry today excuses
+// the identical defect (an opaque identifier Portainer never parses as a
+// number, whatever the vendored specification calls it).
+func pathParamGoType(operationID, paramName, defaultGoType string) string {
+	if _, overridden := pathParamTypeOverrides[pathParamKey{OperationID: operationID, ParamName: paramName}]; overridden {
+		return "string"
+	}
+	return defaultGoType
 }
 
 // fieldTag renders one field's full struct tag: the "json" tag and, when
@@ -518,6 +582,16 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		goType, err := typeOf(node, required, structPrefix+goFieldName(splitWords(name)), structs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s %q: %w", origin, name, err)
+		}
+		if in == "path" {
+			// pathParamTypeOverrides only ever applies to the four opaque
+			// identifiers documented on it — node.Type itself is left alone
+			// (still "integer", exactly as the vendored spec declares it) so
+			// every other use of this node's type (the Enum check just below,
+			// the Minimum check further down, and the cross-check test that
+			// keeps pathParamTypeOverrides honest against the real spec) still
+			// sees what the specification actually says.
+			goType = pathParamGoType(op.OperationID, name, goType)
 		}
 		f := fieldSpec{
 			GoName:      goFieldName(splitWords(name)),

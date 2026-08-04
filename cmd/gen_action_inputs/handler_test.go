@@ -350,16 +350,29 @@ func TestUnit_GenerateHandler_None_IgnoresInputAndCallsWithOnlyContext(t *testin
 
 func TestUnit_GenerateHandler_PathAndPath_DoesNotSwapTwoIntArguments(t *testing.T) {
 	t.Parallel()
-	// DockerContainerGpusInspect: GET /docker/{environmentId}/containers/{containerId}/gpus —
-	// two interchangeable ints; environmentId=101 and containerId=202 are
-	// chosen distinctly so a swap is unmistakable in the resulting path.
-	structs, spec := buildRealHandlerSpec(t, "docker", "DockerContainerGpusInspect")
+	// UserRemoveAPIKey: DELETE /users/{id}/tokens/{keyID} — two interchangeable
+	// ints; id=101 and keyID=202 are chosen distinctly so a swap is
+	// unmistakable in the resulting path.
+	//
+	// This test used to exercise DockerContainerGpusInspect
+	// (GET /docker/{environmentId}/containers/{containerId}/gpus), the
+	// original "two interchangeable ints" example. P3.3 task 7 gave
+	// containerId its own Go type ("string": see pathParamTypeOverrides in
+	// fields.go, a Docker hex container ID that was never really an integer
+	// on the wire), which now makes DockerContainerGpusInspect refuse at
+	// buildHandlerSpec — see
+	// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
+	// below for that proof. UserRemoveAPIKey is a genuine, unrelated
+	// two-int-path-argument operation that keeps this test's own point (a
+	// generic handler must not silently swap two same-typed positional
+	// arguments) alive on a shape the fix does not touch.
+	structs, spec := buildRealHandlerSpec(t, "users", "UserRemoveAPIKey")
 	if len(spec.PathArgs) != 2 || spec.HasQuery || spec.HasBody {
 		t.Fatalf("handlerSpec = %+v, want exactly two path arguments, no query/body", spec)
 	}
 
-	got := executeGeneratedHandler(t, structs, spec, `{"environmentId":101,"containerId":202}`)
-	want := "/api/docker/101/containers/202/gpus"
+	got := executeGeneratedHandler(t, structs, spec, `{"id":101,"keyID":202}`)
+	want := "/api/users/101/tokens/202"
 	if got.Path != want {
 		t.Errorf("request path = %q, want %q: the two path arguments were swapped", got.Path, want)
 	}
@@ -367,20 +380,91 @@ func TestUnit_GenerateHandler_PathAndPath_DoesNotSwapTwoIntArguments(t *testing.
 
 func TestUnit_GenerateHandler_PathPathAndParams_BindsBothPathArgumentsAndTheQuery(t *testing.T) {
 	t.Parallel()
-	// ContainerImageStatus: GET /docker/{environmentId}/containers/{containerId}/image_status?refresh=...
-	// — the exact shape this project's own plan names as the priority case.
-	structs, spec := buildRealHandlerSpec(t, "docker", "ContainerImageStatus")
+	// EndpointEdgeStackInspect: GET /endpoints/{id}/edge/stacks/{stackId}?version=...
+	//
+	// This test used to exercise ContainerImageStatus
+	// (GET /docker/{environmentId}/containers/{containerId}/image_status?refresh=...),
+	// the shape this project's own plan named as the priority case. P3.3
+	// task 7 gave containerId its own Go type ("string": see
+	// pathParamTypeOverrides in fields.go), which now makes ContainerImageStatus
+	// refuse at buildHandlerSpec — see
+	// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
+	// below for that proof. EndpointEdgeStackInspect is a genuine, unrelated
+	// two-int-path-argument-plus-query operation that keeps this test's own
+	// point (path arguments and the query struct must each reach their own
+	// place, not each other's) alive on a shape the fix does not touch.
+	structs, spec := buildRealHandlerSpec(t, "endpoints", "EndpointEdgeStackInspect")
 	if len(spec.PathArgs) != 2 || !spec.HasQuery || spec.HasBody {
 		t.Fatalf("handlerSpec = %+v, want two path arguments and a query struct, no body", spec)
 	}
 
-	got := executeGeneratedHandler(t, structs, spec, `{"environmentId":11,"containerId":22,"refresh":true}`)
-	want := "/api/docker/11/containers/22/image_status"
+	got := executeGeneratedHandler(t, structs, spec, `{"id":11,"stackId":22,"version":3}`)
+	want := "/api/endpoints/11/edge/stacks/22"
 	if got.Path != want {
 		t.Errorf("request path = %q, want %q: a path argument was mis-bound", got.Path, want)
 	}
-	if got.Query != "refresh=true" {
-		t.Errorf("request query = %q, want refresh=true: the query field never reached the params struct", got.Query)
+	if got.Query != "version=3" {
+		t.Errorf("request query = %q, want version=3: the query field never reached the params struct", got.Query)
+	}
+}
+
+// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
+// is P3.3 task 7's own proof that fixing containerId/serviceId's published
+// type does not silently produce a broken handler.
+//
+// The vendored specification's own generated client (internal/portainer/gen,
+// oapi-codegen run over the identical "integer" declaration
+// pathParamTypeOverrides corrects) still takes containerId/serviceId as a Go
+// `int` — oapi-codegen has no way to know the declaration is wrong either.
+// So the moment this generator publishes "string" for one of these four
+// fields (fixing the schema a caller sees) it also creates a mismatch this
+// generator did not have before (a `string` Input field bound to an `int`
+// client parameter), and buildHandlerSpec's own goTypeMatchesReflectType
+// check (handler.go) is what catches it: every one of these four operations
+// now refuses generation rather than emit a handler that would try to
+// json.Marshal a hex container ID or a Swarm service ID into an int
+// argument, silently truncating or failing at the first real call.
+//
+// This is not a defect the type fix introduced — it is the type fix
+// surfacing a defect that was always there, one level down, in Portainer's
+// own generated client: no automatically generated handler can call these
+// four operations correctly, whichever type this generator publishes for
+// them, because the underlying client method's signature cannot carry the
+// real identifier either. A domain author scaffolding docker/endpoints in a
+// later wave must hand-write these four handlers — building the HTTP
+// request directly with the real string identifier, the same way the four
+// existing hand-written pilot actions (EcrDeleteTags, RegistryConfigure,
+// RepositoryTagsDelete, SystemUpgrade) already bypass generation for their
+// own reasons. See docs/api-divergences.md for the account of why this must
+// never be "solved" by passing an integer that merely happens to validate
+// (docker.service_image_status's own probe-container cheat) instead.
+func TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument(t *testing.T) {
+	t.Parallel()
+	for _, operationID := range []string{
+		"DockerContainerGpusInspect",
+		"ContainerImageStatus",
+		"SnapshotContainerInspect",
+		"ServiceImageStatus",
+	} {
+		t.Run(operationID, func(t *testing.T) {
+			t.Parallel()
+			op, doc, res := realOperation(t, operationID)
+			structName := inputStructName(op.OperationID)
+			var nested []structSpec
+			fields, pathOrder, err := assembleOperationFields(op, res, doc, structName, &nested)
+			if err != nil {
+				t.Fatalf("assembleOperationFields(%s) error = %v", operationID, err)
+			}
+
+			_, err = buildHandlerSpec("docker", op, fields, pathOrder, nested, structName, "")
+			if err == nil {
+				t.Fatalf("buildHandlerSpec(%s) = nil error, want a refusal: its identifier path parameter now publishes \"string\", "+
+					"but the generated client (internal/portainer/gen) still declares it \"int\"", operationID)
+			}
+			if !strings.Contains(err.Error(), "is Go type string in the generated Input, but the generated client's positional argument is int") {
+				t.Errorf("buildHandlerSpec(%s) error = %q, want it to name the string-vs-int path-argument mismatch", operationID, err)
+			}
+		})
 	}
 }
 
