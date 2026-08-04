@@ -31,20 +31,36 @@
 // emits must be trustworthy without review, and a refusal that is loud beats
 // a struct that is silently wrong.
 //
-// None of these refusals aborts the whole run. Every one is scoped to *the
-// one domain the offending operation belongs to*: the operation is named,
-// its domain is left unwritten, and every other domain still regenerates —
-// see refusals in run() below. The command still exits non-zero, since an
-// operation nobody can prove safe to generate for never gets a handler, but
-// it fails having regenerated everything it legitimately could. Before this
-// applied uniformly, only an unresolvable success-response schema (see
-// errResponseSchemaUnresolvable) got this treatment; every other refusal
-// above returned straight out of run()'s domain loop, so one defect in one
-// operation stopped every domain sorting after it, alphabetically, from
-// regenerating — the vendored spec's self-referential portaineree.EdgeConfig
-// was the case that first exposed it, and a field collision in
-// stacks.StackMigrate later stopped every one of the twelve domains sorting
-// after "stacks" the same way, discovered before any of the twelve existed.
+// None of these refusals aborts the whole run, and — since P3.3 task 3 —
+// none of them poisons the whole domain either. Every one is scoped to *the
+// one operation that triggered it*: that operation contributes nothing at
+// all to its domain (no input struct, no nested type, no MinimumParams/
+// EnumParams method, no redaction wrapper stub, no guard row, no handler, no
+// ActionSpec entry), it is named in the report at the end of run(), and
+// every other operation in the same domain — and every other domain — still
+// generates normally. The command still exits non-zero, since an operation
+// nobody can prove safe to generate for never gets a handler, but it fails
+// having regenerated everything it legitimately could; the domain author's
+// job is to read the report and hand-write exactly the named operations,
+// landed in the same commit as the rest of the scaffold.
+//
+// This is narrower than an earlier revision of this comment described.
+// Before P3.3 task 1, only an unresolvable success-response schema (see
+// errResponseSchemaUnresolvable) was collected and continued past; every
+// other refusal returned straight out of run()'s domain loop, so one defect
+// in one operation stopped every domain sorting after it, alphabetically,
+// from regenerating — the vendored spec's self-referential
+// portaineree.EdgeConfig was the case that first exposed it, and a field
+// collision in stacks.StackMigrate later stopped every one of the twelve
+// domains sorting after "stacks" the same way, discovered before any of the
+// twelve existed. Task 1 fixed that by collecting every refusal and
+// continuing, but still discarded the *entire* domain containing one: a
+// domain with even a single operation this generator cannot support (a
+// multipart file upload is the real, permanent example — no version of this
+// generator's own body handling will ever support one) could never be
+// scaffolded at all, not even for its other, perfectly generatable
+// operations. Task 3 narrowed the unit of refusal from "domain" to
+// "operation" for exactly that reason.
 package main
 
 import (
@@ -232,14 +248,19 @@ func run(args []string) error {
 	// disagrees with, or an operation this generator otherwise cannot derive
 	// an ActionSpec for. Each entry names its domain, operation and reason
 	// (formatted "domain %s: ..." so a lexical sort groups the final report by
-	// domain); the domain that produced it is left unwritten, every other
-	// domain still regenerates, and the run still exits non-zero — see the
-	// report at the end of run().
+	// domain); the operation that produced it contributes nothing at all
+	// (see commitOperation below), every other operation — in the same
+	// domain and every other one — still generates, and the run still exits
+	// non-zero — see the report at the end of run().
 	var refusals []string
-	// poisonedDomains is the set of domain names refusals actually belongs to,
-	// tracked directly rather than re-parsed out of the formatted strings
-	// above, purely to state the domain count in the final report.
-	poisonedDomains := map[string]bool{}
+	// domainsWithRefusals is the set of domain names that own at least one
+	// entry in refusals above, tracked directly rather than re-parsed out of
+	// the formatted strings, purely to state the domain count in the final
+	// report. Named for what it now means since P3.3 task 3: these domains
+	// are not left unwritten (a domain with only its permanently-unsupported
+	// operations refused still generates everything else), only marked as
+	// still having a hand-written gap to fill.
+	domainsWithRefusals := map[string]bool{}
 	for _, domainName := range domains {
 		ops, err := domainOperations(domainName, toolutil.DomainTags, byTag)
 		if err != nil {
@@ -269,13 +290,13 @@ func run(args []string) error {
 		var specEntries []specEntry
 		var overriddenOps []string
 		var redactionGuards []redactionGuard
-		// domainPoisoned: at least one operation in this domain was refused
-		// (see refusals above), so nothing about this domain can be trusted
-		// enough to write. Every other domain still generates; the run
-		// reports and fails at the end. domainRefusalCount is this domain's
-		// own share of refusals, printed immediately below so a reviewer does
-		// not have to count the final report by domain themselves.
-		domainPoisoned := false
+		// domainRefusalCount is this domain's own share of refusals, printed
+		// immediately below so a reviewer does not have to count the final
+		// report by domain themselves. Since P3.3 task 3 a refusal no longer
+		// poisons the domain that contains it: only the refused operation
+		// itself contributes nothing (see commitInput/commitGuard below),
+		// every other operation in this domain still generates, and the
+		// domain's files are still written from whatever succeeded.
 		domainRefusalCount := 0
 		for _, op := range ops {
 			structName := inputStructName(op.OperationID)
@@ -291,18 +312,18 @@ func run(args []string) error {
 				// A field collision, an unsupported parameter location or a
 				// request body with more than one content type: a refusal about
 				// this one operation, not a reason to abort the other 42
-				// domains — see refusals' own doc comment above. The domain
-				// holding it is left unwritten and named at the end of the run,
-				// which still exits non-zero. This continues rather than
-				// breaks out of this domain's own loop: every other operation
-				// in it is still checked, so a domain with two
-				// independently-refusable operations gets both reported in one
-				// run, not just the first one found (see the standing warning
-				// about non-discriminating tests this project has hit before:
-				// a test with only one refusable operation cannot tell
-				// "collects it" apart from "aborts on it").
+				// domains — see refusals' own doc comment above. This operation
+				// contributes nothing (there is no struct to discard: fields was
+				// never even produced) and is named at the end of the run, which
+				// still exits non-zero. This continues rather than breaks out of
+				// this domain's own loop: every other operation in it is still
+				// checked, so a domain with two independently-refusable
+				// operations gets both reported in one run, not just the first
+				// one found (see the standing warning about non-discriminating
+				// tests this project has hit before: a test with only one
+				// refusable operation cannot tell "collects it" apart from
+				// "aborts on it").
 				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
-				domainPoisoned = true
 				domainRefusalCount++
 				continue
 			}
@@ -313,13 +334,27 @@ func run(args []string) error {
 			inputStruct := ""
 			if len(fields) > 0 {
 				inputStruct = structName
-				top := structSpec{
+			}
+			// commitInput appends this operation's Input struct and every
+			// nested type it needed to allStructs. Called only once every
+			// refusal this operation could still hit (checkCredentialRedaction
+			// below, and — for a non-overridden operation — buildHandlerSpec
+			// and buildActionSpecFields further down) has already passed: a
+			// refused operation must never reach this call, or its struct,
+			// its nested types and their MinimumParams/EnumParams methods
+			// would be declared and then called by nothing this generator
+			// ever emits — exactly the orphan-code defect P3.3 task 3 exists
+			// to close. See this file's own package doc.
+			commitInput := func() {
+				if inputStruct == "" {
+					return
+				}
+				allStructs = append(allStructs, structSpec{
 					Name: structName,
 					Doc: fmt.Sprintf("%s is the parameter shape for operation %s (%s %s).",
 						structName, op.OperationID, op.Method, op.Path),
 					Fields: fields,
-				}
-				allStructs = append(allStructs, top)
+				})
 				allStructs = append(allStructs, nested...)
 			}
 
@@ -354,54 +389,58 @@ func run(args []string) error {
 				// credential-shaped field with no domain-supplied redaction
 				// wrapper declared: both are a refusal about this one
 				// operation, not a reason to stop generating the other 42
-				// domains — see refusals' own doc comment above. The domain
-				// holding it is left unwritten and named at the end of the
-				// run, which still exits non-zero.
+				// domains — see refusals' own doc comment above. Neither
+				// commitInput nor anything below ever runs for it, so it
+				// contributes no struct either, even though fields was
+				// already assembled above.
 				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
-				domainPoisoned = true
 				domainRefusalCount++
 				continue
 			}
 
-			// Recorded for generated and hand-written handlers alike: the
-			// guard proves the wrapper works, and a hand-written handler is
-			// no more trustworthy on that point than a generated one — it is
-			// the case P2's defect actually occurred in.
-			if redactWith != "" {
-				// HandlerFuncName is only knowable for a non-overridden
-				// operation: this generator mints handlerFuncName(op.OperationID)
-				// for it, guaranteed to exist once this domain finishes
-				// generating. An overridden operation's handler is
-				// hand-declared under whatever name its author chose — this
-				// generator never learns that name, so the handler-level
-				// redaction guard (renderRedactionGuardFile) is left to skip
-				// it rather than reference a function that may not exist
-				// under the mechanical name at all.
-				handlerFn := ""
-				if !overridden {
-					handlerFn = handlerFuncName(op.OperationID)
-				}
-				redactionGuards = append(redactionGuards, redactionGuard{OperationID: op.OperationID, FuncName: redactWith, HandlerFuncName: handlerFn})
-			}
-
 			if overridden {
+				// A hand-written handler is expected to exist already (or to
+				// land in the same commit); its Input struct and, if
+				// redactWith is non-empty, its redaction-wrapper guard row
+				// are both real requirements for that hand-written code, so
+				// they are committed now — this operation cannot be refused
+				// any further, unlike the non-overridden path below.
+				commitInput()
+				if redactWith != "" {
+					// HandlerFuncName stays "": an overridden operation's
+					// handler is hand-declared under whatever name its
+					// author chose, which this generator never learns, so
+					// the handler-level redaction guard
+					// (renderRedactionGuardFile) skips it rather than
+					// reference a function that may not exist under the
+					// mechanical name at all.
+					redactionGuards = append(redactionGuards, redactionGuard{OperationID: op.OperationID, FuncName: redactWith, HandlerFuncName: ""})
+				}
 				overriddenOps = append(overriddenOps, fmt.Sprintf("%s (%s)", op.OperationID, reason))
 				continue
 			}
 
 			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, nested, inputStruct, redactWith)
 			if err != nil {
-				// No generated client method for this operationId, one shaped
+				// No generated client method for this operationId (the real,
+				// permanent case: a multipart file upload), one shaped
 				// differently than assembleOperationFields expects, or a
 				// wire-width mismatch checkWireWidth refuses to round-trip: a
 				// refusal about this one operation, handled the same way as
-				// every other one above.
+				// every other one above. redactWith may be non-empty here —
+				// a domain author may already have declared the redaction
+				// wrapper this credential-shaped operation needs — but
+				// commitInput/the guard append below never run for it, so
+				// neither the Input struct nor a guard row referencing the
+				// handler this refusal just prevented from existing is ever
+				// emitted. The wrapper function itself, if already declared
+				// by hand, is simply unused code the domain author wrote
+				// ahead of the handler that will eventually call it; see
+				// this file's own package doc.
 				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
-				domainPoisoned = true
 				domainRefusalCount++
 				continue
 			}
-			handlerSpecs = append(handlerSpecs, spec)
 
 			// Built from the exact same op the handler above was just built
 			// from, never re-fetched or re-derived — see specEntry's own doc
@@ -410,17 +449,28 @@ func run(args []string) error {
 			actionFields, err := buildActionSpecFields(domainName, op, ceOperationIDs)
 			if err != nil {
 				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
-				domainPoisoned = true
 				domainRefusalCount++
 				continue
 			}
+
+			// Every refusal this operation could still hit has now passed:
+			// only from this point on is it safe to commit its struct, its
+			// redaction guard row (recorded for generated and hand-written
+			// handlers alike: the guard proves the wrapper works, and a
+			// hand-written handler is no more trustworthy on that point than
+			// a generated one — it is the case P2's defect actually occurred
+			// in), its handler and its ActionSpec entry.
+			commitInput()
+			if redactWith != "" {
+				redactionGuards = append(redactionGuards, redactionGuard{OperationID: op.OperationID, FuncName: redactWith, HandlerFuncName: handlerFuncName(op.OperationID)})
+			}
+			handlerSpecs = append(handlerSpecs, spec)
 			specEntries = append(specEntries, specEntry{Fields: actionFields, HandlerFunc: spec.FuncName, InputStruct: inputStruct})
 		}
 
-		if domainPoisoned {
-			poisonedDomains[domainName] = true
-			fmt.Fprintf(os.Stderr, "domain %s: skipped, %d operation(s) refused generation (reported at the end of this run)\n", domainName, domainRefusalCount)
-			continue
+		if domainRefusalCount > 0 {
+			domainsWithRefusals[domainName] = true
+			fmt.Fprintf(os.Stderr, "domain %s: %d operation(s) refused generation (named at the end of this run); every other operation in this domain still generated normally\n", domainName, domainRefusalCount)
 		}
 
 		if len(overriddenOps) > 0 {
@@ -501,9 +551,9 @@ func run(args []string) error {
 			// overridden: a previously scaffolded actions.go would be stale
 			// rather than merely empty. This branch only runs on a first-time
 			// scaffold or an explicit -allow-overwrite regeneration — the
-			// domain-level refusal above is what stops it from ever reaching
-			// (and silently deleting) an owned domain's file on an ordinary
-			// run.
+			// domainAlreadyScaffolded refusal earlier is what stops it from
+			// ever reaching (and silently deleting) an owned domain's file on
+			// an ordinary run.
 			if err := os.Remove(actionsPath); err != nil {
 				return fmt.Errorf("remove stale %s: %w", actionsPath, err)
 			}
@@ -511,20 +561,22 @@ func run(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%d file(s) written\n", written)
 
-	// Reported once, at the end, after every unaffected domain has been
-	// written: the run still fails, but it fails having regenerated
-	// everything it legitimately could, so the fix is a diff against the
-	// named domains rather than a repository-wide regeneration blackout.
-	// Every entry already starts with "domain <name>: ", so this lexical sort
-	// groups the report by domain rather than leaving it in whatever order
-	// domains happened to be poisoned in.
+	// Reported once, at the end, after every domain has been written with
+	// whatever it legitimately could generate: the run still fails, since an
+	// operation nobody can prove safe to generate for never gets a handler,
+	// but every named operation below is the domain author's own work item —
+	// write it by hand, in the same commit as the rest of the domain's
+	// scaffold — not a reason the rest of that domain, or any other domain,
+	// failed to regenerate. Every entry already starts with "domain <name>: ",
+	// so this lexical sort groups the report by domain rather than leaving it
+	// in whatever order the refusals happened to be found in.
 	if len(refusals) > 0 {
 		sort.Strings(refusals)
-		fmt.Fprintf(os.Stderr, "%d operation(s) refused generation across %d domain(s); those domains were not written:\n", len(refusals), len(poisonedDomains))
+		fmt.Fprintf(os.Stderr, "%d operation(s) refused generation across %d domain(s); write each one by hand (every other operation in these domains was still generated):\n", len(refusals), len(domainsWithRefusals))
 		for _, r := range refusals {
 			fmt.Fprintf(os.Stderr, "  - %s\n", r)
 		}
-		return fmt.Errorf("%d operation(s) refused generation across %d domain(s); see the list above", len(refusals), len(poisonedDomains))
+		return fmt.Errorf("%d operation(s) refused generation across %d domain(s); see the list above", len(refusals), len(domainsWithRefusals))
 	}
 	return nil
 }

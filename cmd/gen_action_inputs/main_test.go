@@ -225,11 +225,12 @@ func TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec(t *testing.T) {
 }
 
 // TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten
-// is Task 1's own acceptance test: "stacks" (freshly created, zero
-// hand-written files — exactly what a domain looks like the moment before
-// its first scaffold) has two operations that refuse for two genuinely
-// different reasons in the real, unmodified vendored spec, with no fixture
-// mutation needed to produce either:
+// is Task 1's own acceptance test, extended by P3.3 task 3 to also cover the
+// per-*operation* (not per-domain) granularity that task introduced: "stacks"
+// (freshly created, zero hand-written files — exactly what a domain looks
+// like the moment before its first scaffold) has two operations that refuse
+// for two genuinely different reasons in the real, unmodified vendored spec,
+// with no fixture mutation needed to produce either:
 //
 //   - StackMigrate refuses inside assembleOperationFields: its query
 //     parameter "endpointId" and its body's "EndpointID" property both render
@@ -251,10 +252,22 @@ func TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec(t *testing.T) {
 // first) and return before the other is ever checked.
 //
 // "tags" — real, already hand-written, sorting after "stacks" — is the
-// ordering-hazard half: before this fix, any refusal in "stacks" aborted
-// run() immediately, so "tags" (and every other domain sorting after
-// "stacks") was never even attempted. Asserting it is still fully written is
-// what makes that regression concrete rather than assumed.
+// ordering-hazard half: before Task 1, any refusal in "stacks" aborted run()
+// immediately, so "tags" (and every other domain sorting after "stacks") was
+// never even attempted. Asserting it is still fully written is what makes
+// that regression concrete rather than assumed.
+//
+// Task 3's own half: since "stacks" has 25 operations and only these two are
+// refused (plus every other credential-needing one, for the identical
+// missing-wrapper reason StackList is refused for — this fixture declares no
+// wrapper stubs at all), stacks/inputs.go and stacks/actions.go must still
+// exist, containing every one of the domain's clean operations
+// (stackDelete, a real generated handler with no credential and no wire
+// issue, is asserted by name) — and must not contain anything StackMigrate
+// or StackList would have contributed (their mechanical Input struct names,
+// stackMigrateInput/stackListInput, or their mechanical handler names,
+// stackMigrate/stackList). A leftover whole-domain-poisoning implementation
+// cannot pass this: it leaves the domain entirely unwritten instead.
 func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten(t *testing.T) {
 	toolsDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(toolsDir, "stacks"), 0o750); err != nil {
@@ -282,10 +295,30 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 	}
 
 	for _, name := range []string{"actions.go", "inputs.go"} {
-		if _, statErr := os.Stat(filepath.Join(toolsDir, "stacks", name)); !os.IsNotExist(statErr) {
-			t.Errorf("stacks/%s exists (stat error %v), want it unwritten: a domain with any refused operation must not be trusted to write", name, statErr)
+		if _, statErr := os.Stat(filepath.Join(toolsDir, "stacks", name)); statErr != nil {
+			t.Errorf("stacks/%s was not written (%v); since P3.3 task 3 a refusal costs only the refused operation, not the whole domain, and stacks has clean operations besides StackMigrate/StackList", name, statErr)
 		}
 	}
+	actionsSrc, err := os.ReadFile(filepath.Join(toolsDir, "stacks", "actions.go"))
+	if err != nil {
+		t.Fatalf("read stacks/actions.go: %v", err)
+	}
+	inputsSrc, err := os.ReadFile(filepath.Join(toolsDir, "stacks", "inputs.go"))
+	if err != nil {
+		t.Fatalf("read stacks/inputs.go: %v", err)
+	}
+	if !strings.Contains(string(actionsSrc), "func stackDelete(") {
+		t.Errorf("stacks/actions.go does not declare stackDelete, a clean operation unrelated to either refusal:\n%s", actionsSrc)
+	}
+	for _, name := range []string{"stackMigrate", "stackList", "stackMigrateInput", "stackListInput", "StackMigrate", "StackList"} {
+		if strings.Contains(string(actionsSrc), name) {
+			t.Errorf("stacks/actions.go contains %q, want nothing contributed by a refused operation", name)
+		}
+		if strings.Contains(string(inputsSrc), name) {
+			t.Errorf("stacks/inputs.go contains %q, want nothing contributed by a refused operation", name)
+		}
+	}
+
 	for _, name := range []string{"actions.go", "inputs.go"} {
 		if _, statErr := os.Stat(filepath.Join(toolsDir, "tags", name)); statErr != nil {
 			t.Errorf("tags/%s was not written (%v); stacks' refusals must not block an unrelated, later-sorting domain's regeneration", name, statErr)
