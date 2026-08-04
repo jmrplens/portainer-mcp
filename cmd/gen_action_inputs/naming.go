@@ -111,7 +111,16 @@ func consumeInitialisms(run []rune) []string {
 
 // goFieldName renders wire identifier words as an exported Go field name:
 // each word is title-cased, except a word recognised as a common initialism
-// (case-insensitively), which is rendered fully upper-case.
+// (case-insensitively), which is rendered fully upper-case — and, since a
+// plural initialism ("TagIDs", "ClusterIPs") is common throughout the
+// vendored spec, a trailing lower-case "s" pluraliser attached to a
+// recognised initialism is rendered lower-case after it ("IDs", "IPs"),
+// never upper-cased into "IDS"/"IPS" the way an ordinary word's title-casing
+// would. See trailingPluralInitialism and isPluralSuffixWord's doc comments
+// for the two distinct shapes splitWords hands this function for the same
+// wire convention, and
+// TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWireTag
+// for both proved against the real spec's 13 affected property names.
 //
 // goFieldName is not injective, and neither is bodyJSONTag below: two
 // distinct wire property names can render to the same output. "TLSSkipVerify"
@@ -124,7 +133,16 @@ func consumeInitialisms(run []rune) []string {
 // does exactly that for every struct this generator emits.
 func goFieldName(words []string) string {
 	var out []rune
-	for _, w := range words {
+	for i, w := range words {
+		if stem, ok := trailingPluralInitialism(w); ok {
+			out = append(out, []rune(upper(stem))...)
+			out = append(out, 's')
+			continue
+		}
+		if isPluralSuffixWord(w) && i > 0 && commonInitialisms[upper(words[i-1])] {
+			out = append(out, 's')
+			continue
+		}
 		if commonInitialisms[upper(w)] {
 			out = append(out, []rune(upper(w))...)
 			continue
@@ -132,6 +150,55 @@ func goFieldName(words []string) string {
 		out = append(out, []rune(title(w))...)
 	}
 	return string(out)
+}
+
+// trailingPluralInitialism reports whether w is one of splitWords' merged
+// words that pairs a recognised initialism with a trailing lower-case "s"
+// pluraliser as a single word — the shape produced when the wire name spells
+// the initialism with a single, otherwise-unmatched capital letter
+// (oapi-codegen's plain style: "TagIds" splits as ["Tag", "Ids"], with "Ids"
+// one merged word — see splitWords' doc comment on why a lone unmatched
+// capital swallows the whole lower-case run that follows it, rather than
+// standing alone). "Ids" itself is not a commonInitialisms entry (only "ID"
+// is), so goFieldName's ordinary upper(w) lookup already misses it and would
+// otherwise title-case the whole word into "Ids"; this lets the stem ("Id")
+// be recognised and upper-cased on its own, with the pluraliser appended
+// lower-case, rendering "IDs" instead.
+//
+// A false match is only possible if some other, unrelated word happens to
+// both end in a lower-case "s" and have an initialism for its stem — checked
+// against every entry in commonInitialisms when this was added, and true of
+// none of them (nothing in the table ends in a letter whose removal leaves
+// another entry in the same table).
+func trailingPluralInitialism(w string) (stem string, ok bool) {
+	r := []rune(w)
+	if len(r) < 2 || r[len(r)-1] != 's' {
+		return "", false
+	}
+	stem = string(r[:len(r)-1])
+	if !commonInitialisms[upper(stem)] {
+		return "", false
+	}
+	return stem, true
+}
+
+// isPluralSuffixWord reports whether w is the standalone one-letter "s"
+// word splitWords emits on its own — the shape produced when the wire name
+// spells its initialism out in full, two-or-more capitals, before the
+// pluraliser ("TagIDs" splits as ["Tag", "ID", "s"]: the merge that produces
+// trailingPluralInitialism's single-word shape only fires when the
+// initialism run left exactly one, unmatched capital; a fully-matched
+// initialism run of two or more letters never triggers it, so the trailing
+// lower-case "s" is left as its own word instead). Left to goFieldName's
+// general title(w) case, this lone "s" upper-cases to "S", rendering
+// "TagIDS" — worse than never special-casing plurals at all, because a
+// recognised initialism is never otherwise followed by a lower-case letter
+// in this project's output. goFieldName only takes this branch once it has
+// also confirmed the immediately preceding word is itself a recognised
+// initialism, so an unrelated word that happens to be split with a trailing
+// single "s" word for some other reason is untouched.
+func isPluralSuffixWord(w string) bool {
+	return w == "s"
 }
 
 // bodyJSONTag renders wire identifier words as the lower-camel-case JSON tag
