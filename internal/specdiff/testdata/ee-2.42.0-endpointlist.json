@@ -1,0 +1,340 @@
+{
+  "components": {
+    "requestBodies": {},
+    "schemas": {}
+  },
+  "info": {
+    "title": "EndpointList fixture (2.42.0)",
+    "version": "2.42.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/endpoints": {
+      "get": {
+        "description": "List all environments(endpoints) based on the current user authorizations. Will\nreturn all environments(endpoints) if using an administrator or team leader account otherwise it will\nonly return authorized environments(endpoints).\n**Access policy**: restricted",
+        "operationId": "EndpointList",
+        "parameters": [
+          {
+            "description": "Start searching from",
+            "in": "query",
+            "name": "start",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Limit results to this value",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sort results by this value",
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "enum": [
+                "Name",
+                "Group",
+                "Status",
+                "LastCheckIn",
+                "EdgeID",
+                "PlatformType",
+                "Health",
+                "Id"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Order sorted results by desc/asc",
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "If true, an `X-Update-Available` header will be added to the response to indicate if an update is available",
+            "in": "query",
+            "name": "updateInformation",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "If true, an `X-K8S-Env-Admin` header will be added to the response to indicate if the user is a K8S environment admin for any of the returned environments",
+            "in": "query",
+            "name": "k8sEnvAdmin",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Search query",
+            "in": "query",
+            "name": "search",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "List environments(endpoints) of these groups",
+            "explode": false,
+            "in": "query",
+            "name": "groupIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "List environments(endpoints) by this status",
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "List environments(endpoints) of this type",
+            "explode": false,
+            "in": "query",
+            "name": "types",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "search environments(endpoints) with these tags (depends on tagsPartialMatch)",
+            "explode": false,
+            "in": "query",
+            "name": "tagIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "If true, will return environment(endpoint) which has one of tagIds, if false (or missing) will return only environments(endpoints) that has all the tags",
+            "in": "query",
+            "name": "tagsPartialMatch",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "will return only these environments(endpoints)",
+            "explode": false,
+            "in": "query",
+            "name": "endpointIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "will exclude these environments(endpoints)",
+            "explode": false,
+            "in": "query",
+            "name": "excludeIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "If true, will return environment(endpoint) that were provisioned",
+            "in": "query",
+            "name": "provisioned",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "will return only environments with on of these agent versions",
+            "explode": false,
+            "in": "query",
+            "name": "agentVersions",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "if exists true show only edge async agents, false show only standard edge agents. if missing, will show both types (relevant only for edge agents)",
+            "in": "query",
+            "name": "edgeAsync",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "if true, show only untrusted edge agents, if false show only trusted edge agents (relevant only for edge agents)",
+            "in": "query",
+            "name": "edgeDeviceUntrusted",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "if bigger then zero, show only edge agents that checked-in in the last provided seconds (relevant only for edge agents)",
+            "in": "query",
+            "name": "edgeCheckInPassedSeconds",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "description": "if true, the snapshot data won't be retrieved",
+            "in": "query",
+            "name": "excludeSnapshots",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "will return only environments(endpoints) with this name",
+            "in": "query",
+            "name": "name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter environments by partial name match (case-insensitive, searches name only)",
+            "in": "query",
+            "name": "nameFilter",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "only applied when edgeStackId exists. Filter the returned environments based on their deployment status in the stack (not the environment status!)",
+            "in": "query",
+            "name": "edgeStackStatus",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "List environments(endpoints) of these edge groups",
+            "explode": false,
+            "in": "query",
+            "name": "edgeGroupIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Exclude environments(endpoints) of these edge groups",
+            "explode": false,
+            "in": "query",
+            "name": "excludeEdgeGroupIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "If true, will apply policy data to the returned environments(endpoints)",
+            "in": "query",
+            "name": "policy",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "List environments(endpoints) associated with these policies",
+            "explode": false,
+            "in": "query",
+            "name": "policyIds",
+            "schema": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter environments by policy status (applied, failed, in_progress, warning, not_supported). Only applies when policyIds is specified.",
+            "explode": false,
+            "in": "query",
+            "name": "policyStatus",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/portaineree.Endpoint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Endpoints"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "jwt": []
+          }
+        ],
+        "summary": "List environments(endpoints)",
+        "tags": [
+          "endpoints"
+        ]
+      }
+    }
+  }
+}
