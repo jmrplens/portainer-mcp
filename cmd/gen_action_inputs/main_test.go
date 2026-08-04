@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,52 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
+
+// captureStderr redirects the package-global os.Stderr for the duration of
+// fn and returns everything written to it. run()'s own per-operation refusal
+// detail — which domain, which operation, which reason — is printed only to
+// stderr (see main.go's refusals): the error run() returns carries just the
+// final count-and-domain-count summary, by design, so the detailed report
+// still reaches a human even though the run only fails once, at the very
+// end. A test asserting on that per-operation detail has to read it here,
+// not off err.Error().
+//
+// Reads through a pipe on a separate goroutine so a write inside fn cannot
+// block on a full pipe buffer waiting for a reader that only starts once fn
+// has already returned.
+//
+// Not safe to call from a test that also calls t.Parallel(): it mutates the
+// package-global os.Stderr for as long as fn runs, and a concurrently
+// running parallel test in this package writing to os.Stderr through the
+// same variable would have its own output captured here instead (or vice
+// versa). Every caller of this helper in this package therefore omits
+// t.Parallel(), which is also what keeps it safe: Go only actually runs
+// t.Parallel() tests concurrently with each other, after every non-parallel
+// top-level test in the package has already finished.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(): %v", err)
+	}
+	original := os.Stderr
+	os.Stderr = w
+
+	captured := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		captured <- buf.String()
+	}()
+
+	fn()
+
+	os.Stderr = original
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	return <-captured
+}
 
 // TestDomainOperations_KnownDomain_AggregatesAcrossItsTags guards the normal
 // case: a domain covering more than one tag (as "cloud" does in the real
@@ -173,5 +221,74 @@ func TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec(t *testing.T) {
 
 	if err := checkDomainTagsCoverSpec(toolutil.DomainTags, byTag); err != nil {
 		t.Fatalf("checkDomainTagsCoverSpec(toolutil.DomainTags, <real spec>) error = %v, want the curated table to fully cover the vendored spec's tags", err)
+	}
+}
+
+// TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten
+// is Task 1's own acceptance test: "stacks" (freshly created, zero
+// hand-written files — exactly what a domain looks like the moment before
+// its first scaffold) has two operations that refuse for two genuinely
+// different reasons in the real, unmodified vendored spec, with no fixture
+// mutation needed to produce either:
+//
+//   - StackMigrate refuses inside assembleOperationFields: its query
+//     parameter "endpointId" and its body's "EndpointID" property both render
+//     the JSON name "endpointId" (a field collision) — the exact real case
+//     main.go's own doc comment names, and the reason a hand-written override
+//     cannot suppress it (assembleOperationFields runs before overrideReason).
+//   - StackList refuses inside checkCredentialRedaction: its success response
+//     nests a GitConfig.Authentication.Password, and this freshly created
+//     domain has declared no redactStackList wrapper yet.
+//
+// The trap this guards against (this project's own standing warning, caught
+// by seven implementers in a row before it reached this one): a test with
+// only one refusable operation cannot tell "collects it" apart from "aborts
+// on it" — aborting on the only refusal in a domain looks, from a report
+// with one entry, identical to correctly collecting it. Asserting both
+// StackMigrate and StackList are named is what a leftover abort-on-first
+// implementation cannot pass, since it would report exactly one of the two
+// (whichever assembleOperationFields or checkCredentialRedaction reaches
+// first) and return before the other is ever checked.
+//
+// "tags" — real, already hand-written, sorting after "stacks" — is the
+// ordering-hazard half: before this fix, any refusal in "stacks" aborted
+// run() immediately, so "tags" (and every other domain sorting after
+// "stacks") was never even attempted. Asserting it is still fully written is
+// what makes that regression concrete rather than assumed.
+func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten(t *testing.T) {
+	toolsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(toolsDir, "stacks"), 0o750); err != nil {
+		t.Fatalf("mkdir stacks: %v", err)
+	}
+	freshDomainDir(t, toolsDir, "tags")
+
+	var runErr error
+	stderr := captureStderr(t, func() {
+		runErr = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+	})
+
+	if runErr == nil {
+		t.Fatal("run() = nil error, want a refusal: stacks has zero hand-written files, and StackMigrate's field collision refuses regardless of any override")
+	}
+	if !strings.Contains(runErr.Error(), "refused generation") {
+		t.Errorf("error = %q, want the deferred-refusal summary", runErr)
+	}
+
+	if !strings.Contains(stderr, "StackMigrate") || !strings.Contains(stderr, "contributed by both") {
+		t.Errorf("stderr report does not name StackMigrate's field collision (\"endpointId\" contributed by both query parameter and body):\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "StackList") || !strings.Contains(stderr, "credential-shaped") {
+		t.Errorf("stderr report does not also name StackList's unrelated refusal (a credential-shaped response field with no redaction wrapper declared):\n%s", stderr)
+	}
+
+	for _, name := range []string{"actions.go", "inputs.go"} {
+		if _, statErr := os.Stat(filepath.Join(toolsDir, "stacks", name)); !os.IsNotExist(statErr) {
+			t.Errorf("stacks/%s exists (stat error %v), want it unwritten: a domain with any refused operation must not be trusted to write", name, statErr)
+		}
+	}
+	for _, name := range []string{"actions.go", "inputs.go"} {
+		if _, statErr := os.Stat(filepath.Join(toolsDir, "tags", name)); statErr != nil {
+			t.Errorf("tags/%s was not written (%v); stacks' refusals must not block an unrelated, later-sorting domain's regeneration", name, statErr)
+		}
 	}
 }

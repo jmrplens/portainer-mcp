@@ -61,28 +61,52 @@ func overriddenDomainDir(t *testing.T, redactors []string) string {
 // the acceptance criterion: an overridden operation whose response is
 // credential-shaped, with no statement that it redacts, must stop generation
 // exactly as an ungenerated one already does.
+//
+// Since Task 1 (see main.go's refusals), run() no longer returns this
+// refusal's own detail directly — every per-operation refusal is collected
+// and only a domain/count summary is returned, so the whole run is not
+// aborted by a single overridden operation with no acknowledgement. The
+// operation, its wrapper name, its credential field and the explanation are
+// still reported, but only to stderr — captureStderr reads that, not
+// err.Error(). Not parallel: it redirects the package-global os.Stderr, which
+// a concurrently running t.Parallel() test elsewhere in this file could also
+// be writing to (see captureStderr's own doc comment).
 func TestUnit_Run_OverriddenCredentialOperationWithoutAcknowledgementIsRefused(t *testing.T) {
-	t.Parallel()
 	toolsDir := overriddenDomainDir(t, nil)
 
-	err := run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+	var err error
+	stderr := captureStderr(t, func() {
+		err = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+	})
 	if err == nil {
 		t.Fatal("run() = nil error, want a refusal: registries' inspect/create/update/list are overridden, their responses carry a Password, and no redaction wrapper is declared")
+	}
+	if !strings.Contains(err.Error(), "refused generation") {
+		t.Errorf("error = %q, want the deferred-refusal summary", err)
 	}
 	// Operations are processed in sorted order, so the first refusal is
 	// whichever credential-shaped operation sorts first — the assertion is on
 	// the wrapper naming convention, not on which of the four is reported.
-	if !strings.Contains(err.Error(), "redactRegistry") {
-		t.Errorf("error = %q, want it to name the redact<OperationID> wrapper the domain must declare", err)
+	if !strings.Contains(stderr, "redactRegistry") {
+		t.Errorf("stderr = %q, want it to name the redact<OperationID> wrapper the domain must declare", stderr)
 	}
-	if !strings.Contains(err.Error(), "Password") {
-		t.Errorf("error = %q, want it to name the credential-shaped field that triggered the refusal", err)
+	if !strings.Contains(stderr, "Password") {
+		t.Errorf("stderr = %q, want it to name the credential-shaped field that triggered the refusal", stderr)
 	}
 	// The message must say why the hand-written case is different, or the
 	// author's only clue is a function name with no explanation of what
 	// declaring it is meant to assert.
-	if !strings.Contains(err.Error(), "hand-written handler") {
-		t.Errorf("error = %q, want it to explain that this operation is covered by hand-written code the generator cannot inspect", err)
+	if !strings.Contains(stderr, "hand-written handler") {
+		t.Errorf("stderr = %q, want it to explain that this operation is covered by hand-written code the generator cannot inspect", stderr)
+	}
+	// And the poisoned domain itself must still be left unwritten, exactly as
+	// it was before Task 1: a hand-written-only domain producing zero
+	// generated files today has no actions.go/inputs.go to check for absence
+	// against a real baseline, so this only re-asserts run()'s own contract,
+	// covered end-to-end (with a real baseline to diff against) by
+	// TestUnit_Run_TwoRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten.
+	if _, statErr := os.Stat(filepath.Join(toolsDir, "registries", "actions.go")); !os.IsNotExist(statErr) {
+		t.Errorf("registries/actions.go exists (stat error %v), want it unwritten", statErr)
 	}
 }
 

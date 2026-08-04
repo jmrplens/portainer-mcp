@@ -320,7 +320,7 @@ func TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated(t *tes
 			if err == nil {
 				t.Fatalf("run() = nil error, want a refusal: %s's response schema cannot be resolved", tc.operationID)
 			}
-			if !strings.Contains(err.Error(), "could not be checked for credential-shaped response fields") {
+			if !strings.Contains(err.Error(), "refused generation") {
 				t.Errorf("error = %q, want the deferred-refusal summary", err)
 			}
 

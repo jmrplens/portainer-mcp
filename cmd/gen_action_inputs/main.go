@@ -21,26 +21,33 @@
 // express a free-form object with no declared properties and no typed
 // additionalProperties, resolve a $ref outside #/components/schemas,
 // generate for an operation whose request body declares more than one
-// content type, or merge two of {path parameter, query parameter, body
-// property} that contribute the same wire name. Every one of these aborts
-// the whole run with the offending operation named — at 441 operations
-// nobody reads the generated output, so anything this command emits must be
-// trustworthy without review, and a refusal that is loud beats a struct that
-// is silently wrong.
+// content type, merge two of {path parameter, query parameter, body
+// property} that contribute the same wire name, emit a handler for an
+// operation with no matching generated client method (or one shaped
+// differently than assembleOperationFields expects), or emit a bare handler
+// for an operation whose success response can carry a credential-shaped
+// field with no domain-supplied redaction wrapper declared. At 441
+// operations nobody reads the generated output, so anything this command
+// emits must be trustworthy without review, and a refusal that is loud beats
+// a struct that is silently wrong.
 //
-// One refusal is deliberately narrower than "abort the whole run": an
-// operation whose success-response schema cannot be resolved at all (see
-// errResponseSchemaUnresolvable) leaves *its own domain* unwritten and is
-// reported by name at the end, while every other domain still regenerates.
-// The command still exits non-zero. Aborting globally instead meant one
-// defect in one operation — the vendored spec's self-referential
-// portaineree.EdgeConfig was the real case — stopped all 46 domain
-// directories from regenerating, turning CI's regeneration-freshness check
-// red for the whole repository over a fault in one of them.
+// None of these refusals aborts the whole run. Every one is scoped to *the
+// one domain the offending operation belongs to*: the operation is named,
+// its domain is left unwritten, and every other domain still regenerates —
+// see refusals in run() below. The command still exits non-zero, since an
+// operation nobody can prove safe to generate for never gets a handler, but
+// it fails having regenerated everything it legitimately could. Before this
+// applied uniformly, only an unresolvable success-response schema (see
+// errResponseSchemaUnresolvable) got this treatment; every other refusal
+// above returned straight out of run()'s domain loop, so one defect in one
+// operation stopped every domain sorting after it, alphabetically, from
+// regenerating — the vendored spec's self-referential portaineree.EdgeConfig
+// was the case that first exposed it, and a field collision in
+// stacks.StackMigrate later stopped every one of the twelve domains sorting
+// after "stacks" the same way, discovered before any of the twelve existed.
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -216,9 +223,23 @@ func run(args []string) error {
 
 	res := &resolver{doc: doc}
 	written := 0
-	// unresolvable collects the per-operation refusals that must not abort the
-	// loop; see errResponseSchemaUnresolvable.
-	var unresolvable []string
+	// refusals collects every per-operation refusal that must not abort the
+	// whole run: a field collision, an unsupported parameter location, a
+	// request body with more than one content type, an unresolvable
+	// success-response schema (see errResponseSchemaUnresolvable), a
+	// credential-shaped response field with no domain-supplied redaction
+	// wrapper, a generated client method this generator's own derivation
+	// disagrees with, or an operation this generator otherwise cannot derive
+	// an ActionSpec for. Each entry names its domain, operation and reason
+	// (formatted "domain %s: ..." so a lexical sort groups the final report by
+	// domain); the domain that produced it is left unwritten, every other
+	// domain still regenerates, and the run still exits non-zero — see the
+	// report at the end of run().
+	var refusals []string
+	// poisonedDomains is the set of domain names refusals actually belongs to,
+	// tracked directly rather than re-parsed out of the formatted strings
+	// above, purely to state the domain count in the final report.
+	poisonedDomains := map[string]bool{}
 	for _, domainName := range domains {
 		ops, err := domainOperations(domainName, toolutil.DomainTags, byTag)
 		if err != nil {
@@ -248,11 +269,14 @@ func run(args []string) error {
 		var specEntries []specEntry
 		var overriddenOps []string
 		var redactionGuards []redactionGuard
-		// domainPoisoned: an operation in this domain could not be checked for
-		// credential-shaped response fields at all, so nothing about this
-		// domain can be trusted enough to write. Every other domain still
-		// generates; the run reports and fails at the end.
+		// domainPoisoned: at least one operation in this domain was refused
+		// (see refusals above), so nothing about this domain can be trusted
+		// enough to write. Every other domain still generates; the run
+		// reports and fails at the end. domainRefusalCount is this domain's
+		// own share of refusals, printed immediately below so a reviewer does
+		// not have to count the final report by domain themselves.
 		domainPoisoned := false
+		domainRefusalCount := 0
 		for _, op := range ops {
 			structName := inputStructName(op.OperationID)
 			var nested []structSpec
@@ -264,7 +288,23 @@ func run(args []string) error {
 			// than risked.
 			fields, pathOrder, err := assembleOperationFields(op, res, doc, structName, &nested)
 			if err != nil {
-				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+				// A field collision, an unsupported parameter location or a
+				// request body with more than one content type: a refusal about
+				// this one operation, not a reason to abort the other 42
+				// domains — see refusals' own doc comment above. The domain
+				// holding it is left unwritten and named at the end of the run,
+				// which still exits non-zero. This continues rather than
+				// breaks out of this domain's own loop: every other operation
+				// in it is still checked, so a domain with two
+				// independently-refusable operations gets both reported in one
+				// run, not just the first one found (see the standing warning
+				// about non-discriminating tests this project has hit before:
+				// a test with only one refusable operation cannot tell
+				// "collects it" apart from "aborts on it").
+				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
+				domainPoisoned = true
+				domainRefusalCount++
+				continue
 			}
 			// A parameterless action needs no Input struct at all: ActionSpec.Input
 			// stays nil and InputSchema publishes the empty-object schema — the
@@ -309,18 +349,18 @@ func run(args []string) error {
 			// how a hand-written handler states that it redacts.
 			redactWith, err := checkCredentialRedaction(op, res, overrides.funcNames, overridden)
 			if err != nil {
-				// An unresolvable response schema is a refusal about this one
-				// operation, not a reason to stop generating the other 45
-				// domains — see errResponseSchemaUnresolvable. The domain
+				// Whether the success response could not be resolved at all
+				// (errResponseSchemaUnresolvable) or it resolved to a
+				// credential-shaped field with no domain-supplied redaction
+				// wrapper declared: both are a refusal about this one
+				// operation, not a reason to stop generating the other 42
+				// domains — see refusals' own doc comment above. The domain
 				// holding it is left unwritten and named at the end of the
 				// run, which still exits non-zero.
-				if errors.Is(err, errResponseSchemaUnresolvable) {
-					unresolvable = append(unresolvable,
-						fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
-					domainPoisoned = true
-					break
-				}
-				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
+				domainPoisoned = true
+				domainRefusalCount++
+				continue
 			}
 
 			// Recorded for generated and hand-written handlers alike: the
@@ -351,7 +391,15 @@ func run(args []string) error {
 
 			spec, err := buildHandlerSpec(domainName, op, fields, pathOrder, nested, inputStruct, redactWith)
 			if err != nil {
-				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+				// No generated client method for this operationId, one shaped
+				// differently than assembleOperationFields expects, or a
+				// wire-width mismatch checkWireWidth refuses to round-trip: a
+				// refusal about this one operation, handled the same way as
+				// every other one above.
+				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
+				domainPoisoned = true
+				domainRefusalCount++
+				continue
 			}
 			handlerSpecs = append(handlerSpecs, spec)
 
@@ -361,13 +409,17 @@ func run(args []string) error {
 			// rather than recomputed here.
 			actionFields, err := buildActionSpecFields(domainName, op, ceOperationIDs)
 			if err != nil {
-				return fmt.Errorf("%s %s (operationId %s): %w", op.Method, op.Path, op.OperationID, err)
+				refusals = append(refusals, fmt.Sprintf("domain %s: %s %s (operationId %s): %v", domainName, op.Method, op.Path, op.OperationID, err))
+				domainPoisoned = true
+				domainRefusalCount++
+				continue
 			}
 			specEntries = append(specEntries, specEntry{Fields: actionFields, HandlerFunc: spec.FuncName, InputStruct: inputStruct})
 		}
 
 		if domainPoisoned {
-			fmt.Fprintf(os.Stderr, "domain %s: skipped, an operation's success response schema could not be resolved (reported at the end of this run)\n", domainName)
+			poisonedDomains[domainName] = true
+			fmt.Fprintf(os.Stderr, "domain %s: skipped, %d operation(s) refused generation (reported at the end of this run)\n", domainName, domainRefusalCount)
 			continue
 		}
 
@@ -461,15 +513,18 @@ func run(args []string) error {
 
 	// Reported once, at the end, after every unaffected domain has been
 	// written: the run still fails, but it fails having regenerated
-	// everything it legitimately could, so the fix is a diff against one
-	// named domain rather than a repository-wide regeneration blackout.
-	if len(unresolvable) > 0 {
-		sort.Strings(unresolvable)
-		fmt.Fprintf(os.Stderr, "%d operation(s) whose success response schema could not be resolved; their domains were not written:\n", len(unresolvable))
-		for _, u := range unresolvable {
-			fmt.Fprintf(os.Stderr, "  - %s\n", u)
+	// everything it legitimately could, so the fix is a diff against the
+	// named domains rather than a repository-wide regeneration blackout.
+	// Every entry already starts with "domain <name>: ", so this lexical sort
+	// groups the report by domain rather than leaving it in whatever order
+	// domains happened to be poisoned in.
+	if len(refusals) > 0 {
+		sort.Strings(refusals)
+		fmt.Fprintf(os.Stderr, "%d operation(s) refused generation across %d domain(s); those domains were not written:\n", len(refusals), len(poisonedDomains))
+		for _, r := range refusals {
+			fmt.Fprintf(os.Stderr, "  - %s\n", r)
 		}
-		return fmt.Errorf("%d operation(s) could not be checked for credential-shaped response fields; see the list above", len(unresolvable))
+		return fmt.Errorf("%d operation(s) refused generation across %d domain(s); see the list above", len(refusals), len(poisonedDomains))
 	}
 	return nil
 }
