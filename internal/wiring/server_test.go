@@ -106,6 +106,19 @@ func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
 	t.Parallel()
 	catalog := testCatalog(t, actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
 
+	// metaWant is derived from the catalog's own domains, not a hand-maintained
+	// list: whichever domains AllSpecs() carries for this edition and version,
+	// the meta surface must expose exactly one tool per domain, plus status. A
+	// literal list here was an undocumented fifth site a new domain had to be
+	// registered at (docs/domain-wave-checklist.md Step 1.4 names four; this
+	// test was the fifth) — it went stale on every wave and failed the build
+	// with nothing pointing back at itself. See
+	// TestUnit_MetaToolExpectation_DetectsAnUnsurfacedDomain for proof this
+	// derivation still fails when a domain the catalog carries is not
+	// actually surfaced, rather than only ever comparing the catalog against
+	// itself.
+	metaWant := append([]string{"portainer_mcp_status"}, domainToolNames(catalog.Domains())...)
+
 	tests := []struct {
 		name    string
 		surface config.ToolSurface
@@ -119,9 +132,7 @@ func TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface(t *testing.T) {
 		{
 			name:    "meta",
 			surface: config.SurfaceMeta,
-			// One tool per domain: the catalog built from AllSpecs() carries
-			// exactly the system, tags and registries pilot domains.
-			want: []string{"portainer_mcp_status", "portainer_system", "portainer_tags", "portainer_registries"},
+			want:    metaWant,
 		},
 		{
 			name:    "individual",
@@ -248,5 +259,99 @@ func TestStatusTool_Call_NeverLeaksTheToken(t *testing.T) {
 	text := res.Content[0].(*mcp.TextContent).Text
 	if strings.Contains(text, "ptr_supersecret") {
 		t.Error("the status tool leaked the API token into its result")
+	}
+}
+
+// domainToolNames renders the meta surface's expected tool name for each
+// domain — "portainer_" prefixed, in the order given — so the two places
+// that need this mapping (the meta case above and the discrimination proof
+// below) cannot drift from each other independently of the real bug either
+// one might be papering over.
+func domainToolNames(domains []string) []string {
+	names := make([]string, len(domains))
+	for i, d := range domains {
+		names[i] = "portainer_" + d
+	}
+	return names
+}
+
+// stubDomainSurface is a tools.Surface stand-in that registers one tool per
+// catalog domain except those named in skip. It exists purely so
+// TestUnit_MetaToolExpectation_DetectsAnUnsurfacedDomain can build a server
+// whose registration is known to omit a domain the catalog carries, without
+// touching internal/tools/meta at all — this proof must not depend on, or
+// accidentally inherit correctness from, the very package the real meta case
+// exercises.
+type stubDomainSurface struct {
+	skip map[string]bool
+}
+
+func (s stubDomainSurface) Register(server *mcp.Server, catalog *actioncatalog.Catalog, _ tools.Deps) error {
+	for _, domain := range catalog.Domains() {
+		if s.skip[domain] {
+			continue
+		}
+		mcp.AddTool(server, &mcp.Tool{Name: "portainer_" + domain},
+			func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+				return &mcp.CallToolResult{}, nil, nil
+			})
+	}
+	return nil
+}
+
+// TestUnit_MetaToolExpectation_DetectsAnUnsurfacedDomain proves that deriving
+// `want` from catalog.Domains() (as the meta case in
+// TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface now does) is not a
+// tautology. Both sides of that comparison trace back to the same catalog,
+// which is exactly the shape of check the standing warning across this
+// wave's toolchain fixes calls out: eighteen non-discriminating checks so
+// far, every one because the assertion matched something the fixture itself
+// supplied. Here, a domain the catalog carries is deliberately left
+// unregistered by stubDomainSurface, and the same catalog-derived expectation
+// must still catch it — if it does not, the meta case's derivation is
+// worthless and reverting to a hand-maintained literal would be no worse.
+func TestUnit_MetaToolExpectation_DetectsAnUnsurfacedDomain(t *testing.T) {
+	t.Parallel()
+	catalog := testCatalog(t, actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	domains := catalog.Domains()
+	if len(domains) < 2 {
+		t.Fatalf("need at least two domains in the pilot catalog to drop one meaningfully, got %v", domains)
+	}
+	dropped := domains[0]
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "stub-domain-surface", Version: "0"}, nil)
+	stub := stubDomainSurface{skip: map[string]bool{dropped: true}}
+	if err := stub.Register(server, catalog, tools.Deps{}); err != nil {
+		t.Fatalf("stubDomainSurface.Register: %v", err)
+	}
+	session, ctx := connect(t, server)
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	got := make(map[string]bool, len(res.Tools))
+	for _, tool := range res.Tools {
+		got[tool.Name] = true
+	}
+
+	droppedTool := "portainer_" + dropped
+	if got[droppedTool] {
+		t.Fatalf("test setup bug: stubDomainSurface still registered %q despite being told to skip it", droppedTool)
+	}
+
+	// This is the discrimination check itself: want, derived exactly the way
+	// the meta case derives it, must notice droppedTool's absence.
+	want := domainToolNames(domains)
+	missing := false
+	for _, w := range want {
+		if !got[w] {
+			missing = true
+		}
+	}
+	if !missing {
+		t.Fatal("catalog-derived expectation did not notice a domain missing from registration: " +
+			"the comparison does not discriminate, and the meta case in " +
+			"TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface is a tautology")
 	}
 }

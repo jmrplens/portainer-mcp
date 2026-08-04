@@ -131,10 +131,19 @@ mechanical but must land in the same commit as the domain, never a follow-up.
 4. Wire the new domain's `Specs()` into every place that still collects
    domain packages by hand: `internal/wiring` (the real server), and each of
    `cmd/audit_1to1`, `cmd/audit_e2e_gaps` and `cmd/audit_discovery`'s own
-   `allCatalogSpecs`/`allSpecs` functions. There is no single registry yet —
-   each of these currently lists domains by hand, and a wave that forgets
-   one gets a build that compiles and an audit that silently ignores the
-   new domain.
+   `allCatalogSpecs`/`allSpecs` functions. That is four places, no more —
+   there is no single registry yet, each of these currently lists domains by
+   hand, and a wave that forgets one gets a build that compiles and an audit
+   that silently ignores the new domain.
+
+   `internal/wiring/server_test.go` is deliberately **not** a fifth place to
+   edit: its meta-surface test derives its expected tool list from
+   `AllSpecs()` itself (one tool per `catalog.Domains()` entry, plus status),
+   so it tracks whatever domains step 4 already registered without a further
+   hand edit. It briefly was a fifth, undocumented site — a hard-coded
+   literal there went stale on every wave and failed the build with no note
+   pointing back at itself — before being fixed to derive the expectation
+   instead of hard-coding it.
 
 
 ### Step 2 — Read the generated names
