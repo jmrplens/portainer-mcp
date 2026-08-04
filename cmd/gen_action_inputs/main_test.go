@@ -32,7 +32,7 @@ import (
 // t.Parallel(), which is also what keeps it safe: Go only actually runs
 // t.Parallel() tests concurrently with each other, after every non-parallel
 // top-level test in the package has already finished.
-func captureStderr(t *testing.T, fn func()) string {
+func captureStderr(t *testing.T, fn func()) (out string) {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -48,13 +48,24 @@ func captureStderr(t *testing.T, fn func()) string {
 		captured <- buf.String()
 	}()
 
-	fn()
+	// Deferred rather than run only after fn's normal return: if fn panics,
+	// or a future caller's fn calls t.Fatalf (which unwinds the goroutine via
+	// runtime.Goexit, not a panic this function's own stack could recover),
+	// code after a plain fn() call below would never run at all. os.Stderr
+	// would then stay pointed at the pipe writer for the rest of the package
+	// run, the drain goroutine above would never see w closed and so never
+	// return, and whatever fn had already written — including any panic
+	// output — would sit unread in the pipe forever.
+	defer func() {
+		os.Stderr = original
+		if cerr := w.Close(); cerr != nil {
+			t.Errorf("close pipe writer: %v", cerr)
+		}
+		out = <-captured
+	}()
 
-	os.Stderr = original
-	if err := w.Close(); err != nil {
-		t.Fatalf("close pipe writer: %v", err)
-	}
-	return <-captured
+	fn()
+	return
 }
 
 // TestDomainOperations_KnownDomain_AggregatesAcrossItsTags guards the normal
@@ -340,97 +351,109 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 	}
 }
 
-// TestUnit_Run_DeprecatedOperation_SkippedByDefault is I5's second half: a
-// vendored operation the specification itself marks "deprecated": true
-// (EndpointDeleteBatchDeprecated, DELETE /endpoints — the operationId itself
-// says so, and its generated client method carries a `// Deprecated:` doc
-// comment staticcheck's SA1019 flags) must contribute nothing at all by
-// default — no struct, no handler, no ActionSpec entry — rather than
-// generate normally and leave a deprecated-API call for a human to notice
-// later. Before this fix it generated exactly like any other operation:
-// endpoints/actions.go:77 and :81 in a real scaffold call
-// apigen.EndpointDeleteBatchDeprecatedJSONRequestBody and
-// c.API.EndpointDeleteBatchDeprecatedWithResponse, both deprecated.
+// TestUnit_Run_DeprecatedOperation_SkippedByDefaultUnlessOverridden is table-driven over I5's second half's
+// two cases, which share one fixture shape and differ only by whether a
+// hand-written override exists and by the expected report line:
 //
-// endpoints has no hand-written files in this fresh scaffold, so every
-// operation in it (deprecated or not) is generated from scratch; a real
-// non-deprecated operation (EndpointDelete, which needs no redaction
-// wrapper) is asserted present precisely so this test cannot pass merely
-// because the whole domain failed to write anything.
-func TestUnit_Run_DeprecatedOperation_SkippedByDefault(t *testing.T) {
-	toolsDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(toolsDir, "endpoints"), 0o750); err != nil {
-		t.Fatalf("mkdir endpoints: %v", err)
-	}
+//   - "default": a vendored operation the specification itself marks
+//     "deprecated": true (EndpointDeleteBatchDeprecated, DELETE /endpoints —
+//     the operationId itself says so, and its generated client method
+//     carries a `// Deprecated:` doc comment staticcheck's SA1019 flags) must
+//     contribute nothing at all by default — no struct, no handler, no
+//     ActionSpec entry — rather than generate normally and leave a
+//     deprecated-API call for a human to notice later. Before this fix it
+//     generated exactly like any other operation: endpoints/actions.go:77
+//     and :81 in a real scaffold called
+//     apigen.EndpointDeleteBatchDeprecatedJSONRequestBody and
+//     c.API.EndpointDeleteBatchDeprecatedWithResponse, both deprecated.
+//     endpoints has no other hand-written files in this fresh scaffold, so
+//     every operation in it (deprecated or not) is generated from scratch; a
+//     real non-deprecated operation (EndpointDelete, which needs no
+//     redaction wrapper) is asserted present precisely so this case cannot
+//     pass merely because the whole domain failed to write anything.
+//   - "hand override": the "unless explicitly asked" half — a domain author
+//     who has already declared a handler under the mechanical function name
+//     for a deprecated operationId gets it committed like any other
+//     overridden operation (the escape hatch scanHandOverrides/overrideReason
+//     already provides), rather than have the generator's own default skip
+//     silently override the human's explicit choice.
+//
+// The negative half of "hand override" is anchored on the exact line run()
+// prints for a skipped operation (see main.go's deprecatedOps append, "%s %s
+// (operationId %s)", listed under its own "  - " bullet) rather than two
+// independent substrings checked anywhere in the whole stderr blob:
+// "skipped as deprecated upstream" is a domain-wide header printed on its
+// own line, so requiring it and the operationId to both merely be *present
+// somewhere* in stderr would still pass if either appeared for an unrelated
+// reason — the operationId is also named on the "already covered by
+// hand-written code" line this case asserts next, and the header phrase
+// would reappear on its own if any other deprecated, unoverridden operation
+// ever joined this domain. The full bullet line this generator emits only
+// for a genuinely skipped EndpointDeleteBatchDeprecated is what actually
+// discriminates the two.
+func TestUnit_Run_DeprecatedOperation_SkippedByDefaultUnlessOverridden(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		writeOverride bool
+	}{
+		{"default", false},
+		{"hand override", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			toolsDir := t.TempDir()
+			domainDir := filepath.Join(toolsDir, "endpoints")
+			if err := os.MkdirAll(domainDir, 0o750); err != nil {
+				t.Fatalf("mkdir endpoints: %v", err)
+			}
+			if tc.writeOverride {
+				override := "package endpoints\n\nfunc endpointDeleteBatchDeprecated() {}\n"
+				if err := os.WriteFile(filepath.Join(domainDir, "override.go"), []byte(override), 0o600); err != nil {
+					t.Fatalf("write override.go: %v", err)
+				}
+			}
 
-	stderr := captureStderr(t, func() {
-		_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
-	})
+			stderr := captureStderr(t, func() {
+				_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+			})
 
-	if !strings.Contains(stderr, "skipped as deprecated upstream") {
-		t.Errorf("stderr does not report a deprecated-operation skip:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "EndpointDeleteBatchDeprecated") {
-		t.Errorf("stderr does not name EndpointDeleteBatchDeprecated as the skipped operation:\n%s", stderr)
-	}
+			skipLine := "  - DELETE /endpoints (operationId EndpointDeleteBatchDeprecated)"
+			inputsSrc, err := os.ReadFile(filepath.Join(domainDir, "inputs.go"))
+			if err != nil {
+				t.Fatalf("read endpoints/inputs.go: %v", err)
+			}
 
-	inputsSrc, err := os.ReadFile(filepath.Join(toolsDir, "endpoints", "inputs.go"))
-	if err != nil {
-		t.Fatalf("read endpoints/inputs.go: %v", err)
-	}
-	actionsSrc, err := os.ReadFile(filepath.Join(toolsDir, "endpoints", "actions.go"))
-	if err != nil {
-		t.Fatalf("read endpoints/actions.go: %v", err)
-	}
+			if tc.writeOverride {
+				if strings.Contains(stderr, skipLine) {
+					t.Errorf("stderr contains %q, want EndpointDeleteBatchDeprecated not reported as skipped: a hand-written override for it exists:\n%s", skipLine, stderr)
+				}
+				if !strings.Contains(stderr, "already covered by hand-written code") {
+					t.Errorf("stderr does not report EndpointDeleteBatchDeprecated as covered by the hand-written override:\n%s", stderr)
+				}
+				if !strings.Contains(string(inputsSrc), "endpointDeleteBatchDeprecatedInput") {
+					t.Errorf("endpoints/inputs.go does not declare endpointDeleteBatchDeprecatedInput, want the overridden operation's Input struct still committed:\n%s", inputsSrc)
+				}
+				return
+			}
 
-	for _, name := range []string{"EndpointDeleteBatchDeprecated", "endpointDeleteBatchDeprecated"} {
-		if strings.Contains(string(inputsSrc), name) {
-			t.Errorf("endpoints/inputs.go contains %q, want a deprecated operation to contribute nothing", name)
-		}
-		if strings.Contains(string(actionsSrc), name) {
-			t.Errorf("endpoints/actions.go contains %q, want a deprecated operation to contribute nothing", name)
-		}
-	}
+			if !strings.Contains(stderr, skipLine) {
+				t.Errorf("stderr does not contain %q, want the deprecated-operation skip reported:\n%s", skipLine, stderr)
+			}
 
-	if !strings.Contains(string(actionsSrc), "func endpointDelete(") {
-		t.Errorf("endpoints/actions.go does not declare endpointDelete, a clean, non-deprecated operation unrelated to the skip:\n%s", actionsSrc)
-	}
-}
-
-// TestUnit_Run_DeprecatedOperation_HandOverride_StillGenerates is the
-// "unless explicitly asked" half: a domain author who has already declared a
-// handler under the mechanical function name for a deprecated operationId
-// gets it committed like any other overridden operation (the escape hatch
-// scanHandOverrides/overrideReason already provides), rather than have the
-// generator's own default skip silently override the human's explicit
-// choice.
-func TestUnit_Run_DeprecatedOperation_HandOverride_StillGenerates(t *testing.T) {
-	toolsDir := t.TempDir()
-	domainDir := filepath.Join(toolsDir, "endpoints")
-	if err := os.MkdirAll(domainDir, 0o750); err != nil {
-		t.Fatalf("mkdir endpoints: %v", err)
-	}
-	override := "package endpoints\n\nfunc endpointDeleteBatchDeprecated() {}\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "override.go"), []byte(override), 0o600); err != nil {
-		t.Fatalf("write override.go: %v", err)
-	}
-
-	stderr := captureStderr(t, func() {
-		_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
-	})
-
-	if strings.Contains(stderr, "skipped as deprecated upstream") && strings.Contains(stderr, "EndpointDeleteBatchDeprecated") {
-		t.Errorf("stderr reports EndpointDeleteBatchDeprecated skipped as deprecated even though a hand-written override for it exists:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "already covered by hand-written code") {
-		t.Errorf("stderr does not report EndpointDeleteBatchDeprecated as covered by the hand-written override:\n%s", stderr)
-	}
-
-	inputsSrc, err := os.ReadFile(filepath.Join(domainDir, "inputs.go"))
-	if err != nil {
-		t.Fatalf("read endpoints/inputs.go: %v", err)
-	}
-	if !strings.Contains(string(inputsSrc), "endpointDeleteBatchDeprecatedInput") {
-		t.Errorf("endpoints/inputs.go does not declare endpointDeleteBatchDeprecatedInput, want the overridden operation's Input struct still committed:\n%s", inputsSrc)
+			actionsSrc, err := os.ReadFile(filepath.Join(domainDir, "actions.go"))
+			if err != nil {
+				t.Fatalf("read endpoints/actions.go: %v", err)
+			}
+			for _, name := range []string{"EndpointDeleteBatchDeprecated", "endpointDeleteBatchDeprecated"} {
+				if strings.Contains(string(inputsSrc), name) {
+					t.Errorf("endpoints/inputs.go contains %q, want a deprecated operation to contribute nothing", name)
+				}
+				if strings.Contains(string(actionsSrc), name) {
+					t.Errorf("endpoints/actions.go contains %q, want a deprecated operation to contribute nothing", name)
+				}
+			}
+			if !strings.Contains(string(actionsSrc), "func endpointDelete(") {
+				t.Errorf("endpoints/actions.go does not declare endpointDelete, a clean, non-deprecated operation unrelated to the skip:\n%s", actionsSrc)
+			}
+		})
 	}
 }

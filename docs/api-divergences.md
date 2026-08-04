@@ -46,7 +46,7 @@ binary — the whole domain.
 
 It is not true. Probed with an API key against a live server:
 
-```
+```text
 GET /api/docker/{env}/dashboard   -> 200
 GET /api/docker/{env}/images      -> 200
 GET /api/docker/{env}/snapshot            -> 404   (no snapshot yet; 404 means auth passed)

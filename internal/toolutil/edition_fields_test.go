@@ -139,21 +139,28 @@ func TestUnit_FieldEditions_CommaSuffixedEETagValue_IsTolerated(t *testing.T) {
 // panic reaching in through NumField.
 func TestUnit_FieldEditions_NilOrNonStruct_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	if got, err := FieldEditions(nil); got != nil || err != nil {
-		t.Errorf("FieldEditions(nil) = (%v, %v), want (nil, nil)", got, err)
-	}
-	if got, err := FieldEditions(reflect.TypeOf("")); got != nil || err != nil {
-		t.Errorf("FieldEditions(string) = (%v, %v), want (nil, nil)", got, err)
-	}
-
 	type input struct {
 		Name string `json:"name" edition:"EE"`
 	}
-	got, err := FieldEditions(reflect.TypeOf(&input{}))
-	if err != nil {
-		t.Fatalf("FieldEditions(*input) error = %v", err)
+	cases := []struct {
+		name    string
+		rt      reflect.Type
+		wantLen int
+	}{
+		{"nil type", nil, 0},
+		{"non-struct type", reflect.TypeOf(""), 0},
+		{"pointer to struct", reflect.TypeOf(&input{}), 1},
 	}
-	if len(got) != 1 {
-		t.Errorf("FieldEditions(*input) = %v, want the pointer dereferenced to the struct", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := FieldEditions(tc.rt)
+			if err != nil {
+				t.Fatalf("FieldEditions() error = %v", err)
+			}
+			if len(got) != tc.wantLen {
+				t.Errorf("FieldEditions() = %v, want %d gated field(s)", got, tc.wantLen)
+			}
+		})
 	}
 }

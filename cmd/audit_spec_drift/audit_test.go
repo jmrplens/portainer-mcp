@@ -607,40 +607,60 @@ func zeroFieldSpec() map[string]specOperation {
 	}
 }
 
-// TestUnit_AuditDrift_ZeroFieldAction_CountsTowardActionsWithZeroFields
-// proves the vacuous-comparison counter actually increments for an action
-// with nothing to compare — the case it was added to surface.
-func TestUnit_AuditDrift_ZeroFieldAction_CountsTowardActionsWithZeroFields(t *testing.T) {
+// TestUnit_AuditDrift_ZeroFieldAndPopulatedActions_CountActionsWithZeroFieldsCorrectly
+// is table-driven over the two cases ActionsWithZeroFields exists to tell
+// apart: an action with nothing to compare must count toward it (the
+// vacuous-comparison case the field was added to surface), and an action
+// that does compare a real field must not (or the counter would be
+// meaningless the moment every action happened to have at least one field).
+//
+// Both cases assert ActionsAudited and FieldsAudited before checking
+// ActionsWithZeroFields, not merely the zero-fields count on its own: a
+// populated-action case that only checked ActionsWithZeroFields == 0 would
+// pass just as happily if auditDrift silently skipped the fixture action
+// altogether (never auditing it, and so never counting it as zero-field
+// either) as it would for a correct implementation that genuinely compared
+// the one real field and found it non-vacuous — asserting FieldsAudited == 1
+// first is what tells those two apart.
+func TestUnit_AuditDrift_ZeroFieldAndPopulatedActions_CountActionsWithZeroFieldsCorrectly(t *testing.T) {
 	t.Parallel()
-	eeOps := zeroFieldSpec()
-	actions := []toolutil.ActionSpec{fixtureAction(fixtureOperationID, nil)}
-
-	result, err := auditDrift(eeOps, map[string]specOperation{}, actions, nil)
-	if err != nil {
-		t.Fatalf("auditDrift() error = %v", err)
-	}
-	if result.ActionsAudited != 1 {
-		t.Fatalf("auditDrift() ActionsAudited = %d, want 1", result.ActionsAudited)
-	}
-	if result.ActionsWithZeroFields != 1 {
-		t.Errorf("auditDrift() ActionsWithZeroFields = %d, want 1: the fixture operation declares no parameters and no body", result.ActionsWithZeroFields)
-	}
-}
-
-// TestUnit_AuditDrift_ActionWithFields_DoesNotCountTowardActionsWithZeroFields
-// is the discriminating other half: an action that does compare a real
-// field must not be miscounted as vacuous, or the counter would be
-// meaningless the moment every action happened to have at least one field.
-func TestUnit_AuditDrift_ActionWithFields_DoesNotCountTowardActionsWithZeroFields(t *testing.T) {
-	t.Parallel()
-	eeOps := singleFieldSpec("string", "")
-	actions := []toolutil.ActionSpec{fixtureAction(fixtureOperationID, fixtureInputNoDescription{})}
-
-	result, err := auditDrift(eeOps, map[string]specOperation{}, actions, nil)
-	if err != nil {
-		t.Fatalf("auditDrift() error = %v", err)
-	}
-	if result.ActionsWithZeroFields != 0 {
-		t.Errorf("auditDrift() ActionsWithZeroFields = %d, want 0: the fixture operation declares one real field", result.ActionsWithZeroFields)
+	for _, tc := range []struct {
+		name                      string
+		eeOps                     map[string]specOperation
+		actions                   []toolutil.ActionSpec
+		wantFieldsAudited         int
+		wantActionsWithZeroFields int
+	}{
+		{
+			name:                      "zero field action",
+			eeOps:                     zeroFieldSpec(),
+			actions:                   []toolutil.ActionSpec{fixtureAction(fixtureOperationID, nil)},
+			wantFieldsAudited:         0,
+			wantActionsWithZeroFields: 1,
+		},
+		{
+			name:                      "action with fields",
+			eeOps:                     singleFieldSpec("string", ""),
+			actions:                   []toolutil.ActionSpec{fixtureAction(fixtureOperationID, fixtureInputNoDescription{})},
+			wantFieldsAudited:         1,
+			wantActionsWithZeroFields: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := auditDrift(tc.eeOps, map[string]specOperation{}, tc.actions, nil)
+			if err != nil {
+				t.Fatalf("auditDrift() error = %v", err)
+			}
+			if result.ActionsAudited != 1 {
+				t.Fatalf("auditDrift() ActionsAudited = %d, want 1", result.ActionsAudited)
+			}
+			if result.FieldsAudited != tc.wantFieldsAudited {
+				t.Fatalf("auditDrift() FieldsAudited = %d, want %d", result.FieldsAudited, tc.wantFieldsAudited)
+			}
+			if result.ActionsWithZeroFields != tc.wantActionsWithZeroFields {
+				t.Errorf("auditDrift() ActionsWithZeroFields = %d, want %d", result.ActionsWithZeroFields, tc.wantActionsWithZeroFields)
+			}
+		})
 	}
 }

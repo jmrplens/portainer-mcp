@@ -127,6 +127,66 @@ func TestUnit_BuildReport_CosmeticFinding_IsMarkedDistinctlyFromGating(t *testin
 	})
 }
 
+// TestUnit_BuildReport_EditionResult_ReportsPopulatedOrNilCorrectly is
+// table-driven over the two edition-result branches buildReport's "Fields
+// audited" line takes: every test above this one passes a non-nil,
+// zero-valued *editionFieldCountsResult and asserts nothing about the
+// resulting text, so buildReport could omit the zero-field count, swap CE
+// and EE, or break the nil fallback without failing any of them.
+//
+// The populated case uses four distinct numbers (EE.Fields=51, EE.Actions=19,
+// CE.Fields=40, CE.Actions=15) precisely so a swapped pair (EE and CE
+// exchanged, or Fields and Actions exchanged) produces a report that does
+// not contain the expected substring — matching numbers by coincidence
+// (e.g. a fixture where CE.Fields also happened to equal EE.Fields) would
+// not catch a swap at all. The nil case asserts both that the plain
+// fallback line still appears and that neither edition's own fragment does,
+// so a nil editionResult cannot be silently treated as "zero-valued and
+// populated".
+func TestUnit_BuildReport_EditionResult_ReportsPopulatedOrNilCorrectly(t *testing.T) {
+	t.Parallel()
+	baseResult := &auditResult{ActionsAudited: 19, FieldsAudited: 51}
+
+	for _, tc := range []struct {
+		name          string
+		editionResult *editionFieldCountsResult
+		wantContains  []string
+		wantAbsent    []string
+	}{
+		{
+			name: "populated edition result names both editions distinctly",
+			editionResult: &editionFieldCountsResult{
+				EE: editionFieldCounts{Actions: 19, Fields: 51},
+				CE: editionFieldCounts{Actions: 15, Fields: 40},
+			},
+			wantContains: []string{
+				"Fields audited: 51 (51 published to Business Edition across 19 actions, 40 to Community Edition across 15 actions)",
+			},
+		},
+		{
+			name:          "nil edition result falls back to the plain line",
+			editionResult: nil,
+			wantContains:  []string{"Fields audited: 51\n"},
+			wantAbsent:    []string{"Business Edition", "Community Edition"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			report := buildReport(baseResult, &credentialAuditResult{}, &minimumAuditResult{}, tc.editionResult)
+			for _, want := range tc.wantContains {
+				if !strings.Contains(report, want) {
+					t.Errorf("buildReport() = %q, want it to contain %q", report, want)
+				}
+			}
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(report, absent) {
+					t.Errorf("buildReport() = %q, want it not to contain %q for a nil edition result", report, absent)
+				}
+			}
+		})
+	}
+}
+
 // TestUnit_BuildReport_OverriddenFinding_IsMarkedDistinctlyFromCosmetic
 // proves a ChangeTitle/ChangeOperationDescription finding whose catalog side
 // is a deliberate toolutil.WithNarrative override (AfterOverridden) is

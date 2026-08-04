@@ -212,7 +212,7 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 	}
 	editionResult, err := auditEditionFieldCounts(actions, serverVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("audit edition field counts: %w", err)
 	}
 
 	if _, err := fmt.Fprint(w, buildReport(result, credResult, minResult, editionResult)); err != nil {

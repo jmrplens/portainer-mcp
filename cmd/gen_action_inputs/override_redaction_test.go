@@ -104,7 +104,7 @@ func TestUnit_Run_OverriddenCredentialOperationWithoutAcknowledgementIsRefused(t
 	// generated files today has no actions.go/inputs.go to check for absence
 	// against a real baseline, so this only re-asserts run()'s own contract,
 	// covered end-to-end (with a real baseline to diff against) by
-	// TestUnit_Run_TwoRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten.
+	// TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten.
 	if _, statErr := os.Stat(filepath.Join(toolsDir, "registries", "actions.go")); !os.IsNotExist(statErr) {
 		t.Errorf("registries/actions.go exists (stat error %v), want it unwritten", statErr)
 	}

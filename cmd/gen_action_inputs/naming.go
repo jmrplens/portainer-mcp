@@ -170,13 +170,24 @@ func goFieldName(words []string) string {
 // against every entry in commonInitialisms when this was added, and true of
 // none of them (nothing in the table ends in a letter whose removal leaves
 // another entry in the same table).
+//
+// This is trailingPluralInitialismIn pinned to commonInitialisms, the only
+// table goFieldName may ever consult (see goFieldName's own doc comment);
+// actionGoFieldName below calls trailingPluralInitialismIn directly, pinned
+// to actionInitialisms instead.
 func trailingPluralInitialism(w string) (stem string, ok bool) {
+	return trailingPluralInitialismIn(w, commonInitialisms)
+}
+
+// trailingPluralInitialismIn is trailingPluralInitialism's check,
+// parameterized over which initialism table the stem is looked up against.
+func trailingPluralInitialismIn(w string, initialisms map[string]bool) (stem string, ok bool) {
 	r := []rune(w)
 	if len(r) < 2 || r[len(r)-1] != 's' {
 		return "", false
 	}
 	stem = string(r[:len(r)-1])
-	if !commonInitialisms[upper(stem)] {
+	if !initialisms[upper(stem)] {
 		return "", false
 	}
 	return stem, true
@@ -278,8 +289,8 @@ func exportedName(id string) string {
 // writes `Input: tagCreateInput{}` and every handler already declares `var
 // params tagCreateInput`.
 //
-// operationID is run through splitWords/goFieldName — the identical
-// initialism-aware machinery assembleFields already uses for every wire
+// operationID is run through splitActionWords/actionGoFieldName — not
+// splitWords/goFieldName, the machinery assembleFields uses for every wire
 // property name — rather than merely lower-casing its first rune, which is
 // what this function did before: a plain rune swap left every one of an
 // operationId's own words exactly as the vendored specification happened to
@@ -287,20 +298,38 @@ func exportedName(id string) string {
 // "stackCreateKubernetesUrlInput" (golangci-lint's revive var-naming flags
 // it: a recognised initialism, "URL", spelled as an ordinary word) and
 // "GitOpsSourcesTestById" rendered "gitOpsSourcesTestByIdInput" (same
-// defect, "ID"). Routing through goFieldName first renders every recognised
-// initialism upper-case regardless of how the source operationId spelled it,
-// matching what handlerFuncName below now does for the identical reason.
-// Checked against every operationId in both vendored specs: exactly these
-// two change from what the naive rune swap produced, and both changes fix a
-// real revive finding rather than introduce one — see naming_test.go's own
-// proof, and docs/api-divergences.md for one further, pre-existing
-// consumeInitialisms defect this check surfaced (unrelated to either of
-// these two, and not in a wave-1 domain).
+// defect, "ID"). Routing through actionGoFieldName first renders every
+// recognised initialism upper-case regardless of how the source operationId
+// spelled it, matching what handlerFuncName below now does for the identical
+// reason.
+//
+// This is deliberately not goFieldName/splitWords, the pair assembleFields
+// uses for every generated Go field name from a wire property: an early
+// version of this fix routed operationIDs through that pair instead, and
+// regenerating "GetKubernetesGPUInfo" through it isolated a genuine
+// consumeInitialisms defect (it greedily matches the initialism "UI" inside
+// the uppercase run "GPUI", splitting "Info" apart from its own leading "I"
+// before goFieldName ever sees it, and renders "GPUINfo") — worse than the
+// naive rune swap this replaces, which happened to leave "GPUInfo" alone
+// because it never re-split anything. splitActionWords/actionGoFieldName do
+// not have that defect for this identifier: actionInitialisms recognises
+// "GPU" as a whole initialism (see its own doc comment), so the greedy
+// matcher never gets to the wrong reading in the first place. Reusing that
+// pair here, rather than teaching splitWords/goFieldName the same fix,
+// leaves every wire tag this generator has ever emitted untouched — see
+// TestUnit_ActionSplitter_WireTagsStayByteIdentical, which is exactly the
+// guard that would fail if this function reached back into that shared
+// machinery instead.
+//
+// Checked against every operationId in both vendored specs (445 total):
+// TestUnit_InputStructNameAndHandlerFuncName_OnlyTheseOperationsChangeAcrossBothSpecs
+// in naming_test.go is the corpus proof, covering handlerFuncName
+// identically since both route through the same pair.
 func inputStructName(operationID string) string {
 	if operationID == "" {
 		return "input"
 	}
-	name := goFieldName(splitWords(operationID))
+	name := actionGoFieldName(splitActionWords(operationID))
 	if name == "" {
 		return "input"
 	}
@@ -615,6 +644,68 @@ func consumeActionInitialisms(run []rune) []string {
 		}
 	}
 	return words
+}
+
+// capitalizeFirstRune upper-cases w's first rune and leaves every other rune
+// exactly as it already was — unlike title (used by goFieldName/bodyJSONTag),
+// which also forces every following rune lower-case regardless of its
+// original casing.
+//
+// actionGoFieldName's fallback branch below uses this instead of title for
+// the same reason exportedName leaves a whole operationId's trailing runes
+// alone (see its own doc comment): every word splitActionWords produces
+// already carries its own correct casing verbatim from the source
+// operationId — a splitter only ever decides word *boundaries*, it never
+// touches a rune's case — with one exception, matchSpecialActionWord's
+// literal "OAuth": the internal capital "A" is meaningful and title's blanket
+// lower-casing would silently destroy it ("OAuth" -> "Oauth", the exact kind
+// of surprise regression this function exists to not introduce). A word
+// actionInitialisms recognises never reaches this branch at all (the
+// initialism check above always matches first), so this only ever fires for
+// a word with no recognised initialism reading, where "leave it alone" is
+// always the right answer for an operationId's own spelling.
+func capitalizeFirstRune(w string) string {
+	if w == "" {
+		return w
+	}
+	r := []rune(w)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
+// actionGoFieldName renders splitActionWords' output as an exported Go
+// identifier, the same overall shape as goFieldName (recognised initialisms
+// rendered fully upper-case, a trailing plural initialism suffix handled the
+// same way) but consulting actionInitialisms instead of commonInitialisms,
+// and capitalizeFirstRune instead of title for the word that is neither.
+//
+// This is a deliberately independent function, not goFieldName parameterized
+// over a table: inputStructName and handlerFuncName are its only callers,
+// and neither may ever reach bodyJSONTag or a wire property's Go field name
+// (see TestUnit_ActionSplitter_WireTagsStayByteIdentical, and
+// TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput's own
+// doc comment on why the two tables are kept apart at all). Keeping this
+// function's control flow wholly separate from goFieldName's means neither
+// can ever change the other's behaviour by way of a shared helper.
+func actionGoFieldName(words []string) string {
+	var out []rune
+	for i, w := range words {
+		if stem, ok := trailingPluralInitialismIn(w, actionInitialisms); ok {
+			out = append(out, []rune(upper(stem))...)
+			out = append(out, 's')
+			continue
+		}
+		if isPluralSuffixWord(w) && i > 0 && actionInitialisms[upper(words[i-1])] {
+			out = append(out, 's')
+			continue
+		}
+		if actionInitialisms[upper(w)] {
+			out = append(out, []rune(upper(w))...)
+			continue
+		}
+		out = append(out, []rune(capitalizeFirstRune(w))...)
+	}
+	return string(out)
 }
 
 // namedOperation is one operation the real vendored specification declares,

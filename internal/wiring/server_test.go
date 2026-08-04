@@ -317,41 +317,53 @@ func TestUnit_MetaToolExpectation_DetectsAnUnsurfacedDomain(t *testing.T) {
 	if len(domains) < 2 {
 		t.Fatalf("need at least two domains in the pilot catalog to drop one meaningfully, got %v", domains)
 	}
-	dropped := domains[0]
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "stub-domain-surface", Version: "0"}, nil)
-	stub := stubDomainSurface{skip: map[string]bool{dropped: true}}
-	if err := stub.Register(server, catalog, tools.Deps{}); err != nil {
-		t.Fatalf("stubDomainSurface.Register: %v", err)
-	}
-	session, ctx := connect(t, server)
+	for _, tc := range []struct {
+		name       string
+		droppedIdx int
+	}{
+		{"first domain dropped", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dropped := domains[tc.droppedIdx]
 
-	res, err := session.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	got := make(map[string]bool, len(res.Tools))
-	for _, tool := range res.Tools {
-		got[tool.Name] = true
-	}
+			server := mcp.NewServer(&mcp.Implementation{Name: "stub-domain-surface", Version: "0"}, nil)
+			stub := stubDomainSurface{skip: map[string]bool{dropped: true}}
+			if err := stub.Register(server, catalog, tools.Deps{}); err != nil {
+				t.Fatalf("stubDomainSurface.Register: %v", err)
+			}
+			session, ctx := connect(t, server)
 
-	droppedTool := "portainer_" + dropped
-	if got[droppedTool] {
-		t.Fatalf("test setup bug: stubDomainSurface still registered %q despite being told to skip it", droppedTool)
-	}
+			res, err := session.ListTools(ctx, nil)
+			if err != nil {
+				t.Fatalf("ListTools: %v", err)
+			}
+			got := make(map[string]bool, len(res.Tools))
+			for _, tool := range res.Tools {
+				got[tool.Name] = true
+			}
 
-	// This is the discrimination check itself: want, derived exactly the way
-	// the meta case derives it, must notice droppedTool's absence.
-	want := domainToolNames(domains)
-	missing := false
-	for _, w := range want {
-		if !got[w] {
-			missing = true
-		}
-	}
-	if !missing {
-		t.Fatal("catalog-derived expectation did not notice a domain missing from registration: " +
-			"the comparison does not discriminate, and the meta case in " +
-			"TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface is a tautology")
+			droppedTool := "portainer_" + dropped
+			if got[droppedTool] {
+				t.Fatalf("test setup bug: stubDomainSurface still registered %q despite being told to skip it", droppedTool)
+			}
+
+			// This is the discrimination check itself: want, derived exactly
+			// the way the meta case derives it, must notice droppedTool's
+			// absence.
+			want := domainToolNames(domains)
+			missing := false
+			for _, w := range want {
+				if !got[w] {
+					missing = true
+				}
+			}
+			if !missing {
+				t.Fatal("catalog-derived expectation did not notice a domain missing from registration: " +
+					"the comparison does not discriminate, and the meta case in " +
+					"TestNewServer_ToolSurfaceConfig_SelectsMatchingSurface is a tautology")
+			}
+		})
 	}
 }

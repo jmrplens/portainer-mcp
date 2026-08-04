@@ -149,7 +149,7 @@ func wrapperParamType(t *testing.T, operationID string) string {
 	for i := 0; i < respType.NumField(); i++ {
 		f := respType.Field(i)
 		if code, ok := parseJSONFieldCode(f.Name); ok && code >= 200 && code < 300 {
-			return strings.Replace(f.Type.String(), "portainerapi.", "apigen.", 1)
+			return strings.ReplaceAll(f.Type.String(), "portainerapi.", "apigen.")
 		}
 	}
 	t.Fatalf("%s's response declares no 2xx success field", operationID)

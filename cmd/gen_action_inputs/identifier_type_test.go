@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -71,33 +72,50 @@ func TestUnit_AssembleOperationFields_ContainerIDAndServiceID_PublishString(t *t
 // and would silently outlive whatever respec made it stale.
 func TestUnit_PathParamTypeOverrides_EveryEntryMatchesARealOperation(t *testing.T) {
 	t.Parallel()
-	for key, reason := range pathParamTypeOverrides {
-		if reason == "" {
-			t.Errorf("%s/%s: override has no reason recorded", key.OperationID, key.ParamName)
+	// pathParamTypeOverrides is a map; sorted keys make subtest order (and
+	// -run matching) deterministic despite Go's randomised map iteration.
+	keys := make([]pathParamKey, 0, len(pathParamTypeOverrides))
+	for key := range pathParamTypeOverrides {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].OperationID != keys[j].OperationID {
+			return keys[i].OperationID < keys[j].OperationID
 		}
-		if !isIdentifierPathParam(key.ParamName) {
-			t.Errorf("%s/%s: parameter does not match isIdentifierPathParam, so it would never have rendered as an int identifier needing an override",
-				key.OperationID, key.ParamName)
-		}
+		return keys[i].ParamName < keys[j].ParamName
+	})
 
-		op, _, _ := realOperation(t, key.OperationID)
-		var found bool
-		for _, param := range op.Parameters {
-			name, _ := param["name"].(string)
-			in, _ := param["in"].(string)
-			if name != key.ParamName || in != "path" {
-				continue
+	for _, key := range keys {
+		t.Run(key.OperationID+"/"+key.ParamName, func(t *testing.T) {
+			t.Parallel()
+			reason := pathParamTypeOverrides[key]
+			if reason == "" {
+				t.Errorf("%s/%s: override has no reason recorded", key.OperationID, key.ParamName)
 			}
-			found = true
-			schema, _ := param["schema"].(map[string]any)
-			if schema == nil || schema["type"] != "integer" {
-				t.Errorf("%s/%s: path parameter is not declared \"integer\" (schema %v) upstream, so there is nothing left to override",
-					key.OperationID, key.ParamName, schema)
+			if !isIdentifierPathParam(key.ParamName) {
+				t.Errorf("%s/%s: parameter does not match isIdentifierPathParam, so it would never have rendered as an int identifier needing an override",
+					key.OperationID, key.ParamName)
 			}
-		}
-		if !found {
-			t.Errorf("%s/%s: operation declares no path parameter by that name; remove this stale entry", key.OperationID, key.ParamName)
-		}
+
+			op, _, _ := realOperation(t, key.OperationID)
+			var found bool
+			for _, param := range op.Parameters {
+				name, _ := param["name"].(string)
+				in, _ := param["in"].(string)
+				if name != key.ParamName || in != "path" {
+					continue
+				}
+				found = true
+				schema, _ := param["schema"].(map[string]any)
+				if schema == nil || schema["type"] != "integer" {
+					t.Errorf("%s/%s: path parameter is not declared \"integer\" (schema %v) upstream, so there is nothing left to override",
+						key.OperationID, key.ParamName, schema)
+				}
+			}
+			if !found {
+				t.Errorf("%s/%s: operation declares no path parameter by that name; remove this stale entry", key.OperationID, key.ParamName)
+			}
+		})
 	}
 }
 
@@ -107,23 +125,32 @@ func TestUnit_PathParamTypeOverrides_EveryEntryMatchesARealOperation(t *testing.
 // adds must drop serviceId's vestigial "minimum": 1 now that it publishes
 // "string", while its own environmentId sibling keeps the bound.
 func TestUnit_ServiceImageStatus_ServiceIDTakesNoMinimum(t *testing.T) {
-	t.Parallel()
-	minimums := minimumByJSONName(t, "ServiceImageStatus")
+	for _, tc := range []struct {
+		name        string
+		operationID string
+	}{
+		{"ServiceImageStatus", "ServiceImageStatus"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			minimums := minimumByJSONName(t, tc.operationID)
 
-	serviceID, ok := minimums["serviceId"]
-	if !ok {
-		t.Fatal(`field "serviceId" not found`)
-	}
-	if serviceID != nil {
-		t.Errorf(`"serviceId".Minimum = %d, want nil: serviceId now publishes "string", and a numeric minimum on a string field is a constraint JSON Schema ignores`, *serviceID)
-	}
+			serviceID, ok := minimums["serviceId"]
+			if !ok {
+				t.Fatal(`field "serviceId" not found`)
+			}
+			if serviceID != nil {
+				t.Errorf(`"serviceId".Minimum = %d, want nil: serviceId now publishes "string", and a numeric minimum on a string field is a constraint JSON Schema ignores`, *serviceID)
+			}
 
-	environmentID, ok := minimums["environmentId"]
-	if !ok {
-		t.Fatal(`field "environmentId" not found`)
-	}
-	if environmentID == nil || *environmentID != 1 {
-		t.Errorf(`"environmentId".Minimum = %v, want a pointer to 1: only serviceId is excepted on this operation`, environmentID)
+			environmentID, ok := minimums["environmentId"]
+			if !ok {
+				t.Fatal(`field "environmentId" not found`)
+			}
+			if environmentID == nil || *environmentID != 1 {
+				t.Errorf(`"environmentId".Minimum = %v, want a pointer to 1: only serviceId is excepted on this operation`, environmentID)
+			}
+		})
 	}
 }
 

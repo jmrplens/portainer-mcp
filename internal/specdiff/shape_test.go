@@ -2,6 +2,7 @@ package specdiff
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -375,6 +376,7 @@ func TestUnit_ShapeFromSpec_MultipartFormDataBody_MatchesGeneratorFieldCount(t *
 	for id := range multipartOperationFieldCounts {
 		operationIDs = append(operationIDs, id)
 	}
+	sort.Strings(operationIDs)
 	for _, operationID := range operationIDs {
 		wantFields := multipartOperationFieldCounts[operationID]
 		t.Run(operationID, func(t *testing.T) {
@@ -415,21 +417,33 @@ func TestUnit_ShapeFromSpec_MultipartFormDataBody_ResolvesFileUploadField(t *tes
 		byName[f.JSONName] = f
 	}
 
-	file, ok := byName["file"]
-	if !ok || file.Type != "string" || !file.Required || file.Origin != "body" {
-		t.Errorf(`Fields["file"] = %+v, want {Type: string, Required: true, Origin: body}`, file)
-	}
-	path, ok := byName["path"]
-	if !ok || path.Type != "string" || !path.Required || path.Origin != "body" {
-		t.Errorf(`Fields["path"] = %+v, want {Type: string, Required: true, Origin: body}`, path)
-	}
-	id, ok := byName["id"]
-	if !ok || id.Type != "integer" || !id.Required || id.Origin != "path" {
-		t.Errorf(`Fields["id"] = %+v, want {Type: integer, Required: true, Origin: path}`, id)
-	}
-	volumeID, ok := byName["volumeID"]
-	if !ok || volumeID.Origin != "query" {
-		t.Errorf(`Fields["volumeID"] = %+v, want {Origin: query}`, volumeID)
+	for _, tc := range []struct {
+		name         string
+		wantType     string // "" when Type is not asserted for this field
+		wantRequired bool
+		wantOrigin   string
+	}{
+		{"file", "string", true, "body"},
+		{"path", "string", true, "body"},
+		{"id", "integer", true, "path"},
+		{"volumeID", "", false, "query"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			field, ok := byName[tc.name]
+			if !ok {
+				t.Fatalf("Fields[%q] not found", tc.name)
+			}
+			if tc.wantType != "" && field.Type != tc.wantType {
+				t.Errorf("Fields[%q].Type = %q, want %q", tc.name, field.Type, tc.wantType)
+			}
+			if tc.wantRequired && !field.Required {
+				t.Errorf("Fields[%q].Required = false, want true", tc.name)
+			}
+			if field.Origin != tc.wantOrigin {
+				t.Errorf("Fields[%q].Origin = %q, want %q", tc.name, field.Origin, tc.wantOrigin)
+			}
+		})
 	}
 }
 
@@ -449,20 +463,30 @@ func TestUnit_ShapeFromSpec_MultipartFormDataBody_ResolvesFileUploadField(t *tes
 // shapes goes uncompared.
 func TestUnit_ShapeFromSpec_RefusesMultipleContentTypes(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
-	if err != nil {
-		t.Fatalf("read vendored spec: %v", err)
-	}
-	op, err := LoadSpecOperation(data, "CustomTemplateCreate")
-	if err != nil {
-		t.Fatalf("LoadSpecOperation(CustomTemplateCreate) error = %v", err)
-	}
-	shape, err := ShapeFromSpec(op)
-	if err == nil {
-		t.Fatalf("ShapeFromSpec(CustomTemplateCreate) error = nil, shape = %+v, want a refusal: this operation's requestBody declares two content types, and no single schema can represent both", shape)
-	}
-	if !strings.Contains(err.Error(), "content type") {
-		t.Errorf("ShapeFromSpec(CustomTemplateCreate) error = %q, want it to mention the multiple content types", err)
+	for _, tc := range []struct {
+		name        string
+		operationID string
+	}{
+		{"CustomTemplateCreate", "CustomTemplateCreate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+			if err != nil {
+				t.Fatalf("read vendored spec: %v", err)
+			}
+			op, err := LoadSpecOperation(data, tc.operationID)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s) error = %v", tc.operationID, err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err == nil {
+				t.Fatalf("ShapeFromSpec(%s) error = nil, shape = %+v, want a refusal: this operation's requestBody declares two content types, and no single schema can represent both", tc.operationID, shape)
+			}
+			if !strings.Contains(err.Error(), "content type") {
+				t.Errorf("ShapeFromSpec(%s) error = %q, want it to mention the multiple content types", tc.operationID, err)
+			}
+		})
 	}
 }
 

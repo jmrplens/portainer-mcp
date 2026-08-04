@@ -154,17 +154,31 @@ func TestUnit_CommunityCatalog_AllThreeSurfaces_NeverPublishGithubOrEndpointID(t
 		if err != nil {
 			t.Fatalf("ListTools: %v", err)
 		}
+		// inspected counts how many tools' InputSchema was actually asserted
+		// against gated. Without this, a type assertion failing for every
+		// tool (say, the SDK starts handing back a different concrete type
+		// for InputSchema) would skip every tool via the `continue` below and
+		// this subtest would report success having examined zero schemas —
+		// indistinguishable from "no tool publishes github or endpointId",
+		// which is what it is meant to prove. Failing when inspected is zero
+		// is what makes the two cases distinguishable.
+		inspected := 0
 		for _, tool := range res.Tools {
 			schema, ok := tool.InputSchema.(map[string]any)
 			if !ok {
+				t.Errorf("tool %q: InputSchema is %T, want map[string]any", tool.Name, tool.InputSchema)
 				continue
 			}
+			inspected++
 			props, _ := schema["properties"].(map[string]any)
 			for _, field := range gated {
 				if _, present := props[field]; present {
 					t.Errorf("individual tool %q publishes %q in its InputSchema, want it pruned for a Community catalog", tool.Name, field)
 				}
 			}
+		}
+		if inspected == 0 {
+			t.Fatal("no tool schema was inspected; this subtest proves nothing about pruning on the individual surface")
 		}
 	})
 

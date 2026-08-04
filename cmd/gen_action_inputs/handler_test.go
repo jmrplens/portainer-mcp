@@ -348,63 +348,89 @@ func TestUnit_GenerateHandler_None_IgnoresInputAndCallsWithOnlyContext(t *testin
 // where only a real request — not compilation, not a human reading the
 // generated text — shows which one reached the URL.
 
+// TestUnit_GenerateHandler_PathAndPath_DoesNotSwapTwoIntArguments is a
+// one-case table: UserRemoveAPIKey (DELETE /users/{id}/tokens/{keyID}) has
+// two interchangeable ints; id=101 and keyID=202 are chosen distinctly so a
+// swap is unmistakable in the resulting path.
+//
+// This test used to exercise DockerContainerGpusInspect
+// (GET /docker/{environmentId}/containers/{containerId}/gpus), the
+// original "two interchangeable ints" example. P3.3 task 7 gave
+// containerId its own Go type ("string": see pathParamTypeOverrides in
+// fields.go, a Docker hex container ID that was never really an integer
+// on the wire), which now makes DockerContainerGpusInspect refuse at
+// buildHandlerSpec — see
+// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
+// below for that proof. UserRemoveAPIKey is a genuine, unrelated
+// two-int-path-argument operation that keeps this test's own point (a
+// generic handler must not silently swap two same-typed positional
+// arguments) alive on a shape the fix does not touch.
 func TestUnit_GenerateHandler_PathAndPath_DoesNotSwapTwoIntArguments(t *testing.T) {
-	t.Parallel()
-	// UserRemoveAPIKey: DELETE /users/{id}/tokens/{keyID} — two interchangeable
-	// ints; id=101 and keyID=202 are chosen distinctly so a swap is
-	// unmistakable in the resulting path.
-	//
-	// This test used to exercise DockerContainerGpusInspect
-	// (GET /docker/{environmentId}/containers/{containerId}/gpus), the
-	// original "two interchangeable ints" example. P3.3 task 7 gave
-	// containerId its own Go type ("string": see pathParamTypeOverrides in
-	// fields.go, a Docker hex container ID that was never really an integer
-	// on the wire), which now makes DockerContainerGpusInspect refuse at
-	// buildHandlerSpec — see
-	// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
-	// below for that proof. UserRemoveAPIKey is a genuine, unrelated
-	// two-int-path-argument operation that keeps this test's own point (a
-	// generic handler must not silently swap two same-typed positional
-	// arguments) alive on a shape the fix does not touch.
-	structs, spec := buildRealHandlerSpec(t, "users", "UserRemoveAPIKey")
-	if len(spec.PathArgs) != 2 || spec.HasQuery || spec.HasBody {
-		t.Fatalf("handlerSpec = %+v, want exactly two path arguments, no query/body", spec)
-	}
+	for _, tc := range []struct {
+		name        string
+		domain      string
+		operationID string
+		input       string
+		wantPath    string
+	}{
+		{"UserRemoveAPIKey", "users", "UserRemoveAPIKey", `{"id":101,"keyID":202}`, "/api/users/101/tokens/202"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			structs, spec := buildRealHandlerSpec(t, tc.domain, tc.operationID)
+			if len(spec.PathArgs) != 2 || spec.HasQuery || spec.HasBody {
+				t.Fatalf("handlerSpec = %+v, want exactly two path arguments, no query/body", spec)
+			}
 
-	got := executeGeneratedHandler(t, structs, spec, `{"id":101,"keyID":202}`)
-	want := "/api/users/101/tokens/202"
-	if got.Path != want {
-		t.Errorf("request path = %q, want %q: the two path arguments were swapped", got.Path, want)
+			got := executeGeneratedHandler(t, structs, spec, tc.input)
+			if got.Path != tc.wantPath {
+				t.Errorf("request path = %q, want %q: the two path arguments were swapped", got.Path, tc.wantPath)
+			}
+		})
 	}
 }
 
+// TestUnit_GenerateHandler_PathPathAndParams_BindsBothPathArgumentsAndTheQuery
+// is a one-case table: EndpointEdgeStackInspect
+// (GET /endpoints/{id}/edge/stacks/{stackId}?version=...).
+//
+// This test used to exercise ContainerImageStatus
+// (GET /docker/{environmentId}/containers/{containerId}/image_status?refresh=...),
+// the shape this project's own plan named as the priority case. P3.3
+// task 7 gave containerId its own Go type ("string": see
+// pathParamTypeOverrides in fields.go), which now makes ContainerImageStatus
+// refuse at buildHandlerSpec — see
+// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
+// below for that proof. EndpointEdgeStackInspect is a genuine, unrelated
+// two-int-path-argument-plus-query operation that keeps this test's own
+// point (path arguments and the query struct must each reach their own
+// place, not each other's) alive on a shape the fix does not touch.
 func TestUnit_GenerateHandler_PathPathAndParams_BindsBothPathArgumentsAndTheQuery(t *testing.T) {
-	t.Parallel()
-	// EndpointEdgeStackInspect: GET /endpoints/{id}/edge/stacks/{stackId}?version=...
-	//
-	// This test used to exercise ContainerImageStatus
-	// (GET /docker/{environmentId}/containers/{containerId}/image_status?refresh=...),
-	// the shape this project's own plan named as the priority case. P3.3
-	// task 7 gave containerId its own Go type ("string": see
-	// pathParamTypeOverrides in fields.go), which now makes ContainerImageStatus
-	// refuse at buildHandlerSpec — see
-	// TestUnit_GenerateHandler_IdentifierTypeOverrides_RefuseRatherThanBindAMismatchedPathArgument
-	// below for that proof. EndpointEdgeStackInspect is a genuine, unrelated
-	// two-int-path-argument-plus-query operation that keeps this test's own
-	// point (path arguments and the query struct must each reach their own
-	// place, not each other's) alive on a shape the fix does not touch.
-	structs, spec := buildRealHandlerSpec(t, "endpoints", "EndpointEdgeStackInspect")
-	if len(spec.PathArgs) != 2 || !spec.HasQuery || spec.HasBody {
-		t.Fatalf("handlerSpec = %+v, want two path arguments and a query struct, no body", spec)
-	}
+	for _, tc := range []struct {
+		name        string
+		domain      string
+		operationID string
+		input       string
+		wantPath    string
+		wantQuery   string
+	}{
+		{"EndpointEdgeStackInspect", "endpoints", "EndpointEdgeStackInspect", `{"id":11,"stackId":22,"version":3}`, "/api/endpoints/11/edge/stacks/22", "version=3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			structs, spec := buildRealHandlerSpec(t, tc.domain, tc.operationID)
+			if len(spec.PathArgs) != 2 || !spec.HasQuery || spec.HasBody {
+				t.Fatalf("handlerSpec = %+v, want two path arguments and a query struct, no body", spec)
+			}
 
-	got := executeGeneratedHandler(t, structs, spec, `{"id":11,"stackId":22,"version":3}`)
-	want := "/api/endpoints/11/edge/stacks/22"
-	if got.Path != want {
-		t.Errorf("request path = %q, want %q: a path argument was mis-bound", got.Path, want)
-	}
-	if got.Query != "version=3" {
-		t.Errorf("request query = %q, want version=3: the query field never reached the params struct", got.Query)
+			got := executeGeneratedHandler(t, structs, spec, tc.input)
+			if got.Path != tc.wantPath {
+				t.Errorf("request path = %q, want %q: a path argument was mis-bound", got.Path, tc.wantPath)
+			}
+			if got.Query != tc.wantQuery {
+				t.Errorf("request query = %q, want %s: the query field never reached the params struct", got.Query, tc.wantQuery)
+			}
+		})
 	}
 }
 

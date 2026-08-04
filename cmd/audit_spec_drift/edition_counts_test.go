@@ -38,41 +38,40 @@ func editionCountsFixtureAction() toolutil.ActionSpec {
 	}
 }
 
-// TestUnit_OneEditionFieldCounts_PrunesEEOnlyFieldFromCE is the CE half:
-// building the catalog for Community Edition from an action whose Input
-// tags one field edition:"EE" must not count that field.
-func TestUnit_OneEditionFieldCounts_PrunesEEOnlyFieldFromCE(t *testing.T) {
+// TestUnit_OneEditionFieldCounts_PrunesOrKeepsEEOnlyFieldByEdition is
+// table-driven over the two compatible edition-count scenarios that share
+// the identical fixture action and differ only by target edition and the
+// resulting Fields count: Community Edition must not count the
+// edition:"EE"-tagged field (pruned), Business Edition must count both
+// (kept). Without the discriminating EE case, an implementation that always
+// dropped the tagged field regardless of target edition — or one that never
+// pruned anything at all and coincidentally reported 1 for some unrelated
+// reason — would still pass the CE case alone.
+func TestUnit_OneEditionFieldCounts_PrunesOrKeepsEEOnlyFieldByEdition(t *testing.T) {
 	t.Parallel()
-	actions := []toolutil.ActionSpec{editionCountsFixtureAction()}
+	for _, tc := range []struct {
+		name       string
+		edition    edition.Edition
+		wantFields int
+	}{
+		{"community edition prunes the EE-only field", edition.CE, 1},
+		{"business edition keeps the EE-only field", edition.EE, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			actions := []toolutil.ActionSpec{editionCountsFixtureAction()}
 
-	counts, err := oneEditionFieldCounts(actions, edition.CE, "2.44.0")
-	if err != nil {
-		t.Fatalf("oneEditionFieldCounts(CE) error = %v", err)
-	}
-	if counts.Actions != 1 {
-		t.Fatalf("oneEditionFieldCounts(CE) Actions = %d, want 1", counts.Actions)
-	}
-	if counts.Fields != 1 {
-		t.Errorf("oneEditionFieldCounts(CE) Fields = %d, want 1: the edition:\"EE\" field must be pruned from Community Edition", counts.Fields)
-	}
-}
-
-// TestUnit_OneEditionFieldCounts_KeepsEEOnlyFieldForEE is the discriminating
-// other half: the identical action, built for Business Edition, must count
-// both fields. Without this half, an implementation that always dropped the
-// tagged field regardless of target edition — or one that never pruned
-// anything at all and coincidentally reported 1 for some unrelated reason —
-// would still pass the CE-only test above.
-func TestUnit_OneEditionFieldCounts_KeepsEEOnlyFieldForEE(t *testing.T) {
-	t.Parallel()
-	actions := []toolutil.ActionSpec{editionCountsFixtureAction()}
-
-	counts, err := oneEditionFieldCounts(actions, edition.EE, "2.44.0")
-	if err != nil {
-		t.Fatalf("oneEditionFieldCounts(EE) error = %v", err)
-	}
-	if counts.Fields != 2 {
-		t.Errorf("oneEditionFieldCounts(EE) Fields = %d, want 2: Business Edition must publish both fields", counts.Fields)
+			counts, err := oneEditionFieldCounts(actions, tc.edition, "2.44.0")
+			if err != nil {
+				t.Fatalf("oneEditionFieldCounts(%s) error = %v", tc.edition, err)
+			}
+			if counts.Actions != 1 {
+				t.Fatalf("oneEditionFieldCounts(%s) Actions = %d, want 1", tc.edition, counts.Actions)
+			}
+			if counts.Fields != tc.wantFields {
+				t.Errorf("oneEditionFieldCounts(%s) Fields = %d, want %d", tc.edition, counts.Fields, tc.wantFields)
+			}
+		})
 	}
 }
 
