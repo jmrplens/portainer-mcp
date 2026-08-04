@@ -2,6 +2,7 @@ package toolutil
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -25,7 +26,10 @@ func TestUnit_FieldEditions_TaggedField_IsReportedEE(t *testing.T) {
 		Hidden  string `json:"-" edition:"EE"`
 	}
 
-	got := FieldEditions(reflect.TypeOf(input{}))
+	got, err := FieldEditions(reflect.TypeOf(input{}))
+	if err != nil {
+		t.Fatalf("FieldEditions() error = %v", err)
+	}
 	want := map[string]edition.Edition{"tlsCaCert": edition.EE, "edgeKey": edition.EE}
 	if len(got) != len(want) {
 		t.Fatalf("FieldEditions() = %v, want %v", got, want)
@@ -53,23 +57,78 @@ func TestUnit_FieldEditions_NoTaggedField_ReturnsNil(t *testing.T) {
 	type plain struct {
 		Name string `json:"name"`
 	}
-	if got := FieldEditions(reflect.TypeOf(plain{})); got != nil {
+	got, err := FieldEditions(reflect.TypeOf(plain{}))
+	if err != nil {
+		t.Fatalf("FieldEditions() error = %v", err)
+	}
+	if got != nil {
 		t.Errorf("FieldEditions() = %v, want nil for a struct with no edition tag", got)
 	}
 }
 
-// TestUnit_FieldEditions_NonEETagValue_IsIgnored guards the one meaningful
-// value this tag has today: the generator only ever writes "EE" (see
-// cmd/gen_action_inputs/fields.go), and a stray value — a typo, or an
-// explicit "CE" that would be redundant since Community is already every
-// untagged field's default — must not be reported as gating anything.
-func TestUnit_FieldEditions_NonEETagValue_IsIgnored(t *testing.T) {
+// TestUnit_FieldEditions_ExplicitCETagValue_IsIgnoredNotRefused guards the
+// one other recognised value this tag has: edition.Edition has exactly two
+// values, CE and EE, and an explicit `edition:"CE"` is a documented no-op —
+// every untagged field is already Community by default — not an error.
+func TestUnit_FieldEditions_ExplicitCETagValue_IsIgnoredNotRefused(t *testing.T) {
 	t.Parallel()
 	type input struct {
 		Name string `json:"name" edition:"CE"`
 	}
-	if got := FieldEditions(reflect.TypeOf(input{})); got != nil {
+	got, err := FieldEditions(reflect.TypeOf(input{}))
+	if err != nil {
+		t.Fatalf("FieldEditions() error = %v, want nil: an explicit edition:\"CE\" tag is a recognised no-op, not a refusal", err)
+	}
+	if got != nil {
 		t.Errorf("FieldEditions() = %v, want nil: an edition:\"CE\" tag gates nothing", got)
+	}
+}
+
+// TestUnit_FieldEditions_UnrecognisedTagValue_IsRefused is I6's fix: an
+// earlier revision of this function silently ignored any tag value other
+// than "EE" — including "BE", a value from an unrelated tiering convention —
+// on the premise that "nothing hand-writes this tag", a premise
+// internal/tools/registries/inputs.go's own hand-written edition:"EE" tags
+// (registryCreateInput.Github and siblings) had already falsified two
+// commits later. A value this project's edition.Edition type does not
+// recognise must fail loudly, naming the field and the value found, rather
+// than fail open and quietly publish a field a Community server has never
+// heard of.
+func TestUnit_FieldEditions_UnrecognisedTagValue_IsRefused(t *testing.T) {
+	t.Parallel()
+	type input struct {
+		Name string `json:"name" edition:"BE"`
+	}
+	_, err := FieldEditions(reflect.TypeOf(input{}))
+	if err == nil {
+		t.Fatal("FieldEditions() error = nil, want a refusal for edition:\"BE\", a value edition.Edition does not recognise")
+	}
+	for _, want := range []string{"Name", "BE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("FieldEditions() error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestUnit_FieldEditions_CommaSuffixedEETagValue_IsTolerated is I6's other
+// half: `edition:"EE,omitempty"` is the shape a reader familiar with this
+// project's own `json`/`jsonschema` tag convention (both use a
+// comma-separated first segment as the real value) would naturally reach
+// for, and must gate the field exactly the same as a bare `edition:"EE"` —
+// not be refused as an unrecognised value, and not be silently ignored
+// either.
+func TestUnit_FieldEditions_CommaSuffixedEETagValue_IsTolerated(t *testing.T) {
+	t.Parallel()
+	type input struct {
+		Name    string `json:"name"`
+		EdgeKey string `json:"edgeKey,omitempty" edition:"EE,omitempty"`
+	}
+	got, err := FieldEditions(reflect.TypeOf(input{}))
+	if err != nil {
+		t.Fatalf("FieldEditions() error = %v, want a comma-suffixed edition:\"EE,omitempty\" tolerated", err)
+	}
+	if got["edgeKey"] != edition.EE {
+		t.Errorf("FieldEditions() = %v, want edgeKey gated as EE", got)
 	}
 }
 
@@ -80,17 +139,21 @@ func TestUnit_FieldEditions_NonEETagValue_IsIgnored(t *testing.T) {
 // panic reaching in through NumField.
 func TestUnit_FieldEditions_NilOrNonStruct_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	if got := FieldEditions(nil); got != nil {
-		t.Errorf("FieldEditions(nil) = %v, want nil", got)
+	if got, err := FieldEditions(nil); got != nil || err != nil {
+		t.Errorf("FieldEditions(nil) = (%v, %v), want (nil, nil)", got, err)
 	}
-	if got := FieldEditions(reflect.TypeOf("")); got != nil {
-		t.Errorf("FieldEditions(string) = %v, want nil", got)
+	if got, err := FieldEditions(reflect.TypeOf("")); got != nil || err != nil {
+		t.Errorf("FieldEditions(string) = (%v, %v), want (nil, nil)", got, err)
 	}
 
 	type input struct {
 		Name string `json:"name" edition:"EE"`
 	}
-	if got := FieldEditions(reflect.TypeOf(&input{})); len(got) != 1 {
+	got, err := FieldEditions(reflect.TypeOf(&input{}))
+	if err != nil {
+		t.Fatalf("FieldEditions(*input) error = %v", err)
+	}
+	if len(got) != 1 {
 		t.Errorf("FieldEditions(*input) = %v, want the pointer dereferenced to the struct", got)
 	}
 }

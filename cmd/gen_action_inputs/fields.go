@@ -72,10 +72,28 @@ type fieldSpec struct {
 	// loop, never by assembleFields/assembleOperationFields themselves, which
 	// have no notion of a second, Community-side resolution at all. Rendered
 	// as an `edition:"EE"` struct tag by fieldTag below, read back by
-	// toolutil.FieldEditions and pruned per catalog edition by
-	// actioncatalog.Catalog.InputSchema — nested fields included, since this
-	// is a plain fieldSpec property and every nested structSpec's own Fields
-	// are fieldSpecs too.
+	// toolutil.FieldEditions.
+	//
+	// applyFieldEditionGate itself is nested-inclusive — it stamps this tag
+	// onto a nested structSpec's own Fields exactly the way it stamps the
+	// top-level Input struct's, since both are plain []fieldSpec — but
+	// pruning is not: toolutil.FieldEditions, which actioncatalog.Build reads
+	// to decide what to prune (see that package's Catalog.InputSchema doc
+	// comment), inspects only a struct's own top-level fields. A nested
+	// struct reached through a field that is *itself* untagged is never
+	// recursed into, so a tag landing on one of its fields is inert unless
+	// some ancestor field on the path back to the top-level Input struct also
+	// carries the tag (in which case the whole subtree, tag included, is
+	// already dropped as one property — see pruneInputSchemaByEdition). Measured
+	// directly against a full scratch regeneration of both vendored specs at
+	// the time this note was written: seven real operations hit this —
+	// GitOpsSourcesTest, GitOpsSourcesTestById, CreateKubernetesNamespace,
+	// UpdateKubernetesNamespace, UpdateKubernetesNamespaceDeprecated (domain
+	// kubernetes), LDAPCheck (domain ldap) and UserUpdate (domain users) —
+	// none of them in wave 1. See docs/api-divergences.md for the fuller
+	// account and the precise field lists; a wave scaffolding one of those
+	// seven must either implement nested pruning or hand-verify each nested
+	// tag it emits is subsumed by an already-gated ancestor.
 	RequiresEdition edition.Edition
 }
 

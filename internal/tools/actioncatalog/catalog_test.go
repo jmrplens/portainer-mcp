@@ -522,9 +522,22 @@ func TestBuild_EmptyEdition_ReturnsError(t *testing.T) {
 // editionGatedInput is the fixture every Catalog.InputSchema test below
 // shares: one plain field and one `edition:"EE"` field, the exact shape
 // Task 2's own brief specifies for its Step 1 tests.
+//
+// EdgeKey deliberately carries no "omitempty": google/jsonschema-go's
+// reflector puts a field in the reflected schema's "required" list exactly
+// when it lacks omitempty/omitzero (see toolutil/schema.go's InputSchema and
+// cmd/gen_action_inputs/fields.go's fieldTag, which states the identical
+// rule for the generator's own output), so an omitempty EdgeKey is never in
+// "required" to begin with — TestUnit_CatalogInputSchema_CEBuild_
+// DropsEEOnlyFieldAndFromRequired's own "required" assertion would then pass
+// whether or not pruning touches "required" at all, and deleting that whole
+// code path (catalog.go's `switch req := schema["required"].(type)` block)
+// left every test in this file green. A genuinely required gated field is
+// what makes the "required" half of that test — and of the mutation that
+// proves it — actually exercise the code it claims to.
 type editionGatedInput struct {
 	Name    string `json:"name"`
-	EdgeKey string `json:"edgeKey,omitempty" edition:"EE"`
+	EdgeKey string `json:"edgeKey" edition:"EE"`
 }
 
 // editionGatedSpec is spec() plus an Input carrying editionGatedInput, so
@@ -565,10 +578,22 @@ func TestUnit_CatalogInputSchema_CEBuild_DropsEEOnlyFieldAndFromRequired(t *test
 	if _, ok := props["edgeKey"]; ok {
 		t.Errorf("properties = %v, want the edition:\"EE\" \"edgeKey\" field pruned from a CE catalog", props)
 	}
-	for _, name := range toolutil.RequiredParams(schema) {
+	required := toolutil.RequiredParams(schema)
+	sawName := false
+	for _, name := range required {
 		if name == "edgeKey" {
 			t.Error("required still names \"edgeKey\" after it was pruned from properties")
 		}
+		if name == "name" {
+			sawName = true
+		}
+	}
+	// Both required fields would trivially "pass" the edgeKey check above if
+	// pruning simply emptied "required" altogether rather than removing only
+	// the gated entry — this is the other half that catches that: "name" was
+	// never gated and must still be required.
+	if !sawName {
+		t.Errorf("required = %v, want the untagged, still-required \"name\" field present", required)
 	}
 }
 

@@ -290,8 +290,22 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 	if !strings.Contains(stderr, "StackMigrate") || !strings.Contains(stderr, "contributed by both") {
 		t.Errorf("stderr report does not name StackMigrate's field collision (\"endpointId\" contributed by both query parameter and body):\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "StackList") || !strings.Contains(stderr, "credential-shaped") {
-		t.Errorf("stderr report does not also name StackList's unrelated refusal (a credential-shaped response field with no redaction wrapper declared):\n%s", stderr)
+	// Anchored on the whole refusal line, not two independent substrings: a
+	// bare `strings.Contains(stderr, "StackList")` also matches
+	// "EdgeStackList" in the unrelated verb-derived-flags diagnostic above,
+	// and `strings.Contains(stderr, "credential-shaped")` also matches any of
+	// the 13 *other* credential-shaped refusals this same run reports for
+	// stacks' other Git-config-carrying operations (StackInspect,
+	// StackCreateDockerStandalone*, StackUpdate*, StackStart, StackStop,
+	// ...). Both conjuncts of the old check were individually satisfiable by
+	// those unrelated lines, so a mutation that silently dropped StackList's
+	// own refusal (confirmed: swallowing it in run() left this test passing)
+	// went uncaught. Asserting the exact, single line StackList's refusal
+	// renders as is the only check that fails when this operation stops
+	// being refused.
+	wantStackListRefusal := "domain stacks: GET /stacks (operationId StackList): StackList: success response can carry credential-shaped field(s) [StackList[].GitConfig.Authentication.Password]; declare func redactStackList(<the response's success-field type>) any in this domain's own hand-written file before generating (see toolutil.IsCredentialShapedName and internal/tools/registries's redact/redactList for the pattern)"
+	if !strings.Contains(stderr, wantStackListRefusal) {
+		t.Errorf("stderr report does not contain StackList's exact refusal line %q:\n%s", wantStackListRefusal, stderr)
 	}
 
 	for _, name := range []string{"actions.go", "inputs.go"} {
@@ -323,5 +337,100 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 		if _, statErr := os.Stat(filepath.Join(toolsDir, "tags", name)); statErr != nil {
 			t.Errorf("tags/%s was not written (%v); stacks' refusals must not block an unrelated, later-sorting domain's regeneration", name, statErr)
 		}
+	}
+}
+
+// TestUnit_Run_DeprecatedOperation_SkippedByDefault is I5's second half: a
+// vendored operation the specification itself marks "deprecated": true
+// (EndpointDeleteBatchDeprecated, DELETE /endpoints — the operationId itself
+// says so, and its generated client method carries a `// Deprecated:` doc
+// comment staticcheck's SA1019 flags) must contribute nothing at all by
+// default — no struct, no handler, no ActionSpec entry — rather than
+// generate normally and leave a deprecated-API call for a human to notice
+// later. Before this fix it generated exactly like any other operation:
+// endpoints/actions.go:77 and :81 in a real scaffold call
+// apigen.EndpointDeleteBatchDeprecatedJSONRequestBody and
+// c.API.EndpointDeleteBatchDeprecatedWithResponse, both deprecated.
+//
+// endpoints has no hand-written files in this fresh scaffold, so every
+// operation in it (deprecated or not) is generated from scratch; a real
+// non-deprecated operation (EndpointDelete, which needs no redaction
+// wrapper) is asserted present precisely so this test cannot pass merely
+// because the whole domain failed to write anything.
+func TestUnit_Run_DeprecatedOperation_SkippedByDefault(t *testing.T) {
+	toolsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(toolsDir, "endpoints"), 0o750); err != nil {
+		t.Fatalf("mkdir endpoints: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+	})
+
+	if !strings.Contains(stderr, "skipped as deprecated upstream") {
+		t.Errorf("stderr does not report a deprecated-operation skip:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "EndpointDeleteBatchDeprecated") {
+		t.Errorf("stderr does not name EndpointDeleteBatchDeprecated as the skipped operation:\n%s", stderr)
+	}
+
+	inputsSrc, err := os.ReadFile(filepath.Join(toolsDir, "endpoints", "inputs.go"))
+	if err != nil {
+		t.Fatalf("read endpoints/inputs.go: %v", err)
+	}
+	actionsSrc, err := os.ReadFile(filepath.Join(toolsDir, "endpoints", "actions.go"))
+	if err != nil {
+		t.Fatalf("read endpoints/actions.go: %v", err)
+	}
+
+	for _, name := range []string{"EndpointDeleteBatchDeprecated", "endpointDeleteBatchDeprecated"} {
+		if strings.Contains(string(inputsSrc), name) {
+			t.Errorf("endpoints/inputs.go contains %q, want a deprecated operation to contribute nothing", name)
+		}
+		if strings.Contains(string(actionsSrc), name) {
+			t.Errorf("endpoints/actions.go contains %q, want a deprecated operation to contribute nothing", name)
+		}
+	}
+
+	if !strings.Contains(string(actionsSrc), "func endpointDelete(") {
+		t.Errorf("endpoints/actions.go does not declare endpointDelete, a clean, non-deprecated operation unrelated to the skip:\n%s", actionsSrc)
+	}
+}
+
+// TestUnit_Run_DeprecatedOperation_HandOverride_StillGenerates is the
+// "unless explicitly asked" half: a domain author who has already declared a
+// handler under the mechanical function name for a deprecated operationId
+// gets it committed like any other overridden operation (the escape hatch
+// scanHandOverrides/overrideReason already provides), rather than have the
+// generator's own default skip silently override the human's explicit
+// choice.
+func TestUnit_Run_DeprecatedOperation_HandOverride_StillGenerates(t *testing.T) {
+	toolsDir := t.TempDir()
+	domainDir := filepath.Join(toolsDir, "endpoints")
+	if err := os.MkdirAll(domainDir, 0o750); err != nil {
+		t.Fatalf("mkdir endpoints: %v", err)
+	}
+	override := "package endpoints\n\nfunc endpointDeleteBatchDeprecated() {}\n"
+	if err := os.WriteFile(filepath.Join(domainDir, "override.go"), []byte(override), 0o600); err != nil {
+		t.Fatalf("write override.go: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		_ = run([]string{"-spec", "../../api/specs/ee-2.44.0.json", "-tools-dir", toolsDir})
+	})
+
+	if strings.Contains(stderr, "skipped as deprecated upstream") && strings.Contains(stderr, "EndpointDeleteBatchDeprecated") {
+		t.Errorf("stderr reports EndpointDeleteBatchDeprecated skipped as deprecated even though a hand-written override for it exists:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "already covered by hand-written code") {
+		t.Errorf("stderr does not report EndpointDeleteBatchDeprecated as covered by the hand-written override:\n%s", stderr)
+	}
+
+	inputsSrc, err := os.ReadFile(filepath.Join(domainDir, "inputs.go"))
+	if err != nil {
+		t.Fatalf("read endpoints/inputs.go: %v", err)
+	}
+	if !strings.Contains(string(inputsSrc), "endpointDeleteBatchDeprecatedInput") {
+		t.Errorf("endpoints/inputs.go does not declare endpointDeleteBatchDeprecatedInput, want the overridden operation's Input struct still committed:\n%s", inputsSrc)
 	}
 }

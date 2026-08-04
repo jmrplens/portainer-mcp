@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
@@ -363,6 +364,123 @@ func TestUnit_GoFieldName_PluralInitialismSuffix_RendersCorrectlyWithUnchangedWi
 			}
 		})
 	}
+}
+
+// TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable is
+// this task's I5 fix: before it, both functions lower-cased only the
+// operationID's first rune, so a recognised initialism spelled the way the
+// vendored specification happened to write it (never forced upper-case,
+// unlike every wire property name goFieldName already renders correctly)
+// reached golangci-lint's revive var-naming check unchanged —
+// "StackCreateKubernetesUrl" (wave 1's stacks domain) rendered
+// "stackCreateKubernetesUrlInput"/"stackCreateKubernetesUrl", and
+// "GitOpsSourcesTestById" (a later wave's gitops domain) rendered
+// "gitOpsSourcesTestByIdInput"/"gitOpsSourcesTestById" — the exact two
+// findings golangci-lint reported against a real scaffold. Both now render
+// through goFieldName/splitWords, the identical machinery already used for
+// every wire property name.
+func TestUnit_InputStructNameAndHandlerFuncName_ConsultTheInitialismTable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		operationID     string
+		wantInputStruct string
+		wantHandlerFunc string
+	}{
+		{"StackCreateKubernetesUrl", "stackCreateKubernetesURLInput", "stackCreateKubernetesURL"},
+		{"GitOpsSourcesTestById", "gitOpsSourcesTestByIDInput", "gitOpsSourcesTestByID"},
+		// Every frozen pilot domain's own hand-written name must survive
+		// unchanged: none of these operationIds spell a recognised
+		// initialism any way other than its own canonical form already, so
+		// consulting the table must not rename what was already correct.
+		{"TagCreate", "tagCreateInput", "tagCreate"},
+		{"EcrDeleteRepository", "ecrDeleteRepositoryInput", "ecrDeleteRepository"},
+		{"RegistryConfigure", "registryConfigureInput", "registryConfigure"},
+		{"SystemInfo", "systemInfoInput", "systemInfo"},
+	} {
+		t.Run(tc.operationID, func(t *testing.T) {
+			t.Parallel()
+			if got := inputStructName(tc.operationID); got != tc.wantInputStruct {
+				t.Errorf("inputStructName(%q) = %q, want %q", tc.operationID, got, tc.wantInputStruct)
+			}
+			if got := handlerFuncName(tc.operationID); got != tc.wantHandlerFunc {
+				t.Errorf("handlerFuncName(%q) = %q, want %q", tc.operationID, got, tc.wantHandlerFunc)
+			}
+		})
+	}
+}
+
+// TestUnit_InputStructName_OnlyTheTwoKnownOperationsChangeAcrossTheRealSpecs
+// checks the fix's blast radius directly against both vendored specifications,
+// rather than trusting the two cases above are the only ones that differ from
+// the pre-fix behaviour: a fix applied by routing an entire operationID
+// through splitWords/goFieldName re-derives every word boundary from scratch,
+// which is not obviously limited to improving only the two cases it was
+// written for.
+//
+// It is not: a third operationId, GetKubernetesGPUInfo (domain kubernetes,
+// not scaffolded by any wave this branch lands), also changes — for the
+// worse ("getKubernetesGPUInfoInput", already correct because "GPU" is not a
+// golint-recognised initialism and the naive rune-swap left the rest of the
+// identifier untouched, becomes "getKubernetesGPUINfoInput", because
+// consumeInitialisms greedily matches "UI" starting mid-run once "GPU" fails
+// to match as a whole, splitting "Info" apart from its own leading "I"). That
+// is a pre-existing limitation of consumeInitialisms/splitWords — the same
+// functions goFieldName already relies on for every generated wire field
+// name — surfaced by asking these two functions to consult the table at all,
+// not introduced by them. Recorded in docs/api-divergences.md rather than
+// fixed here: kubernetes is not one of wave 1's five domains, so nothing this
+// branch scaffolds is affected, and reworking consumeInitialisms' greedy
+// matcher is a larger, separately-reviewable change.
+//
+// This test exists so that changes, if the vendored spec set or this
+// generator's tokenizer, do not silently grow that blast radius further
+// without a human noticing: any operationId beyond these three changing means
+// re-examining both the fix and the recorded limitation.
+func TestUnit_InputStructName_OnlyTheTwoKnownOperationsChangeAcrossTheRealSpecs(t *testing.T) {
+	t.Parallel()
+	ops := allOperations(t)
+	if len(ops) == 0 {
+		t.Fatal("allOperations() returned none")
+	}
+
+	wantChanged := map[string]bool{
+		"StackCreateKubernetesUrl": true, // wave 1's fix target
+		"GitOpsSourcesTestById":    true, // the "later" fix target the review named
+		"GetKubernetesGPUInfo":     true, // recorded pre-existing limitation, docs/api-divergences.md
+	}
+	seen := map[string]bool{}
+	for _, op := range ops {
+		naive := oldInputStructNameForTest(op.OperationID)
+		fixed := inputStructName(op.OperationID)
+		if naive == fixed {
+			continue
+		}
+		seen[op.OperationID] = true
+		if !wantChanged[op.OperationID] {
+			t.Errorf("inputStructName(%q) changed from the naive rename (%q -> %q) unexpectedly; every change must be accounted for in this test and, if it is a regression, in docs/api-divergences.md",
+				op.OperationID, naive, fixed)
+		}
+	}
+	for operationID := range wantChanged {
+		if !seen[operationID] {
+			t.Errorf("expected inputStructName(%q) to differ from the naive rename in the real spec, but it did not", operationID)
+		}
+	}
+}
+
+// oldInputStructNameForTest reproduces the pre-fix inputStructName exactly
+// (lower-case the first rune only), so
+// TestUnit_InputStructName_OnlyTheTwoKnownOperationsChangeAcrossTheRealSpecs
+// can diff the fix's actual output against it directly, rather than against
+// a hand-maintained list of "operations this fix should not touch" that could
+// itself drift from what the code produces.
+func oldInputStructNameForTest(operationID string) string {
+	r := []rune(operationID)
+	if len(r) == 0 {
+		return "input"
+	}
+	r[0] = unicode.ToLower(r[0])
+	return string(r) + "Input"
 }
 
 // TestUnit_ActionSplitter_ImprovesNamesWithoutChangingOldSplitterOutput is

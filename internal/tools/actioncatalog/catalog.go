@@ -170,6 +170,47 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 			continue
 		}
 
+		// Per-field edition gating, baked in here and nowhere else: prune
+		// once, at catalog construction, and store the pruned schema on the
+		// spec itself (ActionSpec.WithInputSchema) — the sibling
+		// gitlab-mcp-server's own shape (that project's
+		// internal/tools/action_catalog.go, pruneSpecFieldsByTier, called from
+		// inside BuildActionCatalog's own filter loop). Every reader of this
+		// catalog — Actions, ByDomain, Lookup, and therefore every one of the
+		// three model-facing surfaces, plus Execute's own ValidateInput call —
+		// obtains its ActionSpec exclusively through one of those three
+		// methods, all of which return the exact spec value stored here. Once
+		// pruned here, spec.InputSchema() itself returns the pruned shape for
+		// the rest of this spec's life: there is no unpruned path a fourth
+		// reader could take instead, unlike an opt-in accessor a caller has to
+		// remember to call (which is exactly what regressed: see
+		// Catalog.InputSchema's own doc comment below).
+		//
+		// FieldEditions inspects only Input's own top-level fields (an
+		// anonymous embed is flattened, but a named nested struct field is
+		// not recursed into — see that function's doc comment and
+		// toolutil/edition_fields.go), so only a top-level `edition:"EE"` tag
+		// is gated today. See docs/api-divergences.md §9.3 for the operations
+		// a future wave must revisit once a genuinely nested case is
+		// generated.
+		if spec.Input != nil {
+			t := reflect.TypeOf(spec.Input)
+			for t.Kind() == reflect.Pointer {
+				t = t.Elem()
+			}
+			fieldEditions, fieldEditionsErr := toolutil.FieldEditions(t)
+			if fieldEditionsErr != nil {
+				return nil, fmt.Errorf("actioncatalog: %s: %w", spec.Name, fieldEditionsErr)
+			}
+			if len(fieldEditions) > 0 {
+				baseSchema, schemaErr := spec.InputSchema()
+				if schemaErr != nil {
+					return nil, fmt.Errorf("actioncatalog: %s: input schema: %w", spec.Name, schemaErr)
+				}
+				spec = spec.WithInputSchema(pruneInputSchemaByEdition(baseSchema, fieldEditions, opts.Edition))
+			}
+		}
+
 		c.byName[spec.Name] = spec
 		c.ordered = append(c.ordered, spec)
 		c.byDomain[spec.Domain] = append(c.byDomain[spec.Domain], spec)
@@ -277,38 +318,31 @@ func RenderToolName(actionName string) string {
 	return string(out)
 }
 
-// InputSchema returns spec's parameter schema — the identical map
-// spec.InputSchema itself would return — with every Business-Edition-only
-// property removed from "properties" and "required" whenever this catalog
-// was built for Community Edition. A field is Business-only when Input's
-// type declares it with an `edition:"EE"` struct tag (see
+// InputSchema returns spec's parameter schema. spec.InputSchema() called
+// directly returns the identical value: every spec this catalog ever hands
+// out (through Actions, ByDomain or Lookup) already carries its per-edition
+// pruning baked in, by Build, before it is ever stored — see Build's own
+// comment on the ActionSpec.WithInputSchema call for where that happens and
+// why it makes bypass impossible. This method used to be where pruning
+// itself lived, behind a second call every model-facing surface had to
+// remember to make instead of calling spec.InputSchema() directly; that was
+// the defect, because a fourth reader (cmd/audit_spec_drift's own
+// informational field count, at the time) could and did call
+// spec.InputSchema() instead and silently see every Business-Edition-only
+// field a Community catalog must never publish. Kept only for that one
+// existing call site and for tests exercising this exact path; a caller
+// starting fresh should simply call spec.InputSchema().
+//
+// # A field is Business-only when
+//
+// Input's type declares it with an `edition:"EE"` struct tag (see
 // toolutil.FieldEditions); cmd/gen_action_inputs is the only place that tag
 // is ever written, mechanically, for a field present in the Business
-// Edition operation's resolved schema and absent from the Community one
-// (nested structs included).
-//
-// ActionSpec.Edition already gates a whole action off a Community catalog;
-// this is what gates the fields of an action that is CE-shared but whose
-// input shape still isn't — 18 of the wave-1 domains' 53 CE-shared
-// operations, carrying 65 EE-only parameters between them, all declared
-// Edition: CE, at the time this method was added.
-//
-// # Why every model-facing surface must call this, not spec.InputSchema
-//
-// spec.InputSchema itself never prunes — it has no notion of which edition
-// a catalog was built for, and it must not grow one, because
-// cmd/audit_spec_drift depends on that: it never builds a Catalog at all
-// (it reads wiring.AllSpecs() directly — see that command's own package
-// doc), so its comparison against the vendored specification's *Business*
-// Edition operation stays unpruned by construction, not by a special case
-// carved out for it here. That is the seam this mechanism's brief asked for:
-// pruning is a Catalog concern, layered on top of spec.InputSchema, and
-// anything that never goes through a Catalog never sees it. Individual,
-// meta and dynamic — the three surfaces that do build one — are what must
-// call this method to publish a schema; calling spec.InputSchema directly
-// from one of them would silently re-offer a Business-only parameter to a
-// Community server, exactly the defect this whole mechanism exists to
-// close.
+// Edition operation's resolved schema and absent from the Community one.
+// FieldEditions itself only inspects Input's own top-level fields (an
+// anonymous embed is flattened, but a named nested struct field's own tag is
+// not consulted) — see docs/api-divergences.md §9.3 for the operations this
+// currently leaves ungated.
 //
 // # No output-schema half
 //
@@ -325,29 +359,25 @@ func (c *Catalog) InputSchema(spec toolutil.ActionSpec) (map[string]any, error) 
 	if err != nil {
 		return nil, fmt.Errorf("catalog input schema for %s: %w", spec.Name, err)
 	}
-	if spec.Input == nil {
-		return schema, nil
-	}
-	t := reflect.TypeOf(spec.Input)
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	return pruneInputSchemaByEdition(schema, toolutil.FieldEditions(t), c.edition), nil
+	return schema, nil
 }
 
 // pruneInputSchemaByEdition removes from schema every top-level property
 // named in fieldEditions whose required edition target does not include —
 // mirroring gitlab-mcp-server's pruneSchemaProperties (internal/tools/
 // action_catalog.go in that sibling), with the identical two properties its
-// own doc comment calls out as worth copying exactly:
+// own doc comment calls out as worth copying exactly. Called from Build,
+// once per kept spec whose Input type declares at least one `edition:"EE"`
+// field (FieldEditions is non-empty), immediately before the pruned result is
+// baked into that spec via ActionSpec.WithInputSchema.
 //
 //   - schema — spec.InputSchema's own return value, already an independent
 //     deep copy no cache anywhere else holds a reference to (see that
 //     method's doc comment) — is returned completely unchanged, the same
-//     map, not a clone, whenever nothing needs to be dropped: an action
-//     with no `edition:"EE"` field (every action today, until wave 1 lands)
-//     costs this call nothing beyond the map lookup that discovers there
-//     is nothing to prune.
+//     map, not a clone, whenever nothing needs to be dropped: building the
+//     Business Edition catalog itself, where every field a Business action
+//     declares already belongs, costs this call nothing beyond the map
+//     lookup that discovers there is nothing to drop.
 //   - When something must be dropped, only "properties" and "required" are
 //     replaced; every other top-level key is carried over by the initial
 //     maps.Copy, so a property this function does not touch is never

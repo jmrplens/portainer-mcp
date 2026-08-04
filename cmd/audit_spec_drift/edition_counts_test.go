@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 	"github.com/jmrplens/portainer-mcp/internal/wiring"
 )
@@ -115,28 +117,96 @@ func TestUnit_AuditEditionFieldCounts_BothEditionsBuilt(t *testing.T) {
 // TestUnit_AuditEditionFieldCounts_RealCatalog_MatchesMeasuredCounts pins
 // this function's output against the real declared catalog
 // (internal/wiring.AllSpecs, the same actions cmd/audit_spec_drift audits in
-// every real run). The numbers are not invented: measured directly by
-// building both real catalogs and summing each one's own
-// Catalog.InputSchema property counts at the time this test was written —
-// 18 actions/51 fields for Business Edition, 15 actions/40 fields for
-// Community Edition (system.upgrade is Community-only and contributes no
-// fields; system.update and registries' three ECR/repository-tag actions are
-// Business-only; registries.create/update's "github" and
-// registries.inspect's "endpointId" are the three fields Task 2's mechanism
-// prunes from the 14 actions both editions share). If per-field pruning
-// silently stopped working, Community's count would climb from 40 to 43 (the
-// three pruned fields returning) with this test failing on that exact
-// number, not merely "some number changed".
+// every real run).
+//
+// It deliberately does not pin an absolute action or field count the way an
+// earlier revision of this test did (EE{Actions:18,Fields:51},
+// CE{Actions:15,Fields:40}): every wave of new domains changes both numbers,
+// and a hard-coded literal here "went stale on every wave and failed the
+// build with no note pointing back at itself" (docs/domain-wave-checklist.md
+// Step 1.4, which lists the actual four places a new domain must be
+// registered and explicitly does not name this test as a fifth — this is
+// meant to need no manual update at all, the same fix Task 6 applied to
+// server_test.go's own hard-coded meta tool list).
+//
+// Instead it derives, per action, what per-field pruning must remove,
+// independently of oneEditionFieldCounts/pruneInputSchemaByEdition: for every
+// action present in *both* a freshly-built Community and Business catalog
+// (only those two catalogs can differ on a shared action's own field set;
+// system.upgrade/system.update and registries' ECR/repository-tag actions
+// are whole-action EE-or-CE-only and contribute nothing comparable here),
+// wantGated sums toolutil.FieldEditions(Input type) — a plain struct-tag
+// reflection, never a schema-property count — and the test asserts the
+// Business schema's own property count minus the Community schema's is
+// exactly that number, action by action. If per-field pruning silently
+// stopped working, every shared action's Business and Community property
+// counts would become equal (delta 0) while wantGated, computed from the
+// struct tags alone, stays exactly what it always was — the mismatch this
+// test now fails on, for whichever action regressed, however many domains
+// have landed by the time it runs.
 func TestUnit_AuditEditionFieldCounts_RealCatalog_MatchesMeasuredCounts(t *testing.T) {
 	t.Parallel()
-	result, err := auditEditionFieldCounts(wiring.AllSpecs(), "2.44.0")
+	actions := wiring.AllSpecs()
+
+	result, err := auditEditionFieldCounts(actions, "2.44.0")
 	if err != nil {
 		t.Fatalf("auditEditionFieldCounts() error = %v", err)
 	}
-	if result.EE.Actions != 18 || result.EE.Fields != 51 {
-		t.Errorf("auditEditionFieldCounts() EE = %+v, want {Actions:18 Fields:51}", result.EE)
+	if result.EE.Actions == 0 || result.EE.Fields == 0 {
+		t.Fatalf("auditEditionFieldCounts() EE = %+v, want at least one action and one field from the real catalog", result.EE)
 	}
-	if result.CE.Actions != 15 || result.CE.Fields != 40 {
-		t.Errorf("auditEditionFieldCounts() CE = %+v, want {Actions:15 Fields:40}: if this regressed to 43, per-field edition pruning has silently stopped", result.CE)
+	if result.CE.Actions == 0 || result.CE.Fields == 0 {
+		t.Fatalf("auditEditionFieldCounts() CE = %+v, want at least one action and one field from the real catalog", result.CE)
+	}
+
+	ceCatalog, err := actioncatalog.Build(actions, actioncatalog.Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("actioncatalog.Build(CE): %v", err)
+	}
+	eeCatalog, err := actioncatalog.Build(actions, actioncatalog.Options{Edition: edition.EE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("actioncatalog.Build(EE): %v", err)
+	}
+
+	totalGated := 0
+	for _, ceSpec := range ceCatalog.Actions() {
+		eeSpec, sharedByBothEditions := eeCatalog.Lookup(ceSpec.Name)
+		if !sharedByBothEditions {
+			continue
+		}
+
+		wantGated := 0
+		if ceSpec.Input != nil {
+			inputType := reflect.TypeOf(ceSpec.Input)
+			for inputType.Kind() == reflect.Pointer {
+				inputType = inputType.Elem()
+			}
+			fieldEditions, err := toolutil.FieldEditions(inputType)
+			if err != nil {
+				t.Fatalf("toolutil.FieldEditions(%s): %v", ceSpec.Name, err)
+			}
+			wantGated = len(fieldEditions)
+		}
+
+		ceSchema, err := ceCatalog.InputSchema(ceSpec)
+		if err != nil {
+			t.Fatalf("ceCatalog.InputSchema(%s): %v", ceSpec.Name, err)
+		}
+		eeSchema, err := eeCatalog.InputSchema(eeSpec)
+		if err != nil {
+			t.Fatalf("eeCatalog.InputSchema(%s): %v", eeSpec.Name, err)
+		}
+		ceProps, _ := ceSchema["properties"].(map[string]any)
+		eeProps, _ := eeSchema["properties"].(map[string]any)
+
+		if gotGated := len(eeProps) - len(ceProps); gotGated != wantGated {
+			t.Errorf("%s: EE properties (%d) - CE properties (%d) = %d, want %d (the number of edition:\"EE\"-tagged top-level fields on this shared action's own Input type): if this dropped to 0 while the struct still carries the tag, per-field edition pruning has silently stopped for this action",
+				ceSpec.Name, len(eeProps), len(ceProps), gotGated, wantGated)
+		}
+		totalGated += wantGated
+	}
+
+	if totalGated == 0 {
+		t.Fatal("test setup bug: no action shared by both real catalogs declares an edition:\"EE\" field; this test cannot discriminate pruning stopping without at least one (see internal/tools/registries's registryCreateInput.Github and registryInspectInput.EndpointID)")
 	}
 }

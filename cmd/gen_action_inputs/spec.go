@@ -90,6 +90,13 @@ type operation struct {
 	// (checked against both), so — unlike requestBody — there is no
 	// requestBodies-style indirection to resolve here.
 	Responses map[string]map[string]any
+	// Deprecated is the operation's own "deprecated" OpenAPI keyword: true
+	// when the vendored specification itself marks this operation
+	// deprecated. run() (main.go) skips generating anything at all for a
+	// deprecated operation by default — see its own doc comment on that
+	// check for why silently emitting a handler for a route Portainer itself
+	// is phasing out is worse than refusing.
+	Deprecated bool
 }
 
 // operationsByDomain decodes every operation in paths and groups it by
@@ -110,6 +117,7 @@ func operationsByDomain(paths map[string]map[string]json.RawMessage) (map[string
 				Parameters  []map[string]any          `json:"parameters"`
 				RequestBody map[string]any            `json:"requestBody"`
 				Responses   map[string]map[string]any `json:"responses"`
+				Deprecated  bool                      `json:"deprecated"`
 			}
 			if err := json.Unmarshal(raw, &op); err != nil {
 				return nil, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
@@ -131,6 +139,7 @@ func operationsByDomain(paths map[string]map[string]json.RawMessage) (map[string
 				Parameters:  op.Parameters,
 				RequestBody: op.RequestBody,
 				Responses:   op.Responses,
+				Deprecated:  op.Deprecated,
 			}
 			byDomain[domain] = append(byDomain[domain], o)
 		}

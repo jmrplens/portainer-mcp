@@ -90,6 +90,13 @@ type ActionSpec struct {
 	// genuinely confusable; FillScopeParameterGuidance fills the rest from a
 	// central table of Portainer's well-known identifier names.
 	ParameterGuidance map[string]ParameterGuidance
+
+	// prunedInputSchema, when non-nil, is what InputSchema returns for this
+	// spec verbatim (through deepCopySchema), bypassing both reflection of
+	// Input and the process-wide, type-keyed schema cache InputSchema
+	// otherwise consults. Only WithInputSchema sets it — see that method's
+	// doc comment for why actioncatalog.Build is the sole intended caller.
+	prunedInputSchema map[string]any
 }
 
 // Validate reports whether the spec is internally coherent.

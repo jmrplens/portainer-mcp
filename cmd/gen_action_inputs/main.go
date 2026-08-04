@@ -31,6 +31,15 @@
 // emits must be trustworthy without review, and a refusal that is loud beats
 // a struct that is silently wrong.
 //
+// A deprecated operation (the vendored specification's own "deprecated":
+// true) is a related but distinct case: not a defect this generator cannot
+// safely handle, but a route Portainer itself is phasing out, which this
+// command skips by default rather than generate — no struct, no handler, no
+// ActionSpec entry — unless a domain author has already declared a
+// hand-written override for it. Skipping one of these does not fail the
+// run the way a refusal does; it is reported informationally alongside the
+// overridden-operations report, once per domain.
+//
 // None of these refusals aborts the whole run, and — since P3.3 task 3 —
 // none of them poisons the whole domain either. Every one is scoped to *the
 // one operation that triggered it*: that operation contributes nothing at
@@ -304,6 +313,7 @@ func run(args []string) error {
 		var handlerSpecs []handlerSpec
 		var specEntries []specEntry
 		var overriddenOps []string
+		var deprecatedOps []string
 		var redactionGuards []redactionGuard
 		// domainRefusalCount is this domain's own share of refusals, printed
 		// immediately below so a reviewer does not have to count the final
@@ -314,6 +324,32 @@ func run(args []string) error {
 		// domain's files are still written from whatever succeeded.
 		domainRefusalCount := 0
 		for _, op := range ops {
+			// A deprecated operation contributes nothing at all by default:
+			// no struct, no handler, no ActionSpec entry — the owner's own
+			// call (this task) is that a route the vendored specification
+			// itself is phasing out should not be offered as a new MCP
+			// action to begin with, rather than generated once and left for
+			// a human to notice and remove later. This is not a refusal (it
+			// costs no exit-code-non-zero, unlike a genuine generation
+			// defect below): it is reported informationally, the same way
+			// overriddenOps is, so a reviewer sees which operations were
+			// skipped and why.
+			//
+			// "unless explicitly asked" is the existing hand-override escape
+			// hatch (scanHandOverrides/overrideReason), checked here before
+			// any of this operation's fields are even assembled: a domain
+			// author who has already declared a handler (or the mechanical
+			// function name) for this exact operationId gets it, deprecated
+			// or not — the generator's own default not to bother with a
+			// deprecated route does not apply once a human has explicitly
+			// taken it over.
+			if op.Deprecated {
+				if _, overridden := overrides.overrideReason(op); !overridden {
+					deprecatedOps = append(deprecatedOps, fmt.Sprintf("%s %s (operationId %s)", op.Method, op.Path, op.OperationID))
+					continue
+				}
+			}
+
 			structName := inputStructName(op.OperationID)
 			var nested []structSpec
 			// fields and pathOrder are computed exactly once here, from this
@@ -528,6 +564,14 @@ func run(args []string) error {
 			sort.Strings(overriddenOps)
 			fmt.Fprintf(os.Stderr, "domain %s: %d operation(s) already covered by hand-written code, no handler generated:\n", domainName, len(overriddenOps))
 			for _, o := range overriddenOps {
+				fmt.Fprintf(os.Stderr, "  - %s\n", o)
+			}
+		}
+
+		if len(deprecatedOps) > 0 {
+			sort.Strings(deprecatedOps)
+			fmt.Fprintf(os.Stderr, "domain %s: %d operation(s) skipped as deprecated upstream, no handler generated (add a hand-written override to generate one anyway):\n", domainName, len(deprecatedOps))
+			for _, o := range deprecatedOps {
 				fmt.Fprintf(os.Stderr, "  - %s\n", o)
 			}
 		}

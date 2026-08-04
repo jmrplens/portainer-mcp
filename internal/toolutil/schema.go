@@ -45,6 +45,19 @@ func emptyObjectSchema() map[string]any {
 // but InputSchema re-checks so it never silently reflects something no MCP
 // client could use as tool arguments.
 func (s ActionSpec) InputSchema() (map[string]any, error) {
+	// A spec carrying a baked-in schema (see WithInputSchema) always returns
+	// it, in preference to reflecting Input and consulting schemaCache below:
+	// actioncatalog.Build bakes in the edition-pruned shape for exactly the
+	// specs whose Input type declares an `edition:"EE"` field, and every
+	// later reader of that spec — every surface, and ValidateInput through
+	// resolvedInputSchema below — must see the pruned shape with nothing
+	// further to call. deepCopySchema, not the map itself, for the identical
+	// reason the ordinary reflected path never hands out schemaCache's own
+	// entry: a caller mutating its result must never reach what another
+	// caller (or a later call to this same method) sees next.
+	if s.prunedInputSchema != nil {
+		return deepCopySchema(s.prunedInputSchema), nil
+	}
 	if s.Input == nil {
 		return emptyObjectSchema(), nil
 	}
@@ -93,6 +106,30 @@ func (s ActionSpec) InputSchema() (map[string]any, error) {
 	schemaCacheMu.Unlock()
 
 	return deepCopySchema(asMap), nil
+}
+
+// WithInputSchema returns a copy of s whose InputSchema — and, through it,
+// ValidateInput — always returns schema instead of reflecting s.Input and
+// consulting the process-wide schemaCache/resolvedSchemaCache below.
+//
+// actioncatalog.Build is the only intended caller: for a spec whose Input
+// type declares an `edition:"EE"` field, Build computes the edition-pruned
+// schema once, when the catalog is constructed, and bakes it into the spec
+// through this method before the spec is ever stored in the catalog or
+// handed to a surface. Every later reader of that spec — Catalog.Actions,
+// ByDomain and Lookup, and therefore every one of the three model-facing
+// surfaces, plus Execute's own ValidateInput call — then sees the pruned
+// shape with nothing further to call: there is no unpruned path left to
+// take, unlike an opt-in accessor a fourth reader could simply not call.
+//
+// schema is stored as-is, not copied again on the way in: the caller must
+// already hand over an independent map it owns — Build always does, since it
+// is itself built from spec.InputSchema()'s own already-independent return
+// value (see that method's doc comment above) — because WithInputSchema does
+// not defensively clone it a second time.
+func (s ActionSpec) WithInputSchema(schema map[string]any) ActionSpec {
+	s.prunedInputSchema = schema
+	return s
 }
 
 // EnumParams optionally lets an Input type declare enum constraints per JSON
@@ -203,7 +240,33 @@ var (
 // resolvedInputSchema returns the resolved schema ValidateInput checks raw
 // arguments against, built from the same map InputSchema publishes so the two
 // can never describe different shapes.
+//
+// A spec carrying a baked-in, edition-pruned schema (s.prunedInputSchema, set
+// by WithInputSchema) never reads or writes resolvedSchemaCache below: two
+// ActionSpec values built from the identical Go Input type — one from a
+// Community catalog, one from a Business catalog — legitimately resolve to
+// two different schemas once per-field edition pruning applies, and that
+// cache is keyed only by reflect.Type, with no notion of which catalog's
+// edition produced this particular spec. Caching the Community build's
+// resolved schema under the shared type key would then leak into the very
+// next Business build that happens to share the Go Input type, silently
+// re-admitting (or wrongly forbidding) fields regardless of which edition
+// actually asked — the identical cache-poisoning trap
+// TestUnit_CatalogInputSchema_BuildingCEThenEE_DoesNotLoseFieldForEE already
+// guards for InputSchema's own map cache. Resolving fresh here instead is the
+// only way to keep the two builds from clobbering each other's entry;
+// actioncatalog.Build runs once at server startup and ValidateInput runs once
+// per tool invocation, so the cost is one JSON encode/decode/resolve per call
+// for exactly the actions this mechanism gates, not a hot loop.
 func (s ActionSpec) resolvedInputSchema() (*jsonschema.Resolved, error) {
+	if s.prunedInputSchema != nil {
+		schemaMap, err := s.InputSchema()
+		if err != nil {
+			return nil, err
+		}
+		return resolveSchemaMap(schemaMap)
+	}
+
 	var key reflect.Type
 	if s.Input != nil {
 		key = reflect.TypeOf(s.Input)
@@ -223,6 +286,26 @@ func (s ActionSpec) resolvedInputSchema() (*jsonschema.Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
+	resolved, err := resolveSchemaMap(schemaMap)
+	if err != nil {
+		return nil, err
+	}
+
+	resolvedSchemaCacheMu.Lock()
+	resolvedSchemaCache[key] = resolved
+	resolvedSchemaCacheMu.Unlock()
+
+	return resolved, nil
+}
+
+// resolveSchemaMap encodes schemaMap (a decoded JSON Schema object, such as
+// InputSchema's own return value) and resolves it into the form
+// jsonschema.Resolved.Validate checks raw arguments against. Factored out of
+// resolvedInputSchema so both its cached path (an ordinary, unpruned Input
+// type) and its uncached path (a spec carrying a baked-in, edition-pruned
+// schema — see that method's own doc comment on why those must never share
+// resolvedSchemaCache) resolve identically.
+func resolveSchemaMap(schemaMap map[string]any) (*jsonschema.Resolved, error) {
 	encoded, err := json.Marshal(schemaMap)
 	if err != nil {
 		return nil, fmt.Errorf("encode schema for validation: %w", err)
@@ -235,11 +318,6 @@ func (s ActionSpec) resolvedInputSchema() (*jsonschema.Resolved, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve schema for validation: %w", err)
 	}
-
-	resolvedSchemaCacheMu.Lock()
-	resolvedSchemaCache[key] = resolved
-	resolvedSchemaCacheMu.Unlock()
-
 	return resolved, nil
 }
 

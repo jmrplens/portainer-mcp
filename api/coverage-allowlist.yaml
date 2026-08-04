@@ -18,12 +18,32 @@
 # stale entry would otherwise keep forgiving something that no longer
 # exists, and a real, unrelated gap could later inherit its name.
 #
-# Empty today, deliberately: as of this file's introduction the catalog
-# covers 18 of 441 Business Edition operations and 15 of 251 Community
-# Edition operations, so almost everything currently failing this audit is a
-# real gap waiting for its action, not a legitimate exclusion. An entry
-# belongs here only once a specific operation has been examined and found
-# genuinely impossible to expose — a deprecated route, a websocket upgrade
-# MCP cannot carry, and similar — never as a shortcut to make the count look
-# better before that examination happens.
-[]
+# Empty until the two entries below: as of this file's introduction the
+# catalog covers 18 of 441 Business Edition operations and 15 of 251
+# Community Edition operations, so almost everything currently failing this
+# audit is a real gap waiting for its action, not a legitimate exclusion. An
+# entry belongs here only once a specific operation has been examined and
+# found genuinely impossible to expose — a deprecated route, a websocket
+# upgrade MCP cannot carry, and similar — never as a shortcut to make the
+# count look better before that examination happens.
+- operation_id: EndpointDeleteBatchDeprecated
+  reason: >-
+    Deprecated upstream (DELETE /endpoints; the operationId itself says so,
+    and the generated client's EndpointDeleteBatchDeprecatedWithResponse
+    carries a `// Deprecated:` doc comment staticcheck's SA1019 flags).
+    EndpointDeleteBatch (POST /endpoints/delete) is the replacement and is
+    not excluded here. cmd/gen_action_inputs skips generating a handler for
+    any deprecated:true operation by default (see main.go's run(), the
+    deprecatedOps report) rather than expose a route Portainer itself is
+    phasing out.
+  added: "2026-08-04"
+- operation_id: CustomTemplateCreate
+  reason: >-
+    Deprecated upstream (POST /custom_templates; the generated client's
+    CustomTemplateCreateWithResponse carries a `// Deprecated:` doc comment
+    staticcheck's SA1019 flags, identical to EndpointDeleteBatchDeprecated
+    above). The vendored specification sets no `x-deprecated-reason` and
+    names no replacement operation for this one. Excluded for the same
+    reason and by the same generator mechanism as
+    EndpointDeleteBatchDeprecated.
+  added: "2026-08-04"

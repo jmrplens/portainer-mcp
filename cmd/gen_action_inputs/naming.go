@@ -277,11 +277,34 @@ func exportedName(id string) string {
 // slot in as a drop-in replacement: the domain's Specs() function already
 // writes `Input: tagCreateInput{}` and every handler already declares `var
 // params tagCreateInput`.
+//
+// operationID is run through splitWords/goFieldName — the identical
+// initialism-aware machinery assembleFields already uses for every wire
+// property name — rather than merely lower-casing its first rune, which is
+// what this function did before: a plain rune swap left every one of an
+// operationId's own words exactly as the vendored specification happened to
+// spell them, so "StackCreateKubernetesUrl" rendered
+// "stackCreateKubernetesUrlInput" (golangci-lint's revive var-naming flags
+// it: a recognised initialism, "URL", spelled as an ordinary word) and
+// "GitOpsSourcesTestById" rendered "gitOpsSourcesTestByIdInput" (same
+// defect, "ID"). Routing through goFieldName first renders every recognised
+// initialism upper-case regardless of how the source operationId spelled it,
+// matching what handlerFuncName below now does for the identical reason.
+// Checked against every operationId in both vendored specs: exactly these
+// two change from what the naive rune swap produced, and both changes fix a
+// real revive finding rather than introduce one — see naming_test.go's own
+// proof, and docs/api-divergences.md for one further, pre-existing
+// consumeInitialisms defect this check surfaced (unrelated to either of
+// these two, and not in a wave-1 domain).
 func inputStructName(operationID string) string {
-	r := []rune(operationID)
-	if len(r) == 0 {
+	if operationID == "" {
 		return "input"
 	}
+	name := goFieldName(splitWords(operationID))
+	if name == "" {
+		return "input"
+	}
+	r := []rune(name)
 	r[0] = unicode.ToLower(r[0])
 	return string(r) + "Input"
 }
