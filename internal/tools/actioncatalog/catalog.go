@@ -8,6 +8,8 @@ package actioncatalog
 
 import (
 	"fmt"
+	"maps"
+	"reflect"
 	"sort"
 
 	"github.com/jmrplens/portainer-mcp/internal/apiversion"
@@ -31,7 +33,15 @@ type Catalog struct {
 	ordered  []toolutil.ActionSpec
 	byDomain map[string][]toolutil.ActionSpec
 	domains  []string
+	// edition is the Options.Edition Build was called with — what
+	// InputSchema prunes a shared action's parameters against. See that
+	// method's own doc comment for why this is a Catalog concern and not
+	// ActionSpec.InputSchema's.
+	edition edition.Edition
 }
+
+// Edition returns the edition this catalog was built for.
+func (c *Catalog) Edition() edition.Edition { return c.edition }
 
 // Build validates every spec and keeps those the target server can serve.
 //
@@ -54,6 +64,7 @@ func Build(specs []toolutil.ActionSpec, opts Options) (*Catalog, error) {
 	c := &Catalog{
 		byName:   make(map[string]toolutil.ActionSpec, len(specs)),
 		byDomain: map[string][]toolutil.ActionSpec{},
+		edition:  opts.Edition,
 	}
 
 	seen := make(map[string]struct{}, len(specs))
@@ -264,4 +275,126 @@ func RenderToolName(actionName string) string {
 		out = append(out, r)
 	}
 	return string(out)
+}
+
+// InputSchema returns spec's parameter schema — the identical map
+// spec.InputSchema itself would return — with every Business-Edition-only
+// property removed from "properties" and "required" whenever this catalog
+// was built for Community Edition. A field is Business-only when Input's
+// type declares it with an `edition:"EE"` struct tag (see
+// toolutil.FieldEditions); cmd/gen_action_inputs is the only place that tag
+// is ever written, mechanically, for a field present in the Business
+// Edition operation's resolved schema and absent from the Community one
+// (nested structs included).
+//
+// ActionSpec.Edition already gates a whole action off a Community catalog;
+// this is what gates the fields of an action that is CE-shared but whose
+// input shape still isn't — 18 of the wave-1 domains' 53 CE-shared
+// operations, carrying 65 EE-only parameters between them, all declared
+// Edition: CE, at the time this method was added.
+//
+// # Why every model-facing surface must call this, not spec.InputSchema
+//
+// spec.InputSchema itself never prunes — it has no notion of which edition
+// a catalog was built for, and it must not grow one, because
+// cmd/audit_spec_drift depends on that: it never builds a Catalog at all
+// (it reads wiring.AllSpecs() directly — see that command's own package
+// doc), so its comparison against the vendored specification's *Business*
+// Edition operation stays unpruned by construction, not by a special case
+// carved out for it here. That is the seam this mechanism's brief asked for:
+// pruning is a Catalog concern, layered on top of spec.InputSchema, and
+// anything that never goes through a Catalog never sees it. Individual,
+// meta and dynamic — the three surfaces that do build one — are what must
+// call this method to publish a schema; calling spec.InputSchema directly
+// from one of them would silently re-offer a Business-only parameter to a
+// Community server, exactly the defect this whole mechanism exists to
+// close.
+//
+// # No output-schema half
+//
+// gitlab-mcp-server's identical pruneSchemaFieldsByTier (that sibling's
+// internal/tools/action_catalog.go:130-200) also prunes an *output* schema,
+// leniently (an excluded field may still come back in a real response, so
+// it sets additionalProperties: true rather than refusing it). ActionSpec
+// publishes no output schema at all — every tool surface's result is
+// whatever the handler returns, never validated against a published shape
+// — so there is nothing here for a lenient half to re-admit. Ported as "no
+// such thing to prune", not silently dropped.
+func (c *Catalog) InputSchema(spec toolutil.ActionSpec) (map[string]any, error) {
+	schema, err := spec.InputSchema()
+	if err != nil {
+		return nil, fmt.Errorf("catalog input schema for %s: %w", spec.Name, err)
+	}
+	if spec.Input == nil {
+		return schema, nil
+	}
+	t := reflect.TypeOf(spec.Input)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return pruneInputSchemaByEdition(schema, toolutil.FieldEditions(t), c.edition), nil
+}
+
+// pruneInputSchemaByEdition removes from schema every top-level property
+// named in fieldEditions whose required edition target does not include —
+// mirroring gitlab-mcp-server's pruneSchemaProperties (internal/tools/
+// action_catalog.go in that sibling), with the identical two properties its
+// own doc comment calls out as worth copying exactly:
+//
+//   - schema — spec.InputSchema's own return value, already an independent
+//     deep copy no cache anywhere else holds a reference to (see that
+//     method's doc comment) — is returned completely unchanged, the same
+//     map, not a clone, whenever nothing needs to be dropped: an action
+//     with no `edition:"EE"` field (every action today, until wave 1 lands)
+//     costs this call nothing beyond the map lookup that discovers there
+//     is nothing to prune.
+//   - When something must be dropped, only "properties" and "required" are
+//     replaced; every other top-level key is carried over by the initial
+//     maps.Copy, so a property this function does not touch is never
+//     second-guessed.
+func pruneInputSchemaByEdition(schema map[string]any, fieldEditions map[string]edition.Edition, target edition.Edition) map[string]any {
+	if len(fieldEditions) == 0 {
+		return schema
+	}
+	drop := make(map[string]bool, len(fieldEditions))
+	for name, required := range fieldEditions {
+		if !target.Includes(required) {
+			drop[name] = true
+		}
+	}
+	if len(drop) == 0 {
+		return schema
+	}
+
+	cloned := make(map[string]any, len(schema))
+	maps.Copy(cloned, schema)
+
+	if props, ok := schema["properties"].(map[string]any); ok {
+		newProps := make(map[string]any, len(props))
+		for name, value := range props {
+			if !drop[name] {
+				newProps[name] = value
+			}
+		}
+		cloned["properties"] = newProps
+	}
+	switch req := schema["required"].(type) {
+	case []any:
+		newReq := make([]any, 0, len(req))
+		for _, item := range req {
+			if name, _ := item.(string); !drop[name] {
+				newReq = append(newReq, item)
+			}
+		}
+		cloned["required"] = newReq
+	case []string:
+		newReq := make([]string, 0, len(req))
+		for _, name := range req {
+			if !drop[name] {
+				newReq = append(newReq, name)
+			}
+		}
+		cloned["required"] = newReq
+	}
+	return cloned
 }

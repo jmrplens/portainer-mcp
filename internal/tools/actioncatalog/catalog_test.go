@@ -518,6 +518,167 @@ func TestBuild_EmptyEdition_ReturnsError(t *testing.T) {
 	}
 }
 
+// editionGatedInput is the fixture every Catalog.InputSchema test below
+// shares: one plain field and one `edition:"EE"` field, the exact shape
+// Task 2's own brief specifies for its Step 1 tests.
+type editionGatedInput struct {
+	Name    string `json:"name"`
+	EdgeKey string `json:"edgeKey,omitempty" edition:"EE"`
+}
+
+// editionGatedSpec is spec() plus an Input carrying editionGatedInput, so
+// its schema has something for edition-based pruning to actually drop.
+// system.info/SystemInfo is shared by both editions in the real
+// applicability index, which every test below needs: Build's own
+// Edition/index cross-check would refuse a CE declaration for an
+// EE-exclusive operation before InputSchema is ever reached.
+func editionGatedSpec() toolutil.ActionSpec {
+	s := spec("system.info", "system", "SystemInfo", edition.CE)
+	s.Input = editionGatedInput{}
+	return s
+}
+
+// TestUnit_CatalogInputSchema_CEBuild_DropsEEOnlyFieldAndFromRequired is
+// Task 2's Step 1 test, CE half: built for Community Edition, the plain
+// field is published and the EE-only field is gone from both "properties"
+// and "required".
+func TestUnit_CatalogInputSchema_CEBuild_DropsEEOnlyFieldAndFromRequired(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	found, ok := c.Lookup("system.info")
+	if !ok {
+		t.Fatal("Lookup(system.info) = false, want the action present on a CE catalog")
+	}
+
+	schema, err := c.InputSchema(found)
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if _, ok := props["name"]; !ok {
+		t.Errorf("properties = %v, want the untagged \"name\" field present", props)
+	}
+	if _, ok := props["edgeKey"]; ok {
+		t.Errorf("properties = %v, want the edition:\"EE\" \"edgeKey\" field pruned from a CE catalog", props)
+	}
+	for _, name := range toolutil.RequiredParams(schema) {
+		if name == "edgeKey" {
+			t.Error("required still names \"edgeKey\" after it was pruned from properties")
+		}
+	}
+}
+
+// TestUnit_CatalogInputSchema_EEBuild_KeepsEEOnlyField is Step 1's EE half:
+// built for Business Edition, both fields appear.
+func TestUnit_CatalogInputSchema_EEBuild_KeepsEEOnlyField(t *testing.T) {
+	t.Parallel()
+	c, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, eeOpts())
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	found, ok := c.Lookup("system.info")
+	if !ok {
+		t.Fatal("Lookup(system.info) = false, want the action present on an EE catalog")
+	}
+
+	schema, err := c.InputSchema(found)
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for _, name := range []string{"name", "edgeKey"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("properties = %v, want %q present on an EE catalog", props, name)
+		}
+	}
+}
+
+// TestUnit_PruneInputSchemaByEdition_NothingToDrop_ReturnsSchemaUnchanged is
+// the discriminating half the brief calls out explicitly: an action with no
+// `edition:"EE"` field (fieldEditions nil, the common case) must get back
+// the exact same map, not a needless clone.
+//
+// spec.InputSchema itself already returns an independent deep copy on every
+// call (see that method's own doc comment), so this property has to be
+// tested at the pruning function's own level — Catalog.InputSchema's two
+// stages (spec.InputSchema, then pruneInputSchemaByEdition) cannot be told
+// apart by comparing two separately-obtained schemas, since the first stage
+// alone already guarantees they are never the same map. Proven here by
+// mutating schema *after* the call and checking the mutation is visible in
+// got too — only true if the two are the same underlying map, which a
+// clone would not be.
+func TestUnit_PruneInputSchemaByEdition_NothingToDrop_ReturnsSchemaUnchanged(t *testing.T) {
+	t.Parallel()
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"name": map[string]any{"type": "string"}},
+	}
+
+	got := pruneInputSchemaByEdition(schema, nil, edition.CE)
+	schema["marker"] = "planted after the call"
+	if _, ok := got["marker"]; !ok {
+		t.Error("pruneInputSchemaByEdition returned a different map when fieldEditions was nil; want the identical map, not a clone")
+	}
+
+	// Same claim, the other way nothing-to-drop can arise: a fieldEditions
+	// map that names a field, but whose required edition the target already
+	// includes (an EE target facing an EE-only field), so drop ends up empty
+	// even though fieldEditions itself is not nil.
+	schema2 := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"edgeKey": map[string]any{"type": "string"}},
+	}
+	got2 := pruneInputSchemaByEdition(schema2, map[string]edition.Edition{"edgeKey": edition.EE}, edition.EE)
+	schema2["marker"] = "planted after the call"
+	if _, ok := got2["marker"]; !ok {
+		t.Error("pruneInputSchemaByEdition cloned the schema even though the EE target already includes every gated field")
+	}
+}
+
+// TestUnit_CatalogInputSchema_BuildingCEThenEE_DoesNotLoseFieldForEE is the
+// trap named explicitly in the brief: a test that only ever builds a CE
+// catalog cannot tell "prunes per catalog" apart from "mutates the shared
+// cached schema", because both look identical from the CE side alone. This
+// builds CE first, reads its (rightly) pruned schema, then builds a second,
+// independent EE catalog for the exact same Input type and confirms the
+// EE-only field is still there — which an implementation that cached the
+// *pruned* result keyed only by reflect.Type (ignoring which edition it was
+// pruned for) would fail, because the CE build would have poisoned that
+// cache entry before the EE build ever read it.
+func TestUnit_CatalogInputSchema_BuildingCEThenEE_DoesNotLoseFieldForEE(t *testing.T) {
+	t.Parallel()
+	ceCatalog, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, Options{Edition: edition.CE, ServerVersion: "2.44.0"})
+	if err != nil {
+		t.Fatalf("CE Build() error = %v", err)
+	}
+	ceSpec, _ := ceCatalog.Lookup("system.info")
+	ceSchema, err := ceCatalog.InputSchema(ceSpec)
+	if err != nil {
+		t.Fatalf("CE InputSchema() error = %v", err)
+	}
+	ceProps, _ := ceSchema["properties"].(map[string]any)
+	if _, leaked := ceProps["edgeKey"]; leaked {
+		t.Fatal("CE catalog already publishes edgeKey; the fixture proves nothing about the cache trap")
+	}
+
+	eeCatalog, err := Build([]toolutil.ActionSpec{editionGatedSpec()}, eeOpts())
+	if err != nil {
+		t.Fatalf("EE Build() error = %v", err)
+	}
+	eeSpec, _ := eeCatalog.Lookup("system.info")
+	eeSchema, err := eeCatalog.InputSchema(eeSpec)
+	if err != nil {
+		t.Fatalf("EE InputSchema() error = %v", err)
+	}
+	eeProps, _ := eeSchema["properties"].(map[string]any)
+	if _, ok := eeProps["edgeKey"]; !ok {
+		t.Error("EE catalog is missing edgeKey after a CE catalog for the same Input type was built first: the CE build's pruning leaked across catalogs")
+	}
+}
+
 // The end-to-end property the registries pilot exists for: the same declared
 // specs must yield different catalogs on CE and EE.
 func TestBuild_RegistriesPilot_YieldsDifferentCatalogsPerEdition(t *testing.T) {

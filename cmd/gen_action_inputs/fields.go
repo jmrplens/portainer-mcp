@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 )
 
 // structSpec is one Go struct this generator will emit: either the flat
@@ -62,6 +64,19 @@ type fieldSpec struct {
 	// since google/jsonschema-go's reflector has no struct-tag syntax for
 	// "minimum" either.
 	Minimum *int
+	// RequiresEdition is non-empty (always edition.EE, the only value that
+	// means anything — see toolutil.FieldEditions) when this field is present
+	// in the Business Edition operation's resolved schema and absent from the
+	// Community one: a shared operation whose *shape* still is not shared.
+	// Set by ceEEFieldDiff/applyFieldEditionGate in main.go's per-operation
+	// loop, never by assembleFields/assembleOperationFields themselves, which
+	// have no notion of a second, Community-side resolution at all. Rendered
+	// as an `edition:"EE"` struct tag by fieldTag below, read back by
+	// toolutil.FieldEditions and pruned per catalog edition by
+	// actioncatalog.Catalog.InputSchema — nested fields included, since this
+	// is a plain fieldSpec property and every nested structSpec's own Fields
+	// are fieldSpecs too.
+	RequiresEdition edition.Edition
 }
 
 // isIdentifierPathParam reports whether name — a path parameter's own OpenAPI
@@ -195,10 +210,20 @@ func pathParamTakesMinimum(operationID, paramName string) bool {
 // escaping (quotes, backslashes, newlines) for the common case; falling back
 // to it only when a backtick is present keeps the common, backtick-free case
 // rendering exactly as before.
-func fieldTag(name string, required bool, description string) string {
+//
+// requiresEdition, when non-empty, appends an `edition:"EE"` keyword —
+// toolutil.FieldEditions' own tag, read back at catalog-build time to prune
+// this field from a Community catalog's published schema (see
+// actioncatalog.Catalog.InputSchema). Appended last, after "json" and
+// "jsonschema", so an existing field's tag only ever grows a new trailing
+// keyword rather than reordering what is already there.
+func fieldTag(name string, required bool, description string, requiresEdition edition.Edition) string {
 	content := "json:" + strconv.Quote(jsonNameValue(name, required))
 	if description != "" {
 		content += " jsonschema:" + strconv.Quote(description)
+	}
+	if requiresEdition != "" {
+		content += " edition:" + strconv.Quote(string(requiresEdition))
 	}
 	if strings.ContainsRune(content, '`') {
 		return fmt.Sprintf("%q", content)
@@ -598,4 +623,101 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		fields = append(fields, byName[name].field)
 	}
 	return fields, pathOrder, nil
+}
+
+// ceOperationsByID flattens operationsByDomain's per-tag grouping of the
+// vendored Community Edition specification into the flat, by-operationId
+// index ceEEFieldDiff needs to find one EE operation's CE counterpart.
+// Mirrors ceOperationIDSet's identical flattening in actionspec.go, which
+// only needed presence (map[string]bool); this needs the operation itself,
+// to resolve its fields.
+func ceOperationsByID(ceByTag map[string][]operation) map[string]operation {
+	out := make(map[string]operation)
+	for _, ops := range ceByTag {
+		for _, op := range ops {
+			out[op.OperationID] = op
+		}
+	}
+	return out
+}
+
+// ceEEFieldDiff resolves ceOp's own fields (against the Community
+// specification's resolver and document) and compares them, structurally,
+// against eeStructName/eeFields/eeNested — the identical operation's already-
+// resolved Business Edition shape — returning the set of fields present on
+// the Business side and absent from the Community one.
+//
+// The comparison is nested-inclusive, matching this generator's own
+// deterministic nested-struct naming (typeOf/assembleFields: a nested
+// struct's name is always structPrefix+GoFieldName, independent of which
+// specification produced it): a struct is looked up by that same name on
+// both sides. A struct absent from the Community side entirely — an object
+// property Business Edition added wholesale, not merely widened — marks
+// every one of its own fields Business-only; a struct present on both sides
+// is compared field by field, by JSON name, within that struct alone. The
+// returned set is keyed "structName.jsonName", which is unique across one
+// operation's whole tree because structSpec names already are (see
+// duplicateStructName).
+//
+// ceRes must resolve against ceDoc (the Community specification's own
+// resolver/document pair), never the Business Edition one eeRes/eeDoc used
+// to produce eeFields/eeNested — comparing an operation's Community shape
+// against itself, resolved from the wrong document, would silently report
+// no divergence at all.
+func ceEEFieldDiff(eeStructName string, eeFields []fieldSpec, eeNested []structSpec, ceOp operation, ceRes *resolver, ceDoc *document) (map[string]bool, error) {
+	var ceNested []structSpec
+	ceFields, _, err := assembleOperationFields(ceOp, ceRes, ceDoc, eeStructName, &ceNested)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Community Edition shape: %w", err)
+	}
+
+	ceByStruct := map[string]structSpec{eeStructName: {Name: eeStructName, Fields: ceFields}}
+	for _, s := range ceNested {
+		ceByStruct[s.Name] = s
+	}
+
+	eeByStruct := map[string]structSpec{eeStructName: {Name: eeStructName, Fields: eeFields}}
+	for _, s := range eeNested {
+		eeByStruct[s.Name] = s
+	}
+
+	eeOnly := map[string]bool{}
+	for structName, eeStruct := range eeByStruct {
+		ceStruct, sharedStruct := ceByStruct[structName]
+		var ceFieldNames map[string]bool
+		if sharedStruct {
+			ceFieldNames = make(map[string]bool, len(ceStruct.Fields))
+			for _, f := range ceStruct.Fields {
+				ceFieldNames[f.JSONName] = true
+			}
+		}
+		for _, f := range eeStruct.Fields {
+			if !sharedStruct || !ceFieldNames[f.JSONName] {
+				eeOnly[structName+"."+f.JSONName] = true
+			}
+		}
+	}
+	return eeOnly, nil
+}
+
+// applyFieldEditionGate stamps RequiresEdition = edition.EE onto every field
+// of eeFields (the operation's own top-level Input fields, keyed
+// eeStructName+"."+JSONName in eeOnly) and every nested struct's own fields
+// in eeNested (keyed structName+"."+JSONName) that eeOnly names — mutating
+// both in place, the same way assembleOperationFields' own caller already
+// relies on fields/nested being mutable shared state (see main.go's
+// commitInput closure, which captures fields by reference).
+func applyFieldEditionGate(eeStructName string, eeFields []fieldSpec, eeNested []structSpec, eeOnly map[string]bool) {
+	for i := range eeFields {
+		if eeOnly[eeStructName+"."+eeFields[i].JSONName] {
+			eeFields[i].RequiresEdition = edition.EE
+		}
+	}
+	for i := range eeNested {
+		for j := range eeNested[i].Fields {
+			if eeOnly[eeNested[i].Name+"."+eeNested[i].Fields[j].JSONName] {
+				eeNested[i].Fields[j].RequiresEdition = edition.EE
+			}
+		}
+	}
 }

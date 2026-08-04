@@ -167,15 +167,30 @@ func run(args []string) error {
 				*specPath)
 		}
 	}
-	_, cePaths, err := loadDocument(resolvedCESpecPath)
+	// ceDoc is kept (not discarded the way a pre-Task-2 revision of this line
+	// did) because classifying Edition is no longer this spec's only use: a
+	// CE-shared operation's own *fields* still need the Community
+	// specification's resolved shape to compare against, so per-field
+	// edition gating (see ceRes/ceOpsByID below, and fields.go's
+	// ceEEFieldDiff) can tell which of a shared action's parameters are
+	// Business-only.
+	ceDoc, cePaths, err := loadDocument(resolvedCESpecPath)
 	if err != nil {
-		return fmt.Errorf("load CE spec %s (used only to classify Edition): %w", resolvedCESpecPath, err)
+		return fmt.Errorf("load CE spec %s: %w", resolvedCESpecPath, err)
 	}
 	ceByTag, err := operationsByDomain(cePaths)
 	if err != nil {
 		return fmt.Errorf("group CE spec %s by domain: %w", resolvedCESpecPath, err)
 	}
 	ceOperationIDs := ceOperationIDSet(ceByTag)
+	// ceOpsByID and ceRes are what ceEEFieldDiff needs to resolve a
+	// CE-shared operation's own Community-side fields: the operation itself
+	// (ceOpsByID; ceOperationIDs alone only records presence) and a resolver
+	// bound to the Community document (ceRes), never doc/res above, which
+	// resolve against the Business Edition document this generator's own
+	// Input structs are otherwise built from.
+	ceOpsByID := ceOperationsByID(ceByTag)
+	ceRes := &resolver{doc: ceDoc}
 
 	// Informational, like the override report below: a reviewer reads these
 	// once per wave and decides which entries need a hand-written override
@@ -327,6 +342,42 @@ func run(args []string) error {
 				domainRefusalCount++
 				continue
 			}
+
+			// Per-field edition gating: only relevant to an operation the
+			// Community Edition specification also declares (editionOf, called
+			// again by buildActionSpecFields below, would mark anything else
+			// Edition: EE outright — the whole-action gate is already enough
+			// for those). ceEEFieldDiff resolves ceOp's own fields against the
+			// Community document and compares them, structurally and
+			// nested-inclusively, against fields/nested above; applyFieldEditionGate
+			// then stamps RequiresEdition on whichever ones the comparison found
+			// Business-only, mutating fields/nested in place before commitInput
+			// (below) ever reads them, so every consumer — the Input struct
+			// this operation contributes, and every nested type it needed — sees
+			// the gate.
+			//
+			// A failure here degrades rather than refuses: it means this
+			// generator cannot resolve the *Community* side of an operation it
+			// already resolved the Business Edition side of (the identical
+			// classes of shape this generator refuses generally — a field
+			// collision, an unsupported parameter location — just on the other
+			// document), which says nothing about whether the Business Edition
+			// Input struct itself is safe to emit. Reported so a human notices,
+			// but this operation still generates, ungated, exactly as every
+			// action did before this mechanism existed.
+			if ceOperationIDs[op.OperationID] {
+				if ceOp, ok := ceOpsByID[op.OperationID]; ok {
+					eeOnly, diffErr := ceEEFieldDiff(structName, fields, nested, ceOp, ceRes, ceDoc)
+					if diffErr != nil {
+						fmt.Fprintf(os.Stderr,
+							"domain %s: %s %s (operationId %s): could not resolve the Community Edition shape for per-field edition gating, generating ungated: %v\n",
+							domainName, op.Method, op.Path, op.OperationID, diffErr)
+					} else {
+						applyFieldEditionGate(structName, fields, nested, eeOnly)
+					}
+				}
+			}
+
 			// A parameterless action needs no Input struct at all: ActionSpec.Input
 			// stays nil and InputSchema publishes the empty-object schema — the
 			// pilot domains' system.* actions and registries.list/tags.list are
