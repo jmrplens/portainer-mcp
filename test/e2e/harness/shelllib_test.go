@@ -42,14 +42,20 @@ func writeEnv(t *testing.T, contents string) string {
 
 func TestUnit_ReadEnvVar_ReadsOnlyTheRequestedKey(t *testing.T) {
 	t.Parallel()
-	root := writeEnv(t, "PORTAINER_LICENSE=\"lic-123\"\nPORTAINER_E2E_DOCKER_SSH=truenas\nOTHER=nope\n")
+	root := writeEnv(t, "NOT_PORTAINER_LICENSE=wrong\nPORTAINER_LICENSE=\"lic-123\"\nPORTAINER_E2E_DOCKER_SSH=truenas\nOTHER=nope\n")
 	for _, tc := range []struct{ name, key, want string }{
 		{"quoted value has its quotes stripped", "PORTAINER_LICENSE", "lic-123"},
 		{"unquoted value is read verbatim", "PORTAINER_E2E_DOCKER_SSH", "truenas"},
 		{"absent key yields empty", "PORTAINER_E2E_NOT_SET", ""},
-		// A prefix of a real key must not match it: grep without an anchor
-		// would return PORTAINER_LICENSE's line for "PORTAINER_LICEN".
-		{"prefix of a real key does not match it", "PORTAINER_LICEN", ""},
+		// A key that is a SUFFIX of another key must not match that other
+		// key's line. This is the case the "^" anchor exists for, and it is
+		// the only shape that fails without it: an unanchored grep matches
+		// NOT_PORTAINER_LICENSE=wrong, and head -n1 then returns "wrong"
+		// because the decoy sits first in the fixture. An earlier version of
+		// this table asked for "PORTAINER_LICEN" instead, which the trailing
+		// "=" already blocks with or without the anchor — a test that could
+		// not fail.
+		{"a key that another key ends with is not confused for it", "PORTAINER_LICENSE", "lic-123"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
