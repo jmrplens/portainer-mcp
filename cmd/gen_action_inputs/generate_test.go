@@ -66,8 +66,8 @@ func TestUnit_RequiredPathParameter_GeneratesNonPointerFieldWithNoOmitempty(t *t
 	}
 	mustCompile(t, src)
 	text := string(src)
-	if !strings.Contains(text, `ID int `+"`"+`json:"id"`+"`") {
-		t.Errorf("generated source does not declare a required, non-pointer ID field:\n%s", text)
+	if !strings.Contains(text, `ID int `+"`"+`json:"id" jsonschema:"Tag identifier"`+"`") {
+		t.Errorf("generated source does not declare a required, non-pointer, described ID field:\n%s", text)
 	}
 	if strings.Contains(text, `"id,omitempty"`) {
 		t.Errorf("a required path parameter must never carry omitempty:\n%s", text)
@@ -109,8 +109,8 @@ func TestUnit_OptionalQueryParameter_GeneratesPointerFieldWithOmitempty(t *testi
 		t.Fatalf("renderFile() error = %v", err)
 	}
 	mustCompile(t, src)
-	if !strings.Contains(string(src), `EndpointID *int `+"`"+`json:"endpointId,omitempty"`+"`") {
-		t.Errorf("generated source does not declare an optional, pointer EndpointID field:\n%s", src)
+	if !strings.Contains(string(src), `EndpointID *int `+"`"+`json:"endpointId,omitempty" jsonschema:"Environment identifier"`+"`") {
+		t.Errorf("generated source does not declare an optional, pointer, described EndpointID field:\n%s", src)
 	}
 }
 
@@ -355,8 +355,8 @@ func TestUnit_MapTypedRequestBody_GeneratesMapField(t *testing.T) {
 		t.Fatalf("renderFile() error = %v", err)
 	}
 	mustCompile(t, src)
-	if !strings.Contains(string(src), `Namespace map[string][]string `+"`"+`json:"namespace"`+"`") {
-		t.Errorf("generated source does not declare the required Namespace map field:\n%s", src)
+	if !strings.Contains(string(src), `Namespace map[string][]string `+"`"+`json:"namespace" jsonschema:"A map where the key is the namespace and the value is an array of service accounts to delete"`+"`") {
+		t.Errorf("generated source does not declare the required, described Namespace map field:\n%s", src)
 	}
 }
 

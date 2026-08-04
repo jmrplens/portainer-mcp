@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability gen-action-inputs check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -115,6 +115,45 @@ audit-1to1-ratchet:
 audit-spec-reality:
 	go run ./cmd/audit_spec_reality -spec-version=$(SPEC_VERSION)
 
+# audit-spec-drift fails when a declared catalog action's parameter shape no
+# longer matches the vendored specification operation it was generated from
+# — a field renamed, a type widened, a "required" dropped. Unlike
+# audit-spec-reality this gates: drift against the vendored specification is
+# a defect in this project's own code, not a fact about Portainer, and it
+# starts clean today because every action was generated from that
+# specification. See cmd/audit_spec_drift's package doc for the mandatory
+# canary self-test every run performs first, and for why a description-only
+# change gates only when the specification itself published the text that
+# drifted.
+audit-spec-drift:
+	go run ./cmd/audit_spec_drift -spec-version=$(SPEC_VERSION)
+
+# audit-spec-delta reports what changed between two OpenAPI documents — the
+# vendored one and a newer candidate — as a work list grouped by domain,
+# ordered added/removed/struct-touching/cosmetic within each domain. It never
+# gates, unlike audit-spec-drift above: a candidate version has not been
+# adopted yet, so there is nothing about the difference for this project's
+# own build to fail on. See cmd/audit_spec_delta's package doc for why its
+# "changed" count is narrower than a full operation-node diff by design, and
+# for the real 2.43.0 -> 2.44.0 measurement that verified it.
+#
+# BEFORE and AFTER are required file paths to two OpenAPI documents — the
+# currently vendored api/specs/ee-$(SPEC_VERSION).json is the usual BEFORE;
+# a newer version bundled into a scratch path with
+# plan/research/specs/bundle.py (never into api/specs/, which stays vendored
+# to the one version the catalog was generated from) is the usual AFTER.
+# JSON=1 emits machine-readable output instead of the human work list.
+#
+# Example:
+#   python3 plan/research/specs/bundle.py ee 2.45.0 /tmp/ee-2.45.0.json
+#   make audit-spec-delta BEFORE=api/specs/ee-$(SPEC_VERSION).json AFTER=/tmp/ee-2.45.0.json
+audit-spec-delta:
+	@if [ -z "$(BEFORE)" ] || [ -z "$(AFTER)" ]; then \
+		echo "usage: make audit-spec-delta BEFORE=<path-to-older-spec> AFTER=<path-to-newer-spec> [JSON=1]"; \
+		exit 2; \
+	fi
+	go run ./cmd/audit_spec_delta -before $(BEFORE) -after $(AFTER) $(if $(JSON),-json,)
+
 update-spec:
 	go run ./cmd/fetch_spec -edition ee -version $(SPEC_VERSION)
 	go run ./cmd/fetch_spec -edition ce -version $(SPEC_VERSION)
@@ -137,14 +176,26 @@ gen-applicability:
 	go run ./cmd/gen_applicability -history api/specs/history -out internal/apiversion/applicability_gen.go
 	gofmt -w internal/apiversion/applicability_gen.go
 
-# gen-action-inputs regenerates internal/tools/<domain>/inputs.gen.go from the
-# vendored Business Edition specification: one Input struct per operation
-# already declared by a domain package, merging its path parameters, query
-# parameters and request body into the flat, model-facing shape
-# toolutil.ActionSpec.Input expects. See cmd/gen_action_inputs's package doc
-# for what it refuses to guess rather than generate.
-gen-action-inputs:
-	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools
+# scaffold-domain writes a domain's actions once, from the vendored Business
+# Edition specification: one Input struct per operation already declared by a
+# domain package (internal/tools/<domain>/inputs.go), one generated
+# ActionSpec + handler per mechanical operation (actions.go), and a redaction
+# guard test for any credential-shaped response (redaction_test.go). It is a
+# scaffolding tool, not a source of truth kept in sync forever: the domain
+# owns every file this writes from the moment it is written (see P3.2's
+# freeze and docs/domain-wave-checklist.md), and cmd/gen_action_inputs
+# refuses outright to run again over a domain that already has one of them —
+# see domainAlreadyScaffolded's own doc comment — unless FORCE=1 says
+# otherwise, which discards every hand edit made since the domain was
+# scaffolded. See cmd/gen_action_inputs's package doc for what it refuses to
+# guess rather than generate in the first place.
+#
+# Runs over every domain directory under internal/tools it finds not already
+# scaffolded (or, with FORCE=1, every one FORCE applies to) — there is no
+# per-domain filter flag today, since a wave adding one new domain leaves
+# every already-scaffolded domain untouched by the refusal above regardless.
+scaffold-domain:
+	go run ./cmd/gen_action_inputs -spec api/specs/ee-$(SPEC_VERSION).json -tools-dir internal/tools $(if $(FORCE),-allow-overwrite,)
 
 # check-spec verifies the committed specifications still match a fresh fetch.
 # It writes into a temporary directory rather than over api/specs, so a failure

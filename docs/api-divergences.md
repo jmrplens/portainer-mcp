@@ -492,7 +492,9 @@ spec defects found by accident before that tool existed — "a field typed
 wrong for what it plainly holds". The working scratch pad never recorded
 what the wrong type was or how it was resolved, so this entry is a pointer,
 not a description. See `internal/tools/registries/registries.go` and
-`internal/tools/registries/inputs.gen.go` for the shape it settled into.
+`internal/tools/registries/inputs.go` for the shape it settled into (renamed
+from `inputs.gen.go` when the pilot domains were converted to owned files —
+see §9.1).
 
 ---
 
@@ -536,3 +538,101 @@ question for a settled fact.
    The reasoning for skipping it is sound for route existence only; if a
    wave ever finds a route that exists only under a Helm deployment, that
    reasoning is what to revisit first.
+
+---
+
+## 9. Tooling/process caveats recorded permanently (not API divergences)
+
+Two findings from the freeze that retired the generated-code freshness check
+(P3.2). Neither is a Portainer API divergence — both are properties of this
+project's own tooling — but each was, until now, recorded only in a
+gitignored working document (`.superpowers/sdd/.../task-4-report.md`) whose
+own `.gitignore` excludes it entirely from the repository. A citation to that
+path from tracked source (`.github/workflows/ci.yml`,
+`internal/toolutil/narrative.go`) dangles the moment this branch merges: the
+file that citation points to does not exist in the clone anyone else has.
+Recorded here instead, permanently, alongside this file's other durable
+findings.
+
+### 9.1 The freshness check's replacement is proven equivalent on one real case, not universally
+
+`.github/workflows/ci.yml` used to regenerate every domain's Input structs
+and handlers, then `git diff --exit-code internal/tools/` — failing CI the
+moment regeneration produced anything different from what was committed.
+That job is retired: domains are scaffolded once (`make scaffold-domain`)
+and hand-maintained from then on (see `docs/domain-wave-checklist.md`), so
+regeneration no longer runs against an owned domain at all, and a check that
+compared regenerated output to committed output would have nothing
+meaningful to compare. `make audit-spec-drift` (`cmd/audit_spec_drift`)
+replaces it: a standing comparison between every declared action's
+parameter shape and the vendored specification operation it names, gating
+the build on real drift however it arose.
+
+**What was actually demonstrated**, live, on the one mutation this project's
+own history already had a name for (P2's original defect): hand-edited
+`internal/tools/registries/actions.go` (`registries/actions.gen.go` at the
+time), changing `registryInspect`'s `return redactRegistryInspect(resp.JSON200), nil`
+to `return resp.JSON200, nil` — the exact edit that shipped a leaked
+credential the first time. Regenerating and diffing (the retired job's own
+mechanism, run manually against the mutation) failed exactly as CI would
+have. `make audit-spec-drift` against the identical mutation failed too,
+naming the same operation: `RegistryInspect (registries.inspect): success
+response can carry [AccessToken Password TLSCACert TLSCert TLSKey], but
+Handler never calls redactRegistryInspect [GATING]`. Both reverted, both
+clean afterward.
+
+That is one demonstrated equivalence, on one mutation, not a proof the two
+checks are equivalent on every possible hand edit — see §1 of this
+document's own habit of stating what was measured rather than what was
+merely plausible. `.github/workflows/ci.yml`'s own comment states the
+narrower, correct claim: the replacement covers strictly more against
+*specification drift* (a hand edit, or the vendored spec moving out from
+under the catalog — either is caught, where the old job only caught a
+regeneration disagreeing with what was committed) and strictly less against
+*arbitrary hand edits to scaffolded code that introduce no spec drift at
+all* — deleting a whole action's declaration from `generatedSpecs()`, for
+instance, shrinks `make audit-spec-drift`'s own `Actions audited` count with
+no gating finding at all, because this audit iterates the actions the
+catalog declares and an absent action is not a shape it can compare (see
+`cmd/audit_1to1`'s ratchet for the orthogonal, count-only check that catches
+*that* case, imperfectly: it floors a total, so removing one action and
+adding an unrelated one passes it silently).
+
+### 9.2 `-allow-overwrite` does not discard a hand edit to an already-owned domain
+
+`scanHandOverrides` (`cmd/gen_action_inputs/handler.go`) treats every
+`*.go` file directly inside a domain directory as a hand-written override
+except one whose name ends in `.gen.go`. Before the freeze this correctly
+separated the generator's own previous output (`actions.gen.go`,
+`inputs.gen.go`) from genuinely hand-added files in the same directory
+(`system.go`'s hand-declared `SystemNodesCount`, for instance). After the
+freeze, a scaffolded domain's owned files are named `actions.go` and
+`inputs.go` — no `.gen.go` suffix, by design (see `scaffoldHeader`'s own doc
+comment: an owned file is linted and reviewed like any other source file,
+which golangci-lint's generated-file heuristic and a `.gen.go` name would
+both exempt it from). `scanHandOverrides` was not changed to account for
+this, so it now reads a domain's own `actions.go`/`inputs.go` as hand-written
+overrides too — which they now, correctly, are.
+
+The consequence: passing `-allow-overwrite` (`FORCE=1` via `make
+scaffold-domain`) to force regeneration over a domain that already has
+`actions.go`/`inputs.go` does not discard the hand edits made since that
+domain was scaffolded, the way `docs/domain-wave-checklist.md` used to
+claim. `domainAlreadyScaffolded`'s skip is bypassed, as intended, but
+`scanHandOverrides` then reports every mechanically-named operation already
+declared in `actions.go` as "already covered by hand-written code" and
+generates nothing for it — indistinguishable, from the generator's point of
+view, from a domain author who added a genuinely new hand-written handler
+under the mechanical name on purpose. `-allow-overwrite` still helps for
+scaffolding *new* operations added to a domain's tag since it was last
+scaffolded (nothing already declares those OperationIDs), but it does not
+re-scaffold what is already there.
+
+This is a known, accepted limitation of the rare, explicit "start over"
+path, not a silent trap: the ordinary path this project actually
+recommends — scaffold once, hand-edit forever, `-allow-overwrite` never
+used — is entirely unaffected by it. Whoever genuinely needs to discard a
+domain's accumulated hand edits and start over should delete
+`actions.go`/`inputs.go` by hand first (so `domainAlreadyScaffolded` no
+longer sees them and `scanHandOverrides` has nothing stale left to
+misread), then run `make scaffold-domain` without `FORCE`.

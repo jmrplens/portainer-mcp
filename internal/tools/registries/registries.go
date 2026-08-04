@@ -66,50 +66,46 @@ import (
 // plus the three kept hand-written below.
 func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(),
-		toolutil.ActionSpec{
+		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "registries.configure", Domain: "registries", OperationID: "RegistryConfigure",
-			Title:       "Configure a registry for management",
-			Description: "Sets the management credentials and TLS options Portainer uses to browse a registry's repositories and tags.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Handler:     registryConfigure,
-			Input:       registryConfigureInput{},
-		},
-		toolutil.ActionSpec{
+			Edition:  edition.CE,
+			Mutating: true,
+			Handler:  registryConfigure,
+			Input:    registryConfigureInput{},
+		}, narrative("RegistryConfigure")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "registries.ecr_delete_tags", Domain: "registries", OperationID: "EcrDeleteTags",
-			Title: "Delete ECR image tags",
-			Description: "Permanently deletes the given image tags from an Amazon ECR repository. Business Edition only. This cannot be undone. " +
-				"repositoryName here is Portainer's numeric repository identifier, not the repository's name — pass the integer id, not a string.",
 			Edition:     edition.EE,
 			Mutating:    true,
 			Destructive: true,
 			Handler:     ecrDeleteTags,
 			Input:       ecrDeleteTagsInput{},
-		},
-		toolutil.ActionSpec{
+		}, narrative("EcrDeleteTags")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "registries.repository_tags_delete", Domain: "registries", OperationID: "RepositoryTagsDelete",
-			Title:       "Delete repository image tags",
-			Description: "Permanently deletes the given image tags from a repository on a generic registry. Business Edition only. This cannot be undone.",
 			Edition:     edition.EE,
 			Mutating:    true,
 			Destructive: true,
 			Handler:     repositoryTagsDelete,
 			Input:       repositoryTagsDeleteInput{},
-		},
+		}, narrative("RepositoryTagsDelete")),
 	)
 }
 
-// narrative supplies ActionSpec narrative fields to generatedSpecs() (see
-// actions.gen.go) for all seven generated operations — RegistryList,
-// RegistryCreate, RegistryPing, RegistryInspect, RegistryUpdate,
-// RegistryDelete and EcrDeleteRepository: Title/Description only, preserving
-// the exact wording this domain hand-authored before each's swap to
-// generated code, rather than letting it silently degrade to the vendored
-// specification's own terser summary/description. Every other operationId
-// returns the zero toolutil.ActionNarrative, including the three hand-written
-// overrides (RegistryConfigure, EcrDeleteTags, RepositoryTagsDelete), which
-// declare their own Title/Description directly in their ActionSpec literal
-// rather than through this hook.
+// narrative supplies ActionSpec narrative fields for every operation this
+// domain declares, generated and hand-written alike: the seven generated
+// ones (RegistryList, RegistryCreate, RegistryPing, RegistryInspect,
+// RegistryUpdate, RegistryDelete, EcrDeleteRepository) via generatedSpecs()
+// (see actions.go), and the three kept hand-written (RegistryConfigure,
+// EcrDeleteTags, RepositoryTagsDelete) via Specs() above. All ten route
+// through toolutil.WithNarrative rather than assigning Title/Description
+// directly in their ActionSpec literal, which is what lets
+// cmd/audit_spec_drift recognise every one of these ten as a deliberate,
+// permanent improvement on the vendored specification's own terser summary/
+// description (toolutil.ActionSpec.TitleOverridden/DescriptionOverridden —
+// see WithNarrative's own doc comment) rather than needing a
+// spec-drift-allowlist.yaml entry to say the identical thing. Every other
+// operationId returns the zero toolutil.ActionNarrative.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "RegistryList":
@@ -146,6 +142,22 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		return toolutil.ActionNarrative{
 			Title:       "Delete an ECR repository",
 			Description: "Permanently deletes a repository from an Amazon ECR registry. Business Edition only. This cannot be undone.",
+		}
+	case "RegistryConfigure":
+		return toolutil.ActionNarrative{
+			Title:       "Configure a registry for management",
+			Description: "Sets the management credentials and TLS options Portainer uses to browse a registry's repositories and tags.",
+		}
+	case "EcrDeleteTags":
+		return toolutil.ActionNarrative{
+			Title: "Delete ECR image tags",
+			Description: "Permanently deletes the given image tags from an Amazon ECR repository. Business Edition only. This cannot be undone. " +
+				"repositoryName here is Portainer's numeric repository identifier, not the repository's name — pass the integer id, not a string.",
+		}
+	case "RepositoryTagsDelete":
+		return toolutil.ActionNarrative{
+			Title:       "Delete repository image tags",
+			Description: "Permanently deletes the given image tags from a repository on a generic registry. Business Edition only. This cannot be undone.",
 		}
 	default:
 		return toolutil.ActionNarrative{}

@@ -231,7 +231,32 @@ func poisonedSpecDir(t *testing.T, operationID string) string {
 // temporary tools directory, so run() sees the same overrides and helper
 // functions it would in the real tree — without writing generated output over
 // the real one.
-func copyDomainDir(t *testing.T, toolsDir, domain string) {
+// scaffoldedOutputNames are the exact basenames cmd/gen_action_inputs itself
+// writes into a domain directory, current and pre-freeze alike — mirroring
+// main.go's own scaffoldedMarkers. freshDomainDir excludes these when
+// seeding a domain from the real one, so the copy carries only what a
+// domain author actually wrote by hand, never this generator's own prior
+// output for the same domain.
+var scaffoldedOutputNames = map[string]bool{
+	"actions.go": true, "inputs.go": true, "redaction_test.go": true,
+	"actions.gen.go": true, "inputs.gen.go": true, "redaction_gen_test.go": true,
+}
+
+// freshDomainDir seeds a domain directory under toolsDir with the real
+// internal/tools/<domain>'s own hand-written files only — registries.go,
+// registries_test.go and the like — excluding every file this generator
+// itself would write (scaffoldedOutputNames): the domain's genuine hand
+// overrides (EcrDeleteTags, RegistryConfigure's width-narrowed
+// TLSCACertFile, the credential redaction wrappers RegistryList/Create/
+// Inspect/Update require) must be present for a real regeneration cycle to
+// succeed, but this generator's own previous scaffold output for the same
+// domain must not be — copying that back in would make every mechanically
+// generated operation look, to scanHandOverrides, exactly like a hand
+// override, which defeats what
+// TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated
+// actually checks: whether an unrelated domain regenerates fully when this
+// one does not.
+func freshDomainDir(t *testing.T, toolsDir, domain string) {
 	t.Helper()
 	dst := filepath.Join(toolsDir, domain)
 	if err := os.MkdirAll(dst, 0o750); err != nil {
@@ -243,7 +268,7 @@ func copyDomainDir(t *testing.T, toolsDir, domain string) {
 		t.Fatalf("read %s: %v", src, err)
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), ".gen.go") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || scaffoldedOutputNames[e.Name()] {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(src, e.Name()))
@@ -288,8 +313,8 @@ func TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated(t *tes
 			t.Parallel()
 			specPath := poisonedSpecDir(t, tc.operationID)
 			toolsDir := t.TempDir()
-			copyDomainDir(t, toolsDir, "tags")
-			copyDomainDir(t, toolsDir, "registries")
+			freshDomainDir(t, toolsDir, "tags")
+			freshDomainDir(t, toolsDir, "registries")
 
 			err := run([]string{"-spec", specPath, "-tools-dir", toolsDir})
 			if err == nil {
@@ -300,13 +325,13 @@ func TestUnit_Run_AnUnresolvableResponseSchemaLeavesOtherDomainsGenerated(t *tes
 			}
 
 			// The domain holding the unresolvable operation is left untouched...
-			poisoned := filepath.Join(toolsDir, tc.poisonDomain, "actions.gen.go")
+			poisoned := filepath.Join(toolsDir, tc.poisonDomain, "actions.go")
 			if _, statErr := os.Stat(poisoned); !os.IsNotExist(statErr) {
-				t.Errorf("%s/actions.gen.go exists (stat error %v), want it unwritten: nothing about a domain with an uncheckable operation can be trusted",
+				t.Errorf("%s/actions.go exists (stat error %v), want it unwritten: nothing about a domain with an uncheckable operation can be trusted",
 					tc.poisonDomain, statErr)
 			}
 			// ...and every other domain is generated exactly as it would have been.
-			for _, name := range []string{"actions.gen.go", "inputs.gen.go"} {
+			for _, name := range []string{"actions.go", "inputs.go"} {
 				if _, statErr := os.Stat(filepath.Join(toolsDir, tc.anotherDomain, name)); statErr != nil {
 					t.Errorf("%s/%s was not written (%v); one domain's defect must not block an unrelated domain's regeneration",
 						tc.anotherDomain, name, statErr)

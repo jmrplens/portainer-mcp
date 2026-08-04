@@ -40,22 +40,25 @@ import (
 // Specs declares every system action: generatedSpecs()'s five entries plus
 // system.upgrade, kept hand-written above.
 func Specs() []toolutil.ActionSpec {
-	return append(generatedSpecs(), toolutil.ActionSpec{
+	return append(generatedSpecs(), toolutil.WithNarrative(toolutil.ActionSpec{
 		Name: "system.upgrade", Domain: "system", OperationID: "SystemUpgrade",
-		Title:       "Upgrade Community Edition to Business Edition",
-		Description: "Upgrades this Community Edition server to Business Edition. Community Edition only. The server restarts, so expect the connection to drop.",
 		Edition:     edition.CE,
 		Mutating:    true,
 		Destructive: true,
 		Handler:     systemUpgrade,
-	})
+	}, narrative("SystemUpgrade")))
 }
 
-// narrative supplies the five generated actions' ActionSpec narrative
-// fields to generatedSpecs() (see actions.gen.go): only Title/Description,
-// preserving the exact wording this domain hand-authored before the swap to
-// generated code, rather than letting it silently degrade to the vendored
-// specification's own terser summary/description.
+// narrative supplies every action's ActionSpec narrative fields, generated
+// and hand-written alike: the five generated ones via generatedSpecs() (see
+// actions.go) and system.upgrade via Specs() above. All six route through
+// toolutil.WithNarrative rather than assigning Title/Description directly in
+// an ActionSpec literal, which is what lets cmd/audit_spec_drift recognise
+// each as a deliberate, permanent improvement on the vendored
+// specification's own terser summary/description
+// (toolutil.ActionSpec.TitleOverridden/DescriptionOverridden — see
+// WithNarrative's own doc comment) rather than needing a
+// spec-drift-allowlist.yaml entry to say the identical thing.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "SystemInfo":
@@ -82,6 +85,11 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		return toolutil.ActionNarrative{
 			Title:       "Update the Portainer server",
 			Description: "Starts an update of this Portainer server. Business Edition only; Community Edition offers system.upgrade instead. The server restarts, so expect the connection to drop.",
+		}
+	case "SystemUpgrade":
+		return toolutil.ActionNarrative{
+			Title:       "Upgrade Community Edition to Business Edition",
+			Description: "Upgrades this Community Edition server to Business Edition. Community Edition only. The server restarts, so expect the connection to drop.",
 		}
 	default:
 		return toolutil.ActionNarrative{}

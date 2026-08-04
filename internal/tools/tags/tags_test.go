@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -237,6 +238,45 @@ func TestUnit_TagDelete_InvalidID_ReturnsErrorWithoutCallingAPI(t *testing.T) {
 		}
 		if called {
 			t.Errorf("id=%d: the API was called despite an invalid id", id)
+		}
+	}
+}
+
+// TestUnit_TagDeleteInputSchema_PublishesTheSpecDescription is P3.2's own
+// regression test for the defect P3.0's
+// TestInputSchema_ReflectsFieldsDescriptionsAndRequiredness could not catch:
+// that test's fixture (toolutil.sampleInput) carries a hand-written
+// "jsonschema" tag, so it proved the reflection mechanism works without ever
+// exercising what cmd/gen_action_inputs itself emits. tags.delete's
+// generated Input (tagDeleteInput, internal/tools/tags/inputs.gen.go) is
+// this domain's real, spec-derived action — this asserts on
+// ActionSpec.InputSchema()'s actual output for it, with the exact
+// description text the vendored specification declares for TagDelete's "id"
+// path parameter ("Tag identifier"), not a paraphrase, and the "minimum": 1
+// and "required" this generator has always attached to it, so a generator
+// change that stops emitting a "jsonschema" tag (or breaks either of the
+// other two) fails here even if schema_test.go's own fixture still passes.
+func TestUnit_TagDeleteInputSchema_PublishesTheSpecDescription(t *testing.T) {
+	t.Parallel()
+	spec := findSpec(t, "tags.delete")
+
+	schema, err := spec.InputSchema()
+	if err != nil {
+		t.Fatalf("InputSchema() error = %v", err)
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("Marshal(schema) error = %v", err)
+	}
+	text := string(encoded)
+
+	for _, want := range []string{
+		`"description":"Tag identifier"`,
+		`"minimum":1`,
+		`"required":["id"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("tags.delete's published schema does not carry %s:\n%s", want, text)
 		}
 	}
 }

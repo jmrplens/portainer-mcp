@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/specdiff"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -130,6 +131,62 @@ func TestUnit_CleanTitleAndDescription_EveryRealOperationHasANonEmptySummary(t *
 				}
 			}
 		}
+	}
+}
+
+// TestUnit_CleanTitleAndDescription_MatchesSpecdiffOnEveryRealOperation is
+// the permanent anti-drift check for a defect this project has already paid
+// for once: internal/specdiff.CleanTitleAndDescription reimplements this
+// function's own cleaning rule (trim summary, strip "**Access policy**"
+// lines, fall back to title) because internal/specdiff cannot import this
+// package — `package main` cannot be imported from anywhere — the identical
+// constraint that forced naming.go's bodyJSONTag and shape.go's
+// LoadSpecOperation to be reimplemented rather than moved. A one-off manual
+// comparison of the two implementations would prove they agree today and
+// say nothing about tomorrow; this test instead runs both across every
+// operation in both real vendored specifications, every time the suite
+// runs, so a future edit to either cleanTitleAndDescription or
+// specdiff.CleanTitleAndDescription that silently diverges from the other
+// fails immediately, rather than only being discovered when a drift or
+// delta report disagrees with itself for a reason nobody can explain.
+//
+// This import direction is fine: cmd/gen_action_inputs (an ordinary `package
+// main`, importable by nothing) may import internal/specdiff (an ordinary
+// importable package) just as any other command in this repository does;
+// only the reverse direction is impossible.
+func TestUnit_CleanTitleAndDescription_MatchesSpecdiffOnEveryRealOperation(t *testing.T) {
+	t.Parallel()
+	checked := 0
+	for _, specPath := range []string{"../../api/specs/ee-2.44.0.json", "../../api/specs/ce-2.44.0.json"} {
+		_, paths, err := loadDocument(specPath)
+		if err != nil {
+			t.Fatalf("loadDocument(%s) error = %v", specPath, err)
+		}
+		byTag, err := operationsByDomain(paths)
+		if err != nil {
+			t.Fatalf("operationsByDomain(%s) error = %v", specPath, err)
+		}
+		for _, ops := range byTag {
+			for _, op := range ops {
+				wantTitle, wantDescription, err := cleanTitleAndDescription(op)
+				if err != nil {
+					t.Fatalf("%s: cleanTitleAndDescription(%s) error = %v", specPath, op.OperationID, err)
+				}
+				gotTitle, gotDescription := specdiff.CleanTitleAndDescription(op.Summary, op.Description)
+				if gotTitle != wantTitle {
+					t.Errorf("%s: %s: specdiff.CleanTitleAndDescription title = %q, want %q (cleanTitleAndDescription's own result)",
+						specPath, op.OperationID, gotTitle, wantTitle)
+				}
+				if gotDescription != wantDescription {
+					t.Errorf("%s: %s: specdiff.CleanTitleAndDescription description = %q, want %q (cleanTitleAndDescription's own result)",
+						specPath, op.OperationID, gotDescription, wantDescription)
+				}
+				checked++
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("checked 0 operations across both vendored specs; this test's premise (a non-empty operation set) went stale")
 	}
 }
 

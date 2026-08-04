@@ -89,21 +89,46 @@ jobs:
           git diff --exit-code internal/portainer/gen/ \
             || { echo "::error::internal/portainer/gen is out of date or was hand-edited; run make gen-client"; exit 1; }
 
-  generated-action-inputs:
-    name: "Generated action Input structs are current"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-      - name: Regenerate action Input structs and confirm no drift
-        run: |
-          make gen-action-inputs
-          git diff --exit-code internal/tools/ \
-            || { echo "::error::an internal/tools/*/inputs.gen.go is out of date or was hand-edited; run make gen-action-inputs"; exit 1; }
+  # There used to be a "Generated action Input structs are current" job here:
+  # regenerate, then `git diff --exit-code internal/tools/`. It is retired,
+  # not merely removed — see cmd/audit_spec_drift's package doc and
+  # docs/domain-wave-checklist.md's "Owning a scaffolded domain" section for
+  # the ownership decision this reflects. That check could only notice when
+  # regeneration produced a different file, which made it fail on every
+  # legitimate hand edit to an owned domain (exactly what P3.2 asks domain
+  # owners to do from now on) as readily as on a real defect — a check that
+  # cannot tell those apart teaches everyone to stop trusting it. The
+  # audit-spec-drift job below is what replaces it.
+  #
+  # Precisely, not "strictly more": the replacement covers strictly more
+  # against *specification drift* — a hand edit or the vendored spec moving
+  # out from under the catalog is caught however it arose, not only when a
+  # regeneration run happened to disagree with what was committed — and
+  # strictly LESS against *arbitrary hand edits to scaffolded code that
+  # introduce no spec drift at all*. audit-spec-drift iterates the actions
+  # the catalog declares; deleting a whole action from generatedSpecs()
+  # shrinks its own "Actions audited" count with no gating finding and no
+  # non-zero exit — the old regenerate-and-diff job would have caught that
+  # (regeneration would still produce the deleted action, diffing non-empty).
+  # cmd/audit_1to1's coverage ratchet is the orthogonal, count-only backstop
+  # for that case, and it is imperfect too: a floor on a total, so removing
+  # one action and adding an unrelated one passes it silently.
+  #
+  # Live demonstration of the part this job does cover, on the one mutation
+  # this project's own history already had a name for: hand-edited
+  # registries/actions.go (actions.gen.go at the time), changing
+  # registryInspect's `return redactRegistryInspect(resp.JSON200), nil` to
+  # `return resp.JSON200, nil` — P2's original defect, verbatim. Regenerating
+  # and diffing (the retired job's own mechanism, run manually against the
+  # mutation) failed exactly as CI would have; audit-spec-drift against the
+  # identical mutation failed too, naming the operation: "RegistryInspect
+  # (registries.inspect): success response can carry [AccessToken Password
+  # TLSCACert TLSCert TLSKey], but Handler never calls redactRegistryInspect
+  # [GATING]". Both reverted, both clean afterward. See
+  # docs/api-divergences.md §9 for the full account, including the
+  # -allow-overwrite/scanHandOverrides limitation this same freeze left
+  # behind — recorded there, not only in a gitignored working document that
+  # does not exist in a fresh clone.
 
   no-stdout-writes:
     name: "Guard: nothing writes to stdout"
@@ -172,3 +197,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Report 1:1 coverage of both vendored specs by the action catalog, gated on the ratchet
         run: make audit-1to1-ratchet
+
+  audit-spec-drift:
+    name: "Catalog matches the vendored specification (no ratchet)"
+    runs-on: ubuntu-latest
+    # Unlike audit-1to1 above, this gate requires a clean result from day
+    # one, not a ratchet: every declared action was generated from (or, for
+    # the hand-written pilots, checked directly against) the vendored
+    # specification this job compares it to, so there is no partial-coverage
+    # period to phase in — see cmd/audit_spec_drift's package doc for the
+    # full reasoning, including its mandatory canary self-test and its
+    # conditional treatment of description-only findings.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Report drift between the catalog and the vendored specification it was generated from
+        run: make audit-spec-drift

@@ -33,6 +33,24 @@ type ActionSpec struct {
 	// Title and Description are model-facing.
 	Title       string
 	Description string
+	// TitleOverridden and DescriptionOverridden report whether Title/
+	// Description carry a deliberate narrative override rather than the
+	// vendored specification's own mechanically-derived wording.
+	// WithNarrative is what sets these, from whether its own
+	// ActionNarrative.Title/Description were non-empty — see that
+	// function's doc comment. Every action that wants its own Title or
+	// Description honoured as a permanent, deliberate improvement (never
+	// flagged as drift against the specification) must be built through
+	// WithNarrative for exactly this reason, even one with no other
+	// ActionNarrative field to set (WithNarrative(spec,
+	// ActionNarrative{Title: "...", Description: "..."}) is the whole
+	// call); an ActionSpec literal that assigns Title/Description directly
+	// and skips WithNarrative leaves both false, and cmd/audit_spec_drift
+	// then has no way to tell that divergence apart from accidental drift
+	// — see specdiff.FieldChange.AfterOverridden and that command's
+	// isGating for where the fact is actually consumed.
+	TitleOverridden       bool
+	DescriptionOverridden bool
 	// Edition is the minimum edition offering this action. CE means both.
 	Edition edition.Edition
 	// Mutating marks an action that changes server state. Read-only mode

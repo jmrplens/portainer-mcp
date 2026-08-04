@@ -1,0 +1,56 @@
+# Deliberate divergences cmd/audit_spec_drift will never gate the build on.
+#
+# Every entry requires:
+#   operation_id  the exported Go identifier oapi-codegen assigns to the
+#                 operation (e.g. "TagDelete" for the raw operationId
+#                 "tagDelete") — the same form toolutil.ActionSpec.OperationID
+#                 and internal/specdiff.OperationShape.OperationID use, so
+#                 this file and a reported finding can be compared directly.
+#   field         the JSON wire name of exactly one field of that operation —
+#                 never the whole operation. A hand-written action that takes
+#                 a deliberately narrower type does so for one or two fields,
+#                 not its entire shape, and excusing the whole operation would
+#                 also excuse any unrelated field that starts drifting later
+#                 under the same entry's forgiveness.
+#   reason        why this field will always differ from the vendored
+#                 specification.
+#   added         the ISO 8601 date (YYYY-MM-DD) the entry was added.
+#
+# audit_spec_drift excludes every entry here from its pass/fail gate but
+# always prints every finding, allow-listed or not, alongside the audit
+# summary: an allow-list that can hide an entry from its own report is how
+# drift decays while the check still looks clean. An entry that excuses
+# nothing a real run currently finds gating is itself a build error — the
+# operation may no longer exist, the field may no longer diverge, or the
+# entry may simply be a typo that never matched anything — because a stale
+# entry would otherwise keep forgiving something that no longer needs it,
+# and a real, unrelated divergence on the same field could later inherit
+# that forgiveness silently.
+#
+# This file is empty again, as of task 4 of P3.2's freeze. It briefly held 35
+# entries, all "$title"/"$description" (internal/specdiff.TitleSentinel/
+# DescriptionSentinel) excusing a deliberately hand-authored operation-level
+# Title or Description — every domain's narrative() hook and, before task 4,
+# the four hand-written pilot actions (RegistryConfigure, EcrDeleteTags,
+# RepositoryTagsDelete, SystemUpgrade) that assigned Title/Description
+# directly in their ActionSpec literal instead of through toolutil.WithNarrative.
+# That mechanism worked, but it recorded the identical decision — "this
+# action's own wording deliberately improves on the specification's" — in
+# TWO places for every overridden action: once in the domain's own narrative()
+# hook or literal, once again here. toolutil.ActionSpec grew
+# TitleOverridden/DescriptionOverridden (set by toolutil.WithNarrative) so
+# that decision is recorded exactly once, at the point the override is made,
+# and cmd/audit_spec_drift's isGating reads it directly
+# (specdiff.FieldChange.AfterOverridden) instead of needing an entry here to
+# say the same thing a second time. The four pilot actions were converted to
+# route through WithNarrative too (see registries.go's and system.go's own
+# narrative() functions), which is what let every one of the 35 entries come
+# out at once rather than 27 of them.
+#
+# A parameter-level "$title"/"$description" override no longer has an allow-
+# list mechanism to fall back on if this file ever needs one again for that
+# case specifically: none exists today (every declared action's parameter
+# shape matches the vendored specification's own field-level prose exactly),
+# and if one is ever needed, prefer extending TitleOverridden/
+# DescriptionOverridden's approach (a fact recorded once, at the point of the
+# override) over reviving a parallel allow-list entry for it.

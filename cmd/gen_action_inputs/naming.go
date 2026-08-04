@@ -206,7 +206,7 @@ func exportedName(id string) string {
 // inputStructName derives the Input struct's name from an operation's
 // exported OperationID, matching the pilot domains' existing hand-written
 // names exactly: "TagCreate" -> "tagCreateInput", "EcrDeleteRepository" ->
-// "ecrDeleteRepositoryInput". This is what lets a regenerated inputs.gen.go
+// "ecrDeleteRepositoryInput". This is what lets a regenerated inputs.go
 // slot in as a drop-in replacement: the domain's Specs() function already
 // writes `Input: tagCreateInput{}` and every handler already declares `var
 // params tagCreateInput`.

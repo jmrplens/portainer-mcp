@@ -96,6 +96,42 @@ func TestUnit_WithNarrative_MergesOrPreservesEachFieldIndependently(t *testing.T
 				}
 			},
 		},
+		{
+			// This is the mutation proof behind task 4's decision to drop
+			// the spec-drift-allowlist.yaml Title/Description entries:
+			// cmd/audit_spec_drift's isGating reads these two flags
+			// directly, so if WithNarrative ever stopped setting them, 35
+			// findings would silently start gating the build again with no
+			// allow-list left to catch it.
+			name: "non-empty title or description alone sets only its own Overridden flag",
+			run: func(t *testing.T) {
+				got := WithNarrative(validSpec(), ActionNarrative{Description: "Human description."})
+				if got.TitleOverridden {
+					t.Error("TitleOverridden = true, want false: the narrative never set Title")
+				}
+				if !got.DescriptionOverridden {
+					t.Error("DescriptionOverridden = false, want true: the narrative set Description")
+				}
+			},
+		},
+		{
+			name: "zero narrative leaves both Overridden flags false",
+			run: func(t *testing.T) {
+				got := WithNarrative(validSpec(), ActionNarrative{})
+				if got.TitleOverridden || got.DescriptionOverridden {
+					t.Errorf("TitleOverridden/DescriptionOverridden = %v/%v, want both false: a zero narrative overrides neither", got.TitleOverridden, got.DescriptionOverridden)
+				}
+			},
+		},
+		{
+			name: "non-empty title and description set both Overridden flags",
+			run: func(t *testing.T) {
+				got := WithNarrative(validSpec(), ActionNarrative{Title: "Human title", Description: "Human description."})
+				if !got.TitleOverridden || !got.DescriptionOverridden {
+					t.Errorf("TitleOverridden/DescriptionOverridden = %v/%v, want both true", got.TitleOverridden, got.DescriptionOverridden)
+				}
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, tc.run)
