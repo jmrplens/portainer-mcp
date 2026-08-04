@@ -333,12 +333,35 @@ func resolvedRequestBody(op SpecOperation) (map[string]any, error) {
 	return rb, nil
 }
 
-// requestBodySchemaNode returns op's request body's single application/json
-// schema node. Returns nil, nil for an operation with no body, or one whose
-// body declares no application/json content at all (a multipart-only body is
-// the real example, CustomTemplateCreate in the vendored spec): ShapeFromSpec
-// has no non-JSON content to flatten into fields either way, so there is
-// nothing to distinguish that from "no body" for this package's purposes.
+// requestBodySchemaNode returns op's request body's single schema node,
+// mirroring cmd/gen_action_inputs's own requestBodySchema (spec.go) exactly:
+// whichever one content type key "content" declares, not only
+// "application/json". A multipart/form-data body — every wave-1 file-upload
+// operation (EndpointCreate, CustomTemplateCreateFile, both
+// StackCreateDockerSwarm/StandaloneFile, EndpointDockerBrowsePut, and eight
+// more named in cmd/gen_action_inputs/fieldcount_crosscheck_test.go's own
+// former knownFieldCountResidual entries) declares real top-level fields —
+// the identical object schema an application/json body would declare, wrapped
+// in multipart form fields rather than a JSON object body, "format":"binary"
+// marking the one property that is a file upload rather than an ordinary
+// string. Reading only "application/json" made every one of those fields
+// invisible to this function: a multipart-only body resolved to nil here,
+// indistinguishable from "no body at all", so once such an operation was
+// declared by a catalog action, every one of its real fields rendered as a
+// gating ChangeAdded. This function must read the identical content this
+// generator reads, or the two silently diverge on this third dimension (content
+// type) the same way C1 (non-object bodies) and C2 (map-shaped bodies)
+// already diverged on two others.
+//
+// Returns nil, nil for an operation with no body at all, or one whose body's
+// "content" is empty. Returns an error, mirroring requestBodySchema's
+// identical refusal, when the body declares more than one content type —
+// CustomTemplateCreate (application/json and multipart/form-data, the EE
+// vendored spec only) is the one operation in either vendored specification
+// that does: there is no single schema to prefer over the other without
+// arbitrarily ignoring whichever one this function did not pick, so both
+// sides now refuse identically rather than this function silently reading
+// only the application/json variant the way it used to.
 func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
 	rb, err := resolvedRequestBody(op)
 	if err != nil {
@@ -348,12 +371,23 @@ func requestBodySchemaNode(op SpecOperation) (map[string]any, error) {
 		return nil, nil
 	}
 	content, _ := rb["content"].(map[string]any)
-	entry, ok := content["application/json"].(map[string]any)
-	if !ok {
+	if len(content) == 0 {
 		return nil, nil
 	}
-	schema, _ := entry["schema"].(map[string]any)
-	return schema, nil
+	if len(content) > 1 {
+		kinds := make([]string, 0, len(content))
+		for k := range content {
+			kinds = append(kinds, k)
+		}
+		sort.Strings(kinds)
+		return nil, fmt.Errorf("requestBody declares %d content types (%s); no single schema to compare against a catalog action's flat shape", len(content), strings.Join(kinds, ", "))
+	}
+	for _, v := range content {
+		entry, _ := v.(map[string]any)
+		schema, _ := entry["schema"].(map[string]any)
+		return schema, nil
+	}
+	return nil, nil // unreachable: len(content) == 1 guarantees the loop above returns
 }
 
 // mapBodyDefaultDescription is the fallback description ShapeFromSpec gives
