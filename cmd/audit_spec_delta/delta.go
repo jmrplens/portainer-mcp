@@ -232,7 +232,20 @@ func computeDelta(before, after map[string]specOperation, domainTags map[string]
 			beforeShape, beforeErr := specdiff.ShapeFromSpec(b.Op)
 			afterShape, afterErr := specdiff.ShapeFromSpec(a.Op)
 			if beforeErr != nil || afterErr != nil {
+				// An operation whose shape did not change at all between
+				// before and after refuses for the identical reason on both
+				// sides (X-Setup-Token's header location, say, is as
+				// unsupported after a release as before it): errors.Join
+				// would otherwise print that one reason twice, joined by its
+				// own newline, which reads as two distinct problems found
+				// rather than one unchanged one. Printed once instead
+				// whenever the two sides' messages are identical; still both
+				// when they genuinely differ (a real case: the operation was
+				// unresolvable before for one reason and now for another).
 				reason := errors.Join(beforeErr, afterErr).Error()
+				if beforeErr != nil && afterErr != nil && beforeErr.Error() == afterErr.Error() {
+					reason = beforeErr.Error()
+				}
 				tag := a.Tag
 				if tag == "" {
 					tag = b.Tag

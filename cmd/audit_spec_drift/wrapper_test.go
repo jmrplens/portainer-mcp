@@ -37,65 +37,64 @@ func wrapperFixtureHandlerCallsWrapperViaSelector(_ context.Context, _ *portaine
 	return strings.ToUpper("x"), nil
 }
 
-// TestUnit_HandlerRedactsCredential_HandlerCallsWrapper_ReportsTrue is the
-// positive case: a real, compiled, package-level function whose body calls
-// the named wrapper is recognised as doing so.
-func TestUnit_HandlerRedactsCredential_HandlerCallsWrapper_ReportsTrue(t *testing.T) {
+// TestUnit_HandlerRedactsCredential_RecognisesACallByNameNotByAccident
+// covers handlerRedactsCredential's four discriminating cases in one table:
+// each case names the exact real-world shape it stands in for, and each
+// asserts a different value of "called" or "wrapperName" against the
+// identical fixture handlers, so no single case could pass by accident.
+func TestUnit_HandlerRedactsCredential_RecognisesACallByNameNotByAccident(t *testing.T) {
 	t.Parallel()
-	called, err := handlerRedactsCredential(wrapperFixtureHandlerCallsWrapper, "fixtureRedactWrapper")
-	if err != nil {
-		t.Fatalf("handlerRedactsCredential() error = %v", err)
-	}
-	if !called {
-		t.Error("handlerRedactsCredential() = false, want true: wrapperFixtureHandlerCallsWrapper does call fixtureRedactWrapper")
-	}
-}
-
-// TestUnit_HandlerRedactsCredential_HandlerLeaksDirectly_ReportsFalse is the
-// mutation proof this task's brief asks for: wrapperFixtureHandlerLeaksDirectly
-// is exactly wrapperFixtureHandlerCallsWrapper with the call to the
-// redaction wrapper removed — the identical edit that shipped P2's original
-// defect in registries' create/inspect/update handlers (a hand-written
-// handler returning the API response directly instead of the redacted
-// value). Before this task, nothing but a per-domain hand-written fixture
-// test caught that edit; this proves the general mechanism now would too.
-func TestUnit_HandlerRedactsCredential_HandlerLeaksDirectly_ReportsFalse(t *testing.T) {
-	t.Parallel()
-	called, err := handlerRedactsCredential(wrapperFixtureHandlerLeaksDirectly, "fixtureRedactWrapper")
-	if err != nil {
-		t.Fatalf("handlerRedactsCredential() error = %v", err)
-	}
-	if called {
-		t.Error("handlerRedactsCredential() = true, want false: wrapperFixtureHandlerLeaksDirectly never calls fixtureRedactWrapper")
-	}
-}
-
-// TestUnit_HandlerRedactsCredential_SelectorCall_IsRecognised proves the
-// *ast.SelectorExpr branch: a call written as pkg.Fn(...), not a bare
-// identifier, is still recognised when its selector name matches.
-func TestUnit_HandlerRedactsCredential_SelectorCall_IsRecognised(t *testing.T) {
-	t.Parallel()
-	called, err := handlerRedactsCredential(wrapperFixtureHandlerCallsWrapperViaSelector, "ToUpper")
-	if err != nil {
-		t.Fatalf("handlerRedactsCredential() error = %v", err)
-	}
-	if !called {
-		t.Error("handlerRedactsCredential() = false, want true: the handler calls strings.ToUpper, a selector call named ToUpper")
-	}
-}
-
-// TestUnit_HandlerRedactsCredential_WrongWrapperName_ReportsFalse proves the
-// match is by the wrapper's own name, not merely "some call happened": a
-// handler that calls a real function, just not the one this operation
-// requires, must not be mistaken for redacting.
-func TestUnit_HandlerRedactsCredential_WrongWrapperName_ReportsFalse(t *testing.T) {
-	t.Parallel()
-	called, err := handlerRedactsCredential(wrapperFixtureHandlerCallsWrapper, "someOtherWrapperNameEntirely")
-	if err != nil {
-		t.Fatalf("handlerRedactsCredential() error = %v", err)
-	}
-	if called {
-		t.Error("handlerRedactsCredential() = true, want false: the handler never calls someOtherWrapperNameEntirely")
+	for _, tc := range []struct {
+		name       string
+		handler    func(context.Context, *portainer.Client, json.RawMessage) (any, error)
+		wrapper    string
+		wantCalled bool
+	}{
+		{
+			// The positive case: a real, compiled, package-level function
+			// whose body calls the named wrapper is recognised as doing so.
+			name: "handler calls the named wrapper", handler: wrapperFixtureHandlerCallsWrapper,
+			wrapper: "fixtureRedactWrapper", wantCalled: true,
+		},
+		{
+			// The mutation proof this task's brief asks for:
+			// wrapperFixtureHandlerLeaksDirectly is exactly
+			// wrapperFixtureHandlerCallsWrapper with the call to the
+			// redaction wrapper removed — the identical edit that shipped
+			// P2's original defect in registries' create/inspect/update
+			// handlers (a hand-written handler returning the API response
+			// directly instead of the redacted value). Before this task,
+			// nothing but a per-domain hand-written fixture test caught
+			// that edit; this proves the general mechanism now would too.
+			name: "handler never calls any wrapper", handler: wrapperFixtureHandlerLeaksDirectly,
+			wrapper: "fixtureRedactWrapper", wantCalled: false,
+		},
+		{
+			// Proves the *ast.SelectorExpr branch: a call written as
+			// pkg.Fn(...), not a bare identifier, is still recognised when
+			// its selector name matches.
+			name: "handler calls the wrapper via a selector expression", handler: wrapperFixtureHandlerCallsWrapperViaSelector,
+			wrapper: "ToUpper", wantCalled: true,
+		},
+		{
+			// Proves the match is by the wrapper's own name, not merely
+			// "some call happened": a handler that calls a real function,
+			// just not the one this operation requires, must not be
+			// mistaken for redacting.
+			name: "handler calls a real function, but not the required wrapper", handler: wrapperFixtureHandlerCallsWrapper,
+			wrapper: "someOtherWrapperNameEntirely", wantCalled: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			called, err := handlerRedactsCredential(tc.handler, tc.wrapper)
+			if err != nil {
+				t.Fatalf("handlerRedactsCredential() error = %v", err)
+			}
+			if called != tc.wantCalled {
+				t.Errorf("handlerRedactsCredential() = %v, want %v", called, tc.wantCalled)
+			}
+		})
 	}
 }
 

@@ -34,14 +34,16 @@ const (
 // hand-written pilots, not something to silence by loosening this test.
 func TestUnit_Run_RealCatalogAgainstRealSpecs_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
-	err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml")
-	if err != nil {
-		t.Fatalf("run() error = %v, want nil: the real catalog is expected to match the vendored spec it was generated from\n%s", err, out.String())
-	}
-	if !strings.Contains(out.String(), "No drift") {
-		t.Errorf("run() report = %q, want it to say plainly that no drift was found", out.String())
-	}
+	t.Run("Run RealCatalogAgainstRealSpecs ReturnsNil", func(t *testing.T) {
+		var out strings.Builder
+		err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml")
+		if err != nil {
+			t.Fatalf("run() error = %v, want nil: the real catalog is expected to match the vendored spec it was generated from\n%s", err, out.String())
+		}
+		if !strings.Contains(out.String(), "No drift") {
+			t.Errorf("run() report = %q, want it to say plainly that no drift was found", out.String())
+		}
+	})
 }
 
 // mutateEESpecTagDeleteIDToString loads the real vendored Business Edition
@@ -102,57 +104,63 @@ func mutateEESpecTagDeleteIDToString(t *testing.T) []byte {
 // specification that has genuinely moved out from under it.
 func TestUnit_Run_RealCatalogTypeDriftAgainstMutatedSpec_ReturnsNonNilError(t *testing.T) {
 	t.Parallel()
-	mutatedEE := mutateEESpecTagDeleteIDToString(t)
+	t.Run("Run RealCatalogTypeDriftAgainstMutatedSpec ReturnsNonNilError", func(t *testing.T) {
+		mutatedEE := mutateEESpecTagDeleteIDToString(t)
 
-	realCE, err := os.ReadFile(filepath.Join(realSpecsDir, "ce-2.44.0.json"))
-	if err != nil {
-		t.Fatalf("read real ce spec: %v", err)
-	}
-	realAllowList, err := os.ReadFile(filepath.Join(realAllowListDir, "spec-drift-allowlist.yaml"))
-	if err != nil {
-		t.Fatalf("read real allow-list: %v", err)
-	}
+		realCE, err := os.ReadFile(filepath.Join(realSpecsDir, "ce-2.44.0.json"))
+		if err != nil {
+			t.Fatalf("read real ce spec: %v", err)
+		}
+		realAllowList, err := os.ReadFile(filepath.Join(realAllowListDir, "spec-drift-allowlist.yaml"))
+		if err != nil {
+			t.Fatalf("read real allow-list: %v", err)
+		}
 
-	dir := t.TempDir()
-	writeFixture(t, dir, "ee-2.44.0.json", string(mutatedEE))
-	writeFixture(t, dir, "ce-2.44.0.json", string(realCE))
-	writeFixture(t, dir, "spec-drift-allowlist.yaml", string(realAllowList))
+		dir := t.TempDir()
+		writeFixture(t, dir, "ee-2.44.0.json", string(mutatedEE))
+		writeFixture(t, dir, "ce-2.44.0.json", string(realCE))
+		writeFixture(t, dir, "spec-drift-allowlist.yaml", string(realAllowList))
 
-	var out strings.Builder
-	err = run(&out, dir, "ce-2.44.0.json", "ee-2.44.0.json", dir, "spec-drift-allowlist.yaml")
-	if err == nil {
-		t.Fatalf("run() error = nil, want an error: TagDelete's \"id\" was mutated integer -> string in the spec fed to run\n%s", out.String())
-	}
-	// The report is still checked, but only as a secondary, human-facing
-	// property — the discriminating assertion above is on err.
-	if !strings.Contains(out.String(), "TagDelete") {
-		t.Errorf("run() report does not name the drifted operation:\n%s", out.String())
-	}
+		var out strings.Builder
+		err = run(&out, dir, "ce-2.44.0.json", "ee-2.44.0.json", dir, "spec-drift-allowlist.yaml")
+		if err == nil {
+			t.Fatalf("run() error = nil, want an error: TagDelete's \"id\" was mutated integer -> string in the spec fed to run\n%s", out.String())
+		}
+		// The report is still checked, but only as a secondary, human-facing
+		// property — the discriminating assertion above is on err.
+		if !strings.Contains(out.String(), "TagDelete") {
+			t.Errorf("run() report does not name the drifted operation:\n%s", out.String())
+		}
+	})
 }
 
 // TestUnit_Run_MissingSpecFile_ReturnsError is the plumbing failure mode.
 func TestUnit_Run_MissingSpecFile_ReturnsError(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeFixture(t, dir, "allowlist.yaml", "[]\n")
-	var out strings.Builder
-	err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml")
-	if err == nil {
-		t.Fatal("run() error = nil, want an error for a missing spec file")
-	}
+	t.Run("Run MissingSpecFile ReturnsError", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFixture(t, dir, "allowlist.yaml", "[]\n")
+		var out strings.Builder
+		err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml")
+		if err == nil {
+			t.Fatal("run() error = nil, want an error for a missing spec file")
+		}
+	})
 }
 
 // TestUnit_Run_MissingAllowListFile_ReturnsError covers the other input.
 func TestUnit_Run_MissingAllowListFile_ReturnsError(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeFixture(t, dir, "ce.json", `{"paths": {}}`)
-	writeFixture(t, dir, "ee.json", `{"paths": {}}`)
-	var out strings.Builder
-	err := run(&out, dir, "ce.json", "ee.json", dir, "does-not-exist.yaml")
-	if err == nil {
-		t.Fatal("run() error = nil, want an error for a missing allow-list file")
-	}
+	t.Run("Run MissingAllowListFile ReturnsError", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFixture(t, dir, "ce.json", `{"paths": {}}`)
+		writeFixture(t, dir, "ee.json", `{"paths": {}}`)
+		var out strings.Builder
+		err := run(&out, dir, "ce.json", "ee.json", dir, "does-not-exist.yaml")
+		if err == nil {
+			t.Fatal("run() error = nil, want an error for a missing allow-list file")
+		}
+	})
 }
 
 // TestUnit_Run_CanaryCannotBeBypassed_StillRunsAgainstCleanTree is a
@@ -163,45 +171,51 @@ func TestUnit_Run_MissingAllowListFile_ReturnsError(t *testing.T) {
 // rather than stopping at the canary for the real tree.
 func TestUnit_Run_CanaryCannotBeBypassed_StillRunsAgainstCleanTree(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
-	if err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml"); err != nil {
-		t.Fatalf("run() error = %v", err)
-	}
-	if !strings.Contains(out.String(), "Canary self-test: passed") {
-		t.Errorf("run() report = %q, want it to record that the canary passed", out.String())
-	}
+	t.Run("Run CanaryCannotBeBypassed StillRunsAgainstCleanTree", func(t *testing.T) {
+		var out strings.Builder
+		if err := run(&out, realSpecsDir, "ce-2.44.0.json", "ee-2.44.0.json", realAllowListDir, "spec-drift-allowlist.yaml"); err != nil {
+			t.Fatalf("run() error = %v", err)
+		}
+		if !strings.Contains(out.String(), "Canary self-test: passed") {
+			t.Errorf("run() report = %q, want it to record that the canary passed", out.String())
+		}
+	})
 }
 
 // TestUnit_ReadFileIn_ReadsFileWithinDir is the ordinary case, mirroring
 // cmd/audit_1to1's identical test for the identical helper.
 func TestUnit_ReadFileIn_ReadsFileWithinDir(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeFixture(t, dir, "spec.json", `{"paths": {}}`)
+	t.Run("ReadFileIn ReadsFileWithinDir", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFixture(t, dir, "spec.json", `{"paths": {}}`)
 
-	data, err := readFileIn(dir, "spec.json")
-	if err != nil {
-		t.Fatalf("readFileIn() error = %v", err)
-	}
-	if string(data) != `{"paths": {}}` {
-		t.Errorf("readFileIn() = %q, want the fixture's content", data)
-	}
+		data, err := readFileIn(dir, "spec.json")
+		if err != nil {
+			t.Fatalf("readFileIn() error = %v", err)
+		}
+		if string(data) != `{"paths": {}}` {
+			t.Errorf("readFileIn() = %q, want the fixture's content", data)
+		}
+	})
 }
 
 // TestUnit_ReadFileIn_RefusesToEscapeDir proves the confinement check
 // actually bites.
 func TestUnit_ReadFileIn_RefusesToEscapeDir(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "secret.json")
-	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
-		t.Fatalf("write outside fixture: %v", err)
-	}
-	rel, err := filepath.Rel(dir, outside)
-	if err != nil {
-		t.Fatalf("filepath.Rel: %v", err)
-	}
-	if _, err := readFileIn(dir, rel); err == nil {
-		t.Fatal("readFileIn() = nil error, want it to refuse a name that escapes dir")
-	}
+	t.Run("ReadFileIn RefusesToEscapeDir", func(t *testing.T) {
+		dir := t.TempDir()
+		outside := filepath.Join(t.TempDir(), "secret.json")
+		if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+			t.Fatalf("write outside fixture: %v", err)
+		}
+		rel, err := filepath.Rel(dir, outside)
+		if err != nil {
+			t.Fatalf("filepath.Rel: %v", err)
+		}
+		if _, err := readFileIn(dir, rel); err == nil {
+			t.Fatal("readFileIn() = nil error, want it to refuse a name that escapes dir")
+		}
+	})
 }

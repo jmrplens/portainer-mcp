@@ -101,11 +101,26 @@ mechanical but must land in the same commit as the domain, never a follow-up.
    `internal/tools` that does **not** already have one of these files (or
    the pre-freeze `*.gen.go` names) — which, for every domain scaffolded
    before this one, is all of them: `scaffold-domain` silently does nothing
-   to a domain it has already written to, unless you pass `FORCE=1`, which
-   discards every hand edit made since that domain was scaffolded. Passing
-   `FORCE=1` for a domain you are actively developing is almost always the
-   wrong move; it exists for the rare case of genuinely starting a domain
-   over.
+   to a domain it has already written to, unless you pass `FORCE=1`.
+
+   Be precise about what `FORCE=1` actually does, because it is narrower
+   than it sounds and narrower than an earlier version of this checklist
+   claimed: it bypasses the "already scaffolded" skip, nothing more. It
+   does **not** discard the hand edits made since that domain was
+   scaffolded. `cmd/gen_action_inputs`'s `scanHandOverrides` treats every
+   operationId already declared in a domain's own `actions.go`/`inputs.go`
+   as a hand-written override to leave alone — correctly, once those files
+   stopped being suffixed `.gen.go` and became owned source like any
+   other — which means regeneration with `FORCE=1` skips every operation
+   already declared there and generates only genuinely new ones the
+   domain's tag has gained since it was last scaffolded. There is
+   currently no flag that discards an owned domain's accumulated hand
+   edits and starts over; see `docs/api-divergences.md` §9.2 for the full
+   account of why, and the ordinary path (scaffold once, hand-edit
+   forever, `FORCE=1` never used) is entirely unaffected by this. Whoever
+   genuinely needs to start a domain over should delete its
+   `actions.go`/`inputs.go` by hand first, then run `make scaffold-domain`
+   without `FORCE`.
 
    Expect a first-time scaffold to refuse loudly rather than guess: an
    ambiguous shape, a wire-type width mismatch, or a credential-shaped

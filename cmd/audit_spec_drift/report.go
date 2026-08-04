@@ -17,6 +17,20 @@ func findingLine(f driftFinding) string {
 		tag = "ALLOW-LISTED"
 	case f.Gating:
 		tag = "GATING"
+	case c.AfterOverridden:
+		// A ChangeTitle/ChangeOperationDescription finding whose catalog
+		// side is a deliberate toolutil.WithNarrative override (see
+		// FieldChange.AfterOverridden's own doc comment) never gates — but
+		// isGating not gating is not the same fact as "this is a copy-paste
+		// prose difference nobody decided about", which is what "cosmetic"
+		// means for every other non-gating finding here. Tagging it
+		// distinctly keeps that difference visible in the report itself,
+		// not only recoverable by a reader who already knows to go check
+		// AfterOverridden in the source: 35 allow-list entries became 35
+		// structurally-inert comparisons, and a reader of this report alone
+		// should be able to tell "inert by design" from "inert because the
+		// spec never described this field" without opening any code.
+		tag = "OVERRIDDEN"
 	}
 	line := fmt.Sprintf("    - %s.%s [%s] (spec: %s): %q -> %q [%s]\n",
 		f.OperationID, c.JSONName, c.Kind, f.SpecEdition, c.Before, c.After, tag)
@@ -57,6 +71,7 @@ func buildReport(result *auditResult, credResult *credentialAuditResult, minResu
 	fmt.Fprintln(&b, "Credential canary self-test: passed (a handler that calls its wrapper and one that does not were told apart).")
 	fmt.Fprintln(&b, "Identifier-minimum canary self-test: passed (an action publishing \"minimum\":1 and one not were told apart).")
 	fmt.Fprintf(&b, "Actions audited: %d\n", result.ActionsAudited)
+	fmt.Fprintf(&b, "Fields audited: %d\n", result.FieldsAudited)
 	fmt.Fprintf(&b, "Allow-list entries: %d\n\n", result.AllowListCount)
 
 	var currentOp string

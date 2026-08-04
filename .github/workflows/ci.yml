@@ -98,14 +98,37 @@ jobs:
   # legitimate hand edit to an owned domain (exactly what P3.2 asks domain
   # owners to do from now on) as readily as on a real defect — a check that
   # cannot tell those apart teaches everyone to stop trusting it. The
-  # audit-spec-drift job below is what replaces it, and it covers strictly
-  # more: drift against the vendored specification is caught however it
-  # arose, not only when a regeneration run happened to disagree with what
-  # was committed. Task 4's own report
-  # (.superpowers/sdd/2026-08-04-p3-2-drift-audit-and-freeze/task-4-report.md)
-  # records a live demonstration that a hand edit the old job caught
-  # (removing registries.inspect's redaction wrapper call from
-  # actions.gen.go) is caught by audit-spec-drift too.
+  # audit-spec-drift job below is what replaces it.
+  #
+  # Precisely, not "strictly more": the replacement covers strictly more
+  # against *specification drift* — a hand edit or the vendored spec moving
+  # out from under the catalog is caught however it arose, not only when a
+  # regeneration run happened to disagree with what was committed — and
+  # strictly LESS against *arbitrary hand edits to scaffolded code that
+  # introduce no spec drift at all*. audit-spec-drift iterates the actions
+  # the catalog declares; deleting a whole action from generatedSpecs()
+  # shrinks its own "Actions audited" count with no gating finding and no
+  # non-zero exit — the old regenerate-and-diff job would have caught that
+  # (regeneration would still produce the deleted action, diffing non-empty).
+  # cmd/audit_1to1's coverage ratchet is the orthogonal, count-only backstop
+  # for that case, and it is imperfect too: a floor on a total, so removing
+  # one action and adding an unrelated one passes it silently.
+  #
+  # Live demonstration of the part this job does cover, on the one mutation
+  # this project's own history already had a name for: hand-edited
+  # registries/actions.go (actions.gen.go at the time), changing
+  # registryInspect's `return redactRegistryInspect(resp.JSON200), nil` to
+  # `return resp.JSON200, nil` — P2's original defect, verbatim. Regenerating
+  # and diffing (the retired job's own mechanism, run manually against the
+  # mutation) failed exactly as CI would have; audit-spec-drift against the
+  # identical mutation failed too, naming the operation: "RegistryInspect
+  # (registries.inspect): success response can carry [AccessToken Password
+  # TLSCACert TLSCert TLSKey], but Handler never calls redactRegistryInspect
+  # [GATING]". Both reverted, both clean afterward. See
+  # docs/api-divergences.md §9 for the full account, including the
+  # -allow-overwrite/scanHandOverrides limitation this same freeze left
+  # behind — recorded there, not only in a gitignored working document that
+  # does not exist in a fresh clone.
 
   no-stdout-writes:
     name: "Guard: nothing writes to stdout"

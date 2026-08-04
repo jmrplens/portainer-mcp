@@ -41,12 +41,24 @@ type ActionNarrative struct {
 // permanent improvement on the specification's own wording apart from
 // accidental drift, without an allow-list entry recording the same decision
 // a second time. Previously the allow-list was the only mechanism available
-// for this (toolutil.ActionSpec retained no trace of the override at all);
-// task-4's own report
-// (.superpowers/sdd/2026-08-04-p3-2-drift-audit-and-freeze/task-4-report.md)
-// records why recording it here instead, once this field existed to record
-// it in, was judged cheap enough to do rather than leave as a permanent
-// allow-list exception.
+// for this (toolutil.ActionSpec retained no trace of the override at all).
+//
+// Be precise about what this mechanism does and does not do: it
+// *recognises* a deliberate divergence, it does not *resolve* one. All 35
+// Title/Description divergences api/spec-drift-allowlist.yaml used to name
+// still exist — every one of the 19 catalogued actions with a narrative
+// override still says something different from the specification's own
+// wording, on purpose — this field only changes how cmd/audit_spec_drift is
+// told not to gate the build over them, from a YAML line naming the
+// operation and field a second time to a fact recorded once, at the point
+// the override is made. Emptying api/spec-drift-allowlist.yaml down to zero
+// entries is real progress (one fewer place the same 35 decisions could
+// silently drift out of sync with the narrative hook that actually made
+// them), but it is not the same claim as "the divergence went away", and
+// cmd/audit_spec_drift's own report renders every one of these findings
+// tagged [OVERRIDDEN], not silently — see findingLine in that command's
+// report.go — precisely so a reader of the report, not only of this
+// comment, can see the distinction too.
 //
 // spec is passed and returned by value, so a caller building a []ActionSpec
 // literal can wrap each entry inline (WithNarrative(ActionSpec{...}, hook(id)))

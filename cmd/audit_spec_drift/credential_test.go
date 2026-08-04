@@ -33,20 +33,22 @@ func jsonSchemaResponses(t *testing.T, schemaJSON string) map[string]map[string]
 // credential-shaped property named directly in the response schema.
 func TestUnit_ResponseCredentialFields_DirectProperty(t *testing.T) {
 	t.Parallel()
-	responses := jsonSchemaResponses(t, `{
-		"type": "object",
-		"properties": {
-			"Id": {"type": "integer"},
-			"Password": {"type": "string"}
+	t.Run("ResponseCredentialFields DirectProperty", func(t *testing.T) {
+		responses := jsonSchemaResponses(t, `{
+			"type": "object",
+			"properties": {
+				"Id": {"type": "integer"},
+				"Password": {"type": "string"}
+			}
+		}`)
+		fields, err := responseCredentialFields(responses, nil)
+		if err != nil {
+			t.Fatalf("responseCredentialFields() error = %v", err)
 		}
-	}`)
-	fields, err := responseCredentialFields(responses, nil)
-	if err != nil {
-		t.Fatalf("responseCredentialFields() error = %v", err)
-	}
-	if len(fields) != 1 || fields[0] != "Password" {
-		t.Errorf("responseCredentialFields() = %v, want [Password]", fields)
-	}
+		if len(fields) != 1 || fields[0] != "Password" {
+			t.Errorf("responseCredentialFields() = %v, want [Password]", fields)
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_NestedViaRef proves resolution follows a
@@ -55,27 +57,29 @@ func TestUnit_ResponseCredentialFields_DirectProperty(t *testing.T) {
 // level below the top-level response schema in the real vendored spec.
 func TestUnit_ResponseCredentialFields_NestedViaRef(t *testing.T) {
 	t.Parallel()
-	schemas := map[string]any{
-		"Inner": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"AccessToken": map[string]any{"type": "string"},
+	t.Run("ResponseCredentialFields NestedViaRef", func(t *testing.T) {
+		schemas := map[string]any{
+			"Inner": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"AccessToken": map[string]any{"type": "string"},
+				},
 			},
-		},
-	}
-	responses := jsonSchemaResponses(t, `{
-		"type": "object",
-		"properties": {
-			"Config": {"$ref": "#/components/schemas/Inner"}
 		}
-	}`)
-	fields, err := responseCredentialFields(responses, schemas)
-	if err != nil {
-		t.Fatalf("responseCredentialFields() error = %v", err)
-	}
-	if len(fields) != 1 || fields[0] != "AccessToken" {
-		t.Errorf("responseCredentialFields() = %v, want [AccessToken]", fields)
-	}
+		responses := jsonSchemaResponses(t, `{
+			"type": "object",
+			"properties": {
+				"Config": {"$ref": "#/components/schemas/Inner"}
+			}
+		}`)
+		fields, err := responseCredentialFields(responses, schemas)
+		if err != nil {
+			t.Fatalf("responseCredentialFields() error = %v", err)
+		}
+		if len(fields) != 1 || fields[0] != "AccessToken" {
+			t.Errorf("responseCredentialFields() = %v, want [AccessToken]", fields)
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_ArrayItems proves a list response (the
@@ -84,20 +88,22 @@ func TestUnit_ResponseCredentialFields_NestedViaRef(t *testing.T) {
 // object.
 func TestUnit_ResponseCredentialFields_ArrayItems(t *testing.T) {
 	t.Parallel()
-	responses := jsonSchemaResponses(t, `{
-		"type": "array",
-		"items": {
-			"type": "object",
-			"properties": {"Secret": {"type": "string"}}
+	t.Run("ResponseCredentialFields ArrayItems", func(t *testing.T) {
+		responses := jsonSchemaResponses(t, `{
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {"Secret": {"type": "string"}}
+			}
+		}`)
+		fields, err := responseCredentialFields(responses, nil)
+		if err != nil {
+			t.Fatalf("responseCredentialFields() error = %v", err)
 		}
-	}`)
-	fields, err := responseCredentialFields(responses, nil)
-	if err != nil {
-		t.Fatalf("responseCredentialFields() error = %v", err)
-	}
-	if len(fields) != 1 || fields[0] != "Secret" {
-		t.Errorf("responseCredentialFields() = %v, want [Secret]", fields)
-	}
+		if len(fields) != 1 || fields[0] != "Secret" {
+			t.Errorf("responseCredentialFields() = %v, want [Secret]", fields)
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_NoJSONBody_ReturnsNil covers a 204 (or a
@@ -106,14 +112,16 @@ func TestUnit_ResponseCredentialFields_ArrayItems(t *testing.T) {
 // error about a missing schema.
 func TestUnit_ResponseCredentialFields_NoJSONBody_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	responses := map[string]map[string]any{"204": {"description": "Success"}}
-	fields, err := responseCredentialFields(responses, nil)
-	if err != nil {
-		t.Fatalf("responseCredentialFields() error = %v", err)
-	}
-	if fields != nil {
-		t.Errorf("responseCredentialFields() = %v, want nil", fields)
-	}
+	t.Run("ResponseCredentialFields NoJSONBody ReturnsNil", func(t *testing.T) {
+		responses := map[string]map[string]any{"204": {"description": "Success"}}
+		fields, err := responseCredentialFields(responses, nil)
+		if err != nil {
+			t.Fatalf("responseCredentialFields() error = %v", err)
+		}
+		if fields != nil {
+			t.Errorf("responseCredentialFields() = %v, want nil", fields)
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_NoCredentialShapedField_ReturnsNil is
@@ -121,17 +129,19 @@ func TestUnit_ResponseCredentialFields_NoJSONBody_ReturnsNil(t *testing.T) {
 // anywhere reports nothing.
 func TestUnit_ResponseCredentialFields_NoCredentialShapedField_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	responses := jsonSchemaResponses(t, `{
-		"type": "object",
-		"properties": {"Id": {"type": "integer"}, "Name": {"type": "string"}}
-	}`)
-	fields, err := responseCredentialFields(responses, nil)
-	if err != nil {
-		t.Fatalf("responseCredentialFields() error = %v", err)
-	}
-	if fields != nil {
-		t.Errorf("responseCredentialFields() = %v, want nil", fields)
-	}
+	t.Run("ResponseCredentialFields NoCredentialShapedField ReturnsNil", func(t *testing.T) {
+		responses := jsonSchemaResponses(t, `{
+			"type": "object",
+			"properties": {"Id": {"type": "integer"}, "Name": {"type": "string"}}
+		}`)
+		fields, err := responseCredentialFields(responses, nil)
+		if err != nil {
+			t.Fatalf("responseCredentialFields() error = %v", err)
+		}
+		if fields != nil {
+			t.Errorf("responseCredentialFields() = %v, want nil", fields)
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_OneOf_ReturnsError mirrors
@@ -140,10 +150,12 @@ func TestUnit_ResponseCredentialFields_NoCredentialShapedField_ReturnsNil(t *tes
 // a branch and possibly missing a credential in the branch it did not pick.
 func TestUnit_ResponseCredentialFields_OneOf_ReturnsError(t *testing.T) {
 	t.Parallel()
-	responses := jsonSchemaResponses(t, `{"oneOf": [{"type": "object"}, {"type": "string"}]}`)
-	if _, err := responseCredentialFields(responses, nil); err == nil {
-		t.Fatal("responseCredentialFields() error = nil, want an error for a oneOf schema")
-	}
+	t.Run("ResponseCredentialFields OneOf ReturnsError", func(t *testing.T) {
+		responses := jsonSchemaResponses(t, `{"oneOf": [{"type": "object"}, {"type": "string"}]}`)
+		if _, err := responseCredentialFields(responses, nil); err == nil {
+			t.Fatal("responseCredentialFields() error = nil, want an error for a oneOf schema")
+		}
+	})
 }
 
 // TestUnit_ResponseCredentialFields_UnresolvedRef_ReturnsError proves a $ref
@@ -151,10 +163,12 @@ func TestUnit_ResponseCredentialFields_OneOf_ReturnsError(t *testing.T) {
 // found".
 func TestUnit_ResponseCredentialFields_UnresolvedRef_ReturnsError(t *testing.T) {
 	t.Parallel()
-	responses := jsonSchemaResponses(t, `{"$ref": "#/components/schemas/DoesNotExist"}`)
-	if _, err := responseCredentialFields(responses, map[string]any{}); err == nil {
-		t.Fatal("responseCredentialFields() error = nil, want an error for an unresolved $ref")
-	}
+	t.Run("ResponseCredentialFields UnresolvedRef ReturnsError", func(t *testing.T) {
+		responses := jsonSchemaResponses(t, `{"$ref": "#/components/schemas/DoesNotExist"}`)
+		if _, err := responseCredentialFields(responses, map[string]any{}); err == nil {
+			t.Fatal("responseCredentialFields() error = nil, want an error for an unresolved $ref")
+		}
+	})
 }
 
 // redactFixtureOp is the exact name redactionWrapperName("FixtureOp")
@@ -194,22 +208,24 @@ func fixtureCredentialSpecOps(t *testing.T, credentialShaped bool) map[string]sp
 // action's Handler does call the required wrapper (redact + OperationID).
 func TestUnit_AuditCredentialRedaction_CredentialShapedAndHandlerRedacts_NoFinding(t *testing.T) {
 	t.Parallel()
-	ops := fixtureCredentialSpecOps(t, true)
-	actions := []toolutil.ActionSpec{{
-		Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
-		Title: "t", Description: "d", Edition: edition.CE,
-		Handler: fixtureCredentialHandlerRedacts,
-	}}
-	result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
-	if err != nil {
-		t.Fatalf("auditCredentialRedaction() error = %v", err)
-	}
-	if result.HasLeaks() {
-		t.Errorf("auditCredentialRedaction() findings = %v, want none: the handler calls redactFixtureOp", result.Findings)
-	}
-	if result.ActionsChecked != 1 {
-		t.Errorf("auditCredentialRedaction() ActionsChecked = %d, want 1", result.ActionsChecked)
-	}
+	t.Run("AuditCredentialRedaction CredentialShapedAndHandlerRedacts NoFinding", func(t *testing.T) {
+		ops := fixtureCredentialSpecOps(t, true)
+		actions := []toolutil.ActionSpec{{
+			Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
+			Title: "t", Description: "d", Edition: edition.CE,
+			Handler: fixtureCredentialHandlerRedacts,
+		}}
+		result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
+		if err != nil {
+			t.Fatalf("auditCredentialRedaction() error = %v", err)
+		}
+		if result.HasLeaks() {
+			t.Errorf("auditCredentialRedaction() findings = %v, want none: the handler calls redactFixtureOp", result.Findings)
+		}
+		if result.ActionsChecked != 1 {
+			t.Errorf("auditCredentialRedaction() ActionsChecked = %d, want 1", result.ActionsChecked)
+		}
+	})
 }
 
 // TestUnit_AuditCredentialRedaction_CredentialShapedAndHandlerLeaks_Finding is
@@ -218,25 +234,27 @@ func TestUnit_AuditCredentialRedaction_CredentialShapedAndHandlerRedacts_NoFindi
 // unconditionally (never allow-listable).
 func TestUnit_AuditCredentialRedaction_CredentialShapedAndHandlerLeaks_Finding(t *testing.T) {
 	t.Parallel()
-	ops := fixtureCredentialSpecOps(t, true)
-	actions := []toolutil.ActionSpec{{
-		Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
-		Title: "t", Description: "d", Edition: edition.CE,
-		Handler: fixtureCredentialHandlerLeaks,
-	}}
-	result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
-	if err != nil {
-		t.Fatalf("auditCredentialRedaction() error = %v", err)
-	}
-	if !result.HasLeaks() {
-		t.Fatal("auditCredentialRedaction() reported no leaks, want one: the handler never calls redactFixtureOp")
-	}
-	if len(result.Findings) != 1 || result.Findings[0].OperationID != "FixtureOp" {
-		t.Errorf("auditCredentialRedaction() findings = %+v, want one finding naming FixtureOp", result.Findings)
-	}
-	if result.Findings[0].WrapperName != "redactFixtureOp" {
-		t.Errorf("auditCredentialRedaction() WrapperName = %q, want %q", result.Findings[0].WrapperName, "redactFixtureOp")
-	}
+	t.Run("AuditCredentialRedaction CredentialShapedAndHandlerLeaks Finding", func(t *testing.T) {
+		ops := fixtureCredentialSpecOps(t, true)
+		actions := []toolutil.ActionSpec{{
+			Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
+			Title: "t", Description: "d", Edition: edition.CE,
+			Handler: fixtureCredentialHandlerLeaks,
+		}}
+		result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
+		if err != nil {
+			t.Fatalf("auditCredentialRedaction() error = %v", err)
+		}
+		if !result.HasLeaks() {
+			t.Fatal("auditCredentialRedaction() reported no leaks, want one: the handler never calls redactFixtureOp")
+		}
+		if len(result.Findings) != 1 || result.Findings[0].OperationID != "FixtureOp" {
+			t.Errorf("auditCredentialRedaction() findings = %+v, want one finding naming FixtureOp", result.Findings)
+		}
+		if result.Findings[0].WrapperName != "redactFixtureOp" {
+			t.Errorf("auditCredentialRedaction() WrapperName = %q, want %q", result.Findings[0].WrapperName, "redactFixtureOp")
+		}
+	})
 }
 
 // TestUnit_AuditCredentialRedaction_NotCredentialShaped_NoCheckPerformed
@@ -245,22 +263,24 @@ func TestUnit_AuditCredentialRedaction_CredentialShapedAndHandlerLeaks_Finding(t
 // of real actions, and each one must cost this audit nothing.
 func TestUnit_AuditCredentialRedaction_NotCredentialShaped_NoCheckPerformed(t *testing.T) {
 	t.Parallel()
-	ops := fixtureCredentialSpecOps(t, false)
-	actions := []toolutil.ActionSpec{{
-		Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
-		Title: "t", Description: "d", Edition: edition.CE,
-		Handler: fixtureCredentialHandlerLeaks,
-	}}
-	result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
-	if err != nil {
-		t.Fatalf("auditCredentialRedaction() error = %v", err)
-	}
-	if result.HasLeaks() {
-		t.Errorf("auditCredentialRedaction() findings = %v, want none: this operation's response carries no credential-shaped field", result.Findings)
-	}
-	if result.ActionsChecked != 0 {
-		t.Errorf("auditCredentialRedaction() ActionsChecked = %d, want 0", result.ActionsChecked)
-	}
+	t.Run("AuditCredentialRedaction NotCredentialShaped NoCheckPerformed", func(t *testing.T) {
+		ops := fixtureCredentialSpecOps(t, false)
+		actions := []toolutil.ActionSpec{{
+			Name: "fixture.op", Domain: "fixture", OperationID: "FixtureOp",
+			Title: "t", Description: "d", Edition: edition.CE,
+			Handler: fixtureCredentialHandlerLeaks,
+		}}
+		result, err := auditCredentialRedaction(ops, map[string]specOperation{}, actions)
+		if err != nil {
+			t.Fatalf("auditCredentialRedaction() error = %v", err)
+		}
+		if result.HasLeaks() {
+			t.Errorf("auditCredentialRedaction() findings = %v, want none: this operation's response carries no credential-shaped field", result.Findings)
+		}
+		if result.ActionsChecked != 0 {
+			t.Errorf("auditCredentialRedaction() ActionsChecked = %d, want 0", result.ActionsChecked)
+		}
+	})
 }
 
 // TestUnit_AuditCredentialRedaction_UnresolvedOperationID_ReturnsError
@@ -268,14 +288,16 @@ func TestUnit_AuditCredentialRedaction_NotCredentialShaped_NoCheckPerformed(t *t
 // neither vendored spec declares is a fatal input error, not a finding.
 func TestUnit_AuditCredentialRedaction_UnresolvedOperationID_ReturnsError(t *testing.T) {
 	t.Parallel()
-	actions := []toolutil.ActionSpec{{
-		Name: "fixture.op", Domain: "fixture", OperationID: "NoSuchOperation",
-		Title: "t", Description: "d", Edition: edition.CE,
-		Handler: fixtureCredentialHandlerLeaks,
-	}}
-	if _, err := auditCredentialRedaction(map[string]specOperation{}, map[string]specOperation{}, actions); err == nil {
-		t.Fatal("auditCredentialRedaction() error = nil, want an error for an unresolved OperationID")
-	}
+	t.Run("AuditCredentialRedaction UnresolvedOperationID ReturnsError", func(t *testing.T) {
+		actions := []toolutil.ActionSpec{{
+			Name: "fixture.op", Domain: "fixture", OperationID: "NoSuchOperation",
+			Title: "t", Description: "d", Edition: edition.CE,
+			Handler: fixtureCredentialHandlerLeaks,
+		}}
+		if _, err := auditCredentialRedaction(map[string]specOperation{}, map[string]specOperation{}, actions); err == nil {
+			t.Fatal("auditCredentialRedaction() error = nil, want an error for an unresolved OperationID")
+		}
+	})
 }
 
 // TestUnit_RealCatalog_EveryCredentialShapedAction_HandlerRedacts is the
@@ -289,32 +311,34 @@ func TestUnit_AuditCredentialRedaction_UnresolvedOperationID_ReturnsError(t *tes
 // ordinary parameter drift.
 func TestUnit_RealCatalog_EveryCredentialShapedAction_HandlerRedacts(t *testing.T) {
 	t.Parallel()
-	ceData, err := readFileIn(realSpecsDir, "ce-2.44.0.json")
-	if err != nil {
-		t.Fatalf("read real ce spec: %v", err)
-	}
-	eeData, err := readFileIn(realSpecsDir, "ee-2.44.0.json")
-	if err != nil {
-		t.Fatalf("read real ee spec: %v", err)
-	}
-	ceOps, err := parseSpecOperations(ceData)
-	if err != nil {
-		t.Fatalf("parseSpecOperations(ce) error = %v", err)
-	}
-	eeOps, err := parseSpecOperations(eeData)
-	if err != nil {
-		t.Fatalf("parseSpecOperations(ee) error = %v", err)
-	}
+	t.Run("RealCatalog EveryCredentialShapedAction HandlerRedacts", func(t *testing.T) {
+		ceData, err := readFileIn(realSpecsDir, "ce-2.44.0.json")
+		if err != nil {
+			t.Fatalf("read real ce spec: %v", err)
+		}
+		eeData, err := readFileIn(realSpecsDir, "ee-2.44.0.json")
+		if err != nil {
+			t.Fatalf("read real ee spec: %v", err)
+		}
+		ceOps, err := parseSpecOperations(ceData)
+		if err != nil {
+			t.Fatalf("parseSpecOperations(ce) error = %v", err)
+		}
+		eeOps, err := parseSpecOperations(eeData)
+		if err != nil {
+			t.Fatalf("parseSpecOperations(ee) error = %v", err)
+		}
 
-	result, err := auditCredentialRedaction(eeOps, ceOps, wiring.AllSpecs())
-	if err != nil {
-		t.Fatalf("auditCredentialRedaction() error = %v", err)
-	}
-	if result.ActionsChecked == 0 {
-		t.Fatal("auditCredentialRedaction() ActionsChecked = 0, want at least registries.list/create/inspect/update to be credential-shaped")
-	}
-	if result.HasLeaks() {
-		t.Errorf("auditCredentialRedaction() found %d real, unresolved credential-redaction finding(s): %+v",
-			len(result.Findings), result.Findings)
-	}
+		result, err := auditCredentialRedaction(eeOps, ceOps, wiring.AllSpecs())
+		if err != nil {
+			t.Fatalf("auditCredentialRedaction() error = %v", err)
+		}
+		if result.ActionsChecked == 0 {
+			t.Fatal("auditCredentialRedaction() ActionsChecked = 0, want at least registries.list/create/inspect/update to be credential-shaped")
+		}
+		if result.HasLeaks() {
+			t.Errorf("auditCredentialRedaction() found %d real, unresolved credential-redaction finding(s): %+v",
+				len(result.Findings), result.Findings)
+		}
+	})
 }

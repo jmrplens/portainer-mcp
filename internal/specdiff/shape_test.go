@@ -1,6 +1,7 @@
 package specdiff
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -241,6 +242,92 @@ func TestUnit_ShapeFromSpec_RendersBodyPropertyAsWireJSONTag(t *testing.T) {
 	f := shape.Fields[0]
 	if f.JSONName != "name" || f.Type != "string" || !f.Required || f.Origin != "body" {
 		t.Errorf("Fields[0] = %+v, want {JSONName: name, Type: string, Required: true, Origin: body}", f)
+	}
+}
+
+// TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody is C1's regression
+// guard: DeleteKubernetesNamespace's real body in api/specs/ee-2.44.0.json is
+// `{"type":"array","items":{"type":"string"}}` — a required list of
+// namespace names — and before this test existed ShapeFromSpec read only
+// resolved.Properties, which is empty for an array, silently producing zero
+// fields with no error at all. That made a drift audit compare "zero body
+// fields" (this function, reporting nothing wrong) against "zero body
+// fields" (the catalog, for an operation this shape has never reached) and
+// print "no drift" for a reason indistinguishable from "nothing was actually
+// compared" — the exact failure mode this package's own canaries exist to
+// catch, just one this package's own producer could still cause. This
+// mirrors cmd/gen_action_inputs/fields.go's identical refusal (same
+// condition, "top-level type %q is not an object"), so an operation the
+// generator would refuse to scaffold is never silently reported clean here
+// either.
+func TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../api/specs/ee-2.44.0.json")
+	if err != nil {
+		t.Fatalf("read vendored spec: %v", err)
+	}
+	op, err := LoadSpecOperation(data, "DeleteKubernetesNamespace")
+	if err != nil {
+		t.Fatalf("LoadSpecOperation(DeleteKubernetesNamespace) error = %v", err)
+	}
+
+	shape, err := ShapeFromSpec(op)
+	if err == nil {
+		t.Fatalf("ShapeFromSpec(DeleteKubernetesNamespace) error = nil, shape = %+v, want a refusal: this operation's body is a top-level array, not an object, so it has no top-level fields to flatten", shape)
+	}
+	if !strings.Contains(err.Error(), "is not an object") {
+		t.Errorf("ShapeFromSpec(DeleteKubernetesNamespace) error = %q, want it to say the top-level type is not an object", err)
+	}
+}
+
+// TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody_SyntheticShapes covers
+// the two other non-object top-level types JSON Schema allows for a request
+// body — "string" and "boolean" — against a minimal synthetic document
+// rather than the vendored spec, so this does not depend on either vendored
+// specification happening to contain an example of each. Both must refuse
+// for the identical reason DeleteKubernetesNamespace's real array body does:
+// resolved.Properties is empty for either, and reading only that field would
+// silently report zero fields rather than refuse.
+func TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody_SyntheticShapes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		bodyType string
+	}{
+		{"string body", "string"},
+		{"boolean body", "boolean"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := []byte(`{
+				"paths": {
+					"/x": {
+						"post": {
+							"operationId": "SyntheticOp",
+							"requestBody": {
+								"content": {
+									"application/json": {
+										"schema": {"type": "` + tc.bodyType + `"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"components": {"schemas": {}}
+			}`)
+			op, err := LoadSpecOperation(doc, "SyntheticOp")
+			if err != nil {
+				t.Fatalf("LoadSpecOperation error = %v", err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err == nil {
+				t.Fatalf("ShapeFromSpec() error = nil, shape = %+v, want a refusal for a top-level %s body", shape, tc.bodyType)
+			}
+			if !strings.Contains(err.Error(), "is not an object") {
+				t.Errorf("ShapeFromSpec() error = %q, want it to say the top-level type is not an object", err)
+			}
+		})
 	}
 }
 

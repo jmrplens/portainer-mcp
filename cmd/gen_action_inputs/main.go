@@ -328,7 +328,20 @@ func run(args []string) error {
 			// no more trustworthy on that point than a generated one — it is
 			// the case P2's defect actually occurred in.
 			if redactWith != "" {
-				redactionGuards = append(redactionGuards, redactionGuard{OperationID: op.OperationID, FuncName: redactWith})
+				// HandlerFuncName is only knowable for a non-overridden
+				// operation: this generator mints handlerFuncName(op.OperationID)
+				// for it, guaranteed to exist once this domain finishes
+				// generating. An overridden operation's handler is
+				// hand-declared under whatever name its author chose — this
+				// generator never learns that name, so the handler-level
+				// redaction guard (renderRedactionGuardFile) is left to skip
+				// it rather than reference a function that may not exist
+				// under the mechanical name at all.
+				handlerFn := ""
+				if !overridden {
+					handlerFn = handlerFuncName(op.OperationID)
+				}
+				redactionGuards = append(redactionGuards, redactionGuard{OperationID: op.OperationID, FuncName: redactWith, HandlerFuncName: handlerFn})
 			}
 
 			if overridden {

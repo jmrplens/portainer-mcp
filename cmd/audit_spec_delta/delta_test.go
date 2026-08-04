@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/specdiff"
@@ -338,6 +339,63 @@ func TestUnit_ComputeDelta_UnflattenableOperation_IsUnresolvableNotFatal(t *test
 	}
 	if widgets.Unresolvable[0].Reason == "" {
 		t.Error("Unresolvable[0].Reason is empty, want the ShapeFromSpec refusal's own message")
+	}
+	// restoreOp's shape did not change between before and after (both sides
+	// are the identical fixture), so ShapeFromSpec refuses for the identical
+	// reason on both: the reason must appear once, not twice joined by
+	// errors.Join's own newline — a reader would otherwise read one
+	// unchanged refusal as two distinct problems found.
+	if n := strings.Count(widgets.Unresolvable[0].Reason, "X-Setup-Token"); n != 1 {
+		t.Errorf("Unresolvable[0].Reason = %q, want the identical before/after refusal printed once, not %d times", widgets.Unresolvable[0].Reason, n)
+	}
+}
+
+// TestUnit_ComputeDelta_UnresolvableForDifferentReasons_PrintsBoth proves the
+// dedup above is not overzealous: when an operation is unresolvable on each
+// side for a genuinely different reason (the shape actually changed from one
+// unsupported form to another), both reasons must still be visible — this is
+// the real case a reader needs both messages for, not the one they should be
+// collapsed for.
+func TestUnit_ComputeDelta_UnresolvableForDifferentReasons_PrintsBoth(t *testing.T) {
+	t.Parallel()
+	before, err := parseSpecOperations([]byte(`{
+		"paths": {
+			"/restore": {"post": {"operationId": "restoreOp", "tags": ["widgets"],
+				"parameters": [{"name": "X-Setup-Token", "in": "header", "required": true, "schema": {"type": "string"}}]}}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseSpecOperations(before) error = %v", err)
+	}
+	after, err := parseSpecOperations([]byte(`{
+		"paths": {
+			"/restore": {"post": {"operationId": "restoreOp", "tags": ["widgets"],
+				"parameters": [{"name": "X-Restore-Token", "in": "header", "required": true, "schema": {"type": "string"}}]}}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseSpecOperations(after) error = %v", err)
+	}
+
+	result, err := computeDelta(before, after, deltaFixtureDomainTags)
+	if err != nil {
+		t.Fatalf("computeDelta() error = %v", err)
+	}
+	if result.UnresolvableCount != 1 {
+		t.Fatalf("UnresolvableCount = %d, want 1", result.UnresolvableCount)
+	}
+	var widgets *domainGroup
+	for i := range result.Domains {
+		if result.Domains[i].Domain == "widgets" {
+			widgets = &result.Domains[i]
+		}
+	}
+	if widgets == nil || len(widgets.Unresolvable) != 1 {
+		t.Fatalf("widgets.Unresolvable = %+v, want exactly one entry", widgets)
+	}
+	reason := widgets.Unresolvable[0].Reason
+	if !strings.Contains(reason, "X-Setup-Token") || !strings.Contains(reason, "X-Restore-Token") {
+		t.Errorf("Reason = %q, want both the before-side and after-side refusal named: they are genuinely different", reason)
 	}
 }
 

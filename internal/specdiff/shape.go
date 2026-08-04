@@ -379,6 +379,45 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: %w", op.OperationID, err)
 		}
 
+		// Mirrors cmd/gen_action_inputs/fields.go's identical refusal exactly
+		// (same message, same condition): a non-object top-level body (an
+		// array is the real case — see below) has no named top-level fields
+		// for this function to read, and reading only resolved.Properties for
+		// one silently produced zero fields with no error at all —
+		// indistinguishable from a real operation that genuinely has none.
+		// That is precisely the shape the generator refuses rather than
+		// guesses (fields.go's requestBodySchema caller), which after the
+		// freeze means an operation like this renders as hand-written code
+		// with no generator refusal ever standing over it again; this
+		// function's refusal is the only net left. Verified against the
+		// vendored specification: DeleteKubernetesNamespace's body is
+		// `{"type":"array","items":{"type":"string"}}`, a required list of
+		// namespace names this function must not silently report as "no
+		// drift" against a catalog shape that also happens to have none.
+		//
+		// A map-shaped body (JSON Schema "type":"object" with a typed
+		// "additionalProperties" and no named "properties" — the seven
+		// Kubernetes bulk-delete operations, per fields.go's own handling)
+		// is not caught by this check: its resolved.Type is "object", not
+		// something this condition flags, yet resolvedNode does not carry
+		// whether "additionalProperties" was present, only Properties/
+		// Required, so this function cannot yet tell that shape apart from a
+		// body that is genuinely, validly property-less. The generator does
+		// not refuse a map body either — it synthesizes one field named
+		// "namespace" for it (fields.go's assembleOperationFields) — so this
+		// residual gap is narrower than the array case above: unlike an
+		// array body, a map body's real field is knowable, this function
+		// just does not yet derive it. None of the seven map-bodied
+		// Kubernetes bulk-delete operations is declared by any action in the
+		// catalog today, so this residual gap is not yet armed the way the
+		// array case was; closing it fully means threading
+		// additionalProperties' presence through resolvedNode and
+		// reproducing the "namespace" synthesis here, left for whichever
+		// wave first scaffolds one of those seven operations.
+		if resolved.Type != "" && resolved.Type != "object" {
+			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: top-level type %q is not an object; only an object body flattens into named fields", op.OperationID, resolved.Type)
+		}
+
 		propNames := make([]string, 0, len(resolved.Properties))
 		for name := range resolved.Properties {
 			propNames = append(propNames, name)

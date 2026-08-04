@@ -192,6 +192,19 @@ type auditResult struct {
 	StaleEntries   []allowListEntry
 	AllowListCount int
 	ActionsAudited int
+	// FieldsAudited is the total number of specification-side fields
+	// compared across every audited action — the sum of len(specShape.Fields)
+	// per action, not merely a count of actions. ActionsAudited alone cannot
+	// tell a reader "no drift because every field genuinely matched" apart
+	// from "no drift because there was nothing to compare": 8 of the 19
+	// actions this audit ran against at the time this field was added
+	// compare zero fields (a parameterless action such as registries.list),
+	// and "Actions audited: 19" reads identically whether the other 11
+	// actions compare 51 real fields between them or the comparison engine
+	// silently stopped comparing anything at all. Printed alongside
+	// ActionsAudited so a reader does not have to already know that
+	// distinction exists to ask for it.
+	FieldsAudited int
 }
 
 // HasDrift reports whether the build must fail: an un-excused gating finding,
@@ -244,6 +257,7 @@ func auditDrift(eeOps, ceOps map[string]specOperation, actions []toolutil.Action
 		}
 
 		result.ActionsAudited++
+		result.FieldsAudited += len(specShape.Fields)
 		for _, change := range specdiff.Compare(specShape, catalogShape) {
 			gating := isGating(change)
 			allowListed := false

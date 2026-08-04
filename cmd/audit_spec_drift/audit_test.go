@@ -377,6 +377,9 @@ func TestUnit_AuditDrift_IdenticalShapes_ReportsNoDrift(t *testing.T) {
 	if result.ActionsAudited != 1 {
 		t.Errorf("auditDrift() ActionsAudited = %d, want 1", result.ActionsAudited)
 	}
+	if result.FieldsAudited != 1 {
+		t.Errorf("auditDrift() FieldsAudited = %d, want 1: singleFieldSpec's operation has exactly one field", result.FieldsAudited)
+	}
 }
 
 // TestUnit_AuditDrift_DescriptionNeitherSideHas_ReportsNoDrift covers the
