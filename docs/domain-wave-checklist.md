@@ -37,6 +37,31 @@ stopping for. The failure the owner saw was invisible from this side: check-in
 kept succeeding and only the tunnel was broken, so a heartbeat check would have
 said everything was fine.
 
+When the estate runs on a remote Docker host (`make e2e-up-remote` and/or
+`make e2e-k8s-up-remote` — see README.md's "Running the estate on another
+machine"), check the remote host too — it is somebody's real machine, and the
+estate is a guest on it. The two legs record where they went separately
+(`test/e2e/.docker-host` for the compose legs, `test/e2e/.docker-host-kubernetes`
+for the Kubernetes leg), because the two `-remote` targets are independent
+opt-ins and can legitimately name different hosts; read whichever marker(s)
+actually exist rather than assuming one shared destination:
+
+```sh
+dest=$(cat test/e2e/.docker-host 2>/dev/null)
+k8s_dest=$(cat test/e2e/.docker-host-kubernetes 2>/dev/null)
+[ -n "$dest" ] && ssh "$dest" 'docker ps -a --filter name=portainer-mcp-e2e --format "{{.Names}}" | wc -l'
+[ -n "$k8s_dest" ] && ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}" | grep -c k3d-portainer-mcp-e2e || echo 0'
+[ -n "$dest" ] && ssh "$dest" 'test -f /tmp/portainer-mcp-e2e-cdi-nvidia.yaml && echo "LEFTOVER cdi spec" || echo clean'
+```
+
+After `make e2e-k8s-down && make e2e-down` every check that ran (a leg whose
+marker never existed means that leg never left this machine, and is skipped
+above rather than checked against nothing) must report nothing left behind. A
+non-zero container count means teardown did not reach the remote daemon it
+should have — most often because the marker file was removed by hand, or
+because the estate was brought up by something other than the matching
+`-remote` target.
+
 ## The model, in one paragraph
 
 A domain is scaffolded once, from the vendored specification, by
