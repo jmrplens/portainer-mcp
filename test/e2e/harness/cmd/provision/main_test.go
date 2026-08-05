@@ -3,10 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
 )
 
 // fakeBusinessEditionServer stands in for a real Business Edition Portainer
@@ -196,5 +201,176 @@ func TestRecoverStrandedLicence_Success_ConfirmsReleaseAndReturnsNil(t *testing.
 
 	if err := recoverStrandedLicence(); err != nil {
 		t.Fatalf("recoverStrandedLicence() error = %v, want nil", err)
+	}
+}
+
+// fakeKubernetesServer stands in for the Helm-deployed Kubernetes leg
+// runKubernetes talks to: TLS, since kubernetesClient verifies a real
+// certificate rather than skipping verification, with handlers for every
+// call runKubernetes makes when no licence is supplied (WaitReady, Provision,
+// CreateEndpoint). Its own certificate is written to a temporary CA file in
+// the shape k3d-up.sh leaves one in, since that is what kubernetesClient
+// reads.
+func fakeKubernetesServer(t *testing.T) (server *httptest.Server, caFile string) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Version": "2.44.0", "InstanceID": "k8s-instance"})
+	})
+	mux.HandleFunc("/api/users/admin/init", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"Id":1,"Username":"admin"}`))
+	})
+	mux.HandleFunc("/api/auth", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"jwt": "the-jwt"})
+	})
+	mux.HandleFunc("/api/users/1/tokens", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"rawAPIKey": "the-api-key"})
+	})
+	mux.HandleFunc("/api/endpoints", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]int{"Id": 42})
+	})
+	tlsServer := httptest.NewTLSServer(mux)
+	t.Cleanup(tlsServer.Close)
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw})
+	path := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(path, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+	return tlsServer, path
+}
+
+// TestRunKubernetes_PreservesAlreadyRecordedGPU is the regression proof for
+// the deliberate omission next to runKubernetes' LoadEstate call: this
+// invocation's own environment never carries gpuNameEnv or
+// gpuCDIDeviceEnv (k3d-up.sh does not export them — only up.sh does, for the
+// compose leg), so a version of runKubernetes that read them here and
+// assigned estate.GPU unconditionally, mirroring what run() does, would
+// silently overwrite an already-recorded GPU with a zero one on every
+// Kubernetes-leg run. The estate seeded here already carries a GPU, as it
+// would after a real compose leg ran first; the assertion is that it comes
+// back unchanged after runKubernetes has loaded, merged and saved twice.
+func TestRunKubernetes_PreservesAlreadyRecordedGPU(t *testing.T) {
+	server, caFile := fakeKubernetesServer(t)
+
+	estatePath := filepath.Join(t.TempDir(), "estate.json")
+	wantGPU := harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
+	seed := harness.Estate{
+		CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
+		GPU: wantGPU,
+	}
+	if err := seed.SaveTo(estatePath); err != nil {
+		t.Fatalf("seed estate: SaveTo() error = %v", err)
+	}
+
+	t.Setenv(k8sBaseURLEnv, server.URL)
+	t.Setenv(envK8sSetup, "the-setup-token")
+	t.Setenv(k8sCAFileEnv, caFile)
+	t.Setenv(licenceEnv, "")
+
+	if err := runKubernetes(estatePath); err != nil {
+		t.Fatalf("runKubernetes() error = %v, want nil", err)
+	}
+
+	got, err := harness.LoadEstate(estatePath)
+	if err != nil {
+		t.Fatalf("LoadEstate() error = %v", err)
+	}
+	if got.GPU != wantGPU {
+		t.Errorf("GPU after runKubernetes = %+v, want %+v unchanged", got.GPU, wantGPU)
+	}
+	if !got.HasGPU() {
+		t.Error("HasGPU() = false after runKubernetes ran against an estate that already recorded one")
+	}
+	// Sanity: the Kubernetes leg itself must have actually been provisioned,
+	// not merely have returned early without doing anything.
+	if !got.HasKubernetes() {
+		t.Error("HasKubernetes() = false: runKubernetes did not actually provision the leg this test exercises")
+	}
+}
+
+// fakeComposeServer stands in for the Community Edition server run()
+// provisions: plain HTTP (the compose legs are reached over
+// http://localhost, unlike the Kubernetes leg), answering WaitReady,
+// Provision and every CreateEndpoint call (docker, agent) generically.
+func fakeComposeServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/status", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"Version": "2.44.0", "InstanceID": "ce-instance"})
+	})
+	mux.HandleFunc("/api/users/admin/init", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"Id":1,"Username":"admin"}`))
+	})
+	mux.HandleFunc("/api/auth", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"jwt": "the-jwt"})
+	})
+	mux.HandleFunc("/api/users/1/tokens", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"rawAPIKey": "the-api-key"})
+	})
+	mux.HandleFunc("/api/endpoints", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]int{"Id": 1})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestUnit_Run_RecordsGPUFromEnvironment is the coverage Step 4 of the brief
+// itself leaves out: the brief's own test plan (estate_test.go's two new
+// tests) proves HasGPU and the JSON round trip, but neither one exercises
+// run() actually reading gpuNameEnv/gpuCDIDeviceEnv and attaching the result
+// to the estate before the final save — the one line this task adds to
+// main.go's compose path. Without this, a future edit that deleted that
+// assignment (or moved it above where estate is declared, or typo'd the env
+// var name) would pass every other test in this plan and still ship a
+// compose leg that never records a GPU.
+func TestUnit_Run_RecordsGPUFromEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		gpuName      string
+		gpuCDIDevice string
+		wantHasGPU   bool
+		wantGPU      harness.GPU
+	}{
+		{
+			name: "gpu present", gpuName: "NVIDIA GeForce RTX 4060", gpuCDIDevice: "nvidia.com/gpu=all",
+			wantHasGPU: true, wantGPU: harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"},
+		},
+		{
+			name: "no gpu on the docker host", gpuName: "", gpuCDIDevice: "",
+			wantHasGPU: false, wantGPU: harness.GPU{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := fakeComposeServer(t)
+
+			estatePath := filepath.Join(t.TempDir(), "estate.json")
+			edgeEnvPath := filepath.Join(t.TempDir(), ".edge.env")
+
+			t.Setenv(harness.EstateFileEnv, estatePath)
+			t.Setenv(harness.EdgeEnvFileEnv, edgeEnvPath)
+			t.Setenv(ceBaseURLEnv, server.URL)
+			t.Setenv(licenceEnv, "")
+			t.Setenv(gpuNameEnv, tc.gpuName)
+			t.Setenv(gpuCDIDeviceEnv, tc.gpuCDIDevice)
+
+			if err := run(false, false, false); err != nil {
+				t.Fatalf("run() error = %v, want nil", err)
+			}
+
+			got, err := harness.LoadEstate(estatePath)
+			if err != nil {
+				t.Fatalf("LoadEstate() error = %v", err)
+			}
+			if got.GPU != tc.wantGPU {
+				t.Errorf("GPU = %+v, want %+v", got.GPU, tc.wantGPU)
+			}
+			if got.HasGPU() != tc.wantHasGPU {
+				t.Errorf("HasGPU() = %v, want %v", got.HasGPU(), tc.wantHasGPU)
+			}
+		})
 	}
 }

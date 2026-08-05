@@ -114,6 +114,21 @@ func (s Server) WithEnvironment(name string, id int) Server {
 	return s
 }
 
+// GPU describes the graphics card the estate's Docker daemon can hand to a
+// container, as discovered on the Docker host by up.sh.
+//
+// CDIDevice, not a flag: the estate does not merely record that a GPU exists,
+// it records the exact device string a container has to ask for. That string
+// is a CDI identifier ("nvidia.com/gpu=all") rather than a --gpus request,
+// because the estate's dind is Alpine and the NVIDIA container toolkit a
+// nested --gpus needs is glibc-only. Recording the identifier the estate
+// actually offers keeps that decision in one place instead of duplicated into
+// every test that wants a GPU.
+type GPU struct {
+	Name      string `json:"name,omitempty"`
+	CDIDevice string `json:"cdi_device,omitempty"`
+}
+
 // Estate is everything a suite needs to reach a running world.
 //
 // It is serialised to a gitignored file because the thing that provisions the
@@ -123,6 +138,11 @@ type Estate struct {
 	CE         Server `json:"ce"`
 	EE         Server `json:"ee"`
 	Kubernetes Server `json:"kubernetes"`
+
+	// GPU is the graphics card the estate's Docker daemon can offer, empty on
+	// a host without one. Suites skip rather than fail in that case, exactly
+	// as they do without a Business Edition licence.
+	GPU GPU `json:"gpu,omitzero"`
 
 	// EdgeEndpointID, EdgeAgentID and EdgeKey identify the edge environment
 	// registered against EE, present only when a licence was available: edge
@@ -153,6 +173,13 @@ func (e Estate) HasBusinessEdition() bool {
 // HasKubernetes reports whether the k3d leg was provisioned.
 func (e Estate) HasKubernetes() bool {
 	return e.Kubernetes.BaseURL != "" && e.Kubernetes.Creds.APIKey != ""
+}
+
+// HasGPU reports whether the estate's Docker daemon can hand a real GPU to a
+// container. Both fields are required: a name without a device string names
+// hardware no container can request.
+func (e Estate) HasGPU() bool {
+	return e.GPU.Name != "" && e.GPU.CDIDevice != ""
 }
 
 // Leg is one provisioned server in an Estate, named the way this harness's

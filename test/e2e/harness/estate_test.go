@@ -374,3 +374,59 @@ func TestEstate_Legs_DerivesFromWhatWasActuallyProvisioned(t *testing.T) {
 		t.Errorf("Kubernetes leg carries the wrong Server: %+v", legs[2].Server)
 	}
 }
+
+// TestUnit_HasGPU_RequiresBothTheNameAndTheDevice mirrors HasBusinessEdition
+// and HasKubernetes, which each require every field a caller will go on to
+// use. A GPU recorded with a name but no CDI device cannot be requested by
+// any container, so reporting it as available would move the failure from a
+// clear skip to an obscure "device not found" mid-test.
+func TestUnit_HasGPU_RequiresBothTheNameAndTheDevice(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		gpu  GPU
+		want bool
+	}{
+		{"both present", GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}, true},
+		{"no device", GPU{Name: "NVIDIA GeForce RTX 4060"}, false},
+		{"no name", GPU{CDIDevice: "nvidia.com/gpu=all"}, false},
+		{"neither", GPU{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (Estate{GPU: tc.gpu}).HasGPU(); got != tc.want {
+				t.Errorf("HasGPU() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk is not ceremony: the
+// estate is written by one process and read by another, and a GPU field that
+// is populated in memory but absent from the JSON would make every GPU suite
+// skip on a machine that has one — silently, and looking exactly like a
+// machine that does not.
+//
+// The fixture carries a CE server alongside the GPU (the brief's own draft of
+// this test set only GPU, which LoadEstate rejects outright as "no Community
+// Edition server" — a real guard this test must not trip over on its way to
+// exercising the one it is actually about).
+func TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "estate.json")
+	want := GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, GPU: want}
+	if err := seed.SaveTo(path); err != nil {
+		t.Fatalf("SaveTo() error = %v", err)
+	}
+	got, err := LoadEstate(path)
+	if err != nil {
+		t.Fatalf("LoadEstate() error = %v", err)
+	}
+	if got.GPU != want {
+		t.Errorf("GPU after round trip = %+v, want %+v", got.GPU, want)
+	}
+	if !got.HasGPU() {
+		t.Error("HasGPU() = false after a round trip that carried both fields")
+	}
+}
