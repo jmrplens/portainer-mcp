@@ -224,6 +224,24 @@ cdi_device_id() {
     echo "nvidia.com/gpu=all"
 }
 
+# cdi_spec_path echoes the fixed location on the Docker host where the CDI
+# specification for the GPU is written. up.sh writes it there, mounts it into
+# the compose GPU override (PORTAINER_E2E_CDI_SPEC), and down.sh both looks
+# for it (to decide whether the GPU compose override was ever in play) and
+# removes it during teardown.
+#
+# It is the only file this estate ever writes on the Docker host outside the
+# compose project itself, so up.sh and down.sh disagreeing on its path — even
+# briefly, during a refactor — would leave a stale specification behind on
+# whatever host runs the estate, undetected by anything that only looks
+# inside the compose project. Before this function existed the same literal
+# was duplicated in both scripts (and, for documentation purposes only, in
+# docs/domain-wave-checklist.md's manual verification snippet, which cannot
+# source this file and must be kept matching by hand).
+cdi_spec_path() {
+    echo "/tmp/portainer-mcp-e2e-cdi-nvidia.yaml"
+}
+
 # detect_gpu_name echoes the model name of the Docker host's first NVIDIA GPU,
 # or nothing when it has none. Absence is never an error — a contributor
 # without a GPU must still be able to bring the estate up, with the GPU suites

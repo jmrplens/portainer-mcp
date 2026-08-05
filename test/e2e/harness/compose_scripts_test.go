@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -389,5 +390,120 @@ func TestUnit_DownScript_NoMarkerTearsDownLocally(t *testing.T) {
 	}
 	if strings.Contains(log, "DOCKER_HOST=ssh://") {
 		t.Errorf("down.sh's docker compose call targeted a remote daemon despite no recorded marker; log:\n%s", log)
+	}
+}
+
+// singleQuoted extracts the content of the first '...'-quoted substring in s,
+// failing the test if there is none. Both up.sh's spec-writing call and
+// down.sh's teardown rm -f pass the CDI specification's path to a remote
+// shell wrapped in single quotes (e.g. "cat > '$path'", "rm -f '$path'"), so
+// this is what actually pulls the literal path each one used out of a logged
+// ssh invocation.
+func singleQuoted(t *testing.T, s string) string {
+	t.Helper()
+	m := regexp.MustCompile(`'([^']+)'`).FindStringSubmatch(s)
+	if m == nil {
+		t.Fatalf("no single-quoted substring found in %q", s)
+	}
+	return m[1]
+}
+
+// TestUnit_GPUBranch_UpAndDownAgreeOnTheSameCDISpecPath is C3's own coverage
+// gap closed: no test in this file exercised up.sh's or down.sh's GPU branch
+// at all, so a drift among the three places that have to agree on the CDI
+// specification's path -- up.sh's own write, the PORTAINER_E2E_CDI_SPEC value
+// it hands to `docker compose`, and down.sh's own `rm -f` during teardown --
+// would leave every one of bash -n, shellcheck, go vet and every other test
+// in this file green.
+//
+// Run with PORTAINER_E2E_REMOTE=1 so all three of those pass through the
+// stub ssh (rather than a bare local `cat`/`rm`, which would leave nothing
+// in the log to assert on): the stub logs its own exact command line,
+// including the path quoted exactly as up.sh/down.sh pass it, making each
+// literal directly observable instead of merely inferred from exit codes.
+// The ssh and docker stubs used here report a GPU, a usable container
+// toolkit generating a minimal but shape-valid CDI document, and success on
+// every leftover/shape check (test -f, test -s, grep -q) up.sh and down.sh
+// run over ssh -- the "everything reports a GPU" shape this test needs, as
+// opposed to newComposeFakeRepo's own shared stubs, which deliberately
+// report no GPU at all for every OTHER test in this file.
+//
+// The expected path itself is read out of lib.sh's own cdi_spec_path
+// (sourceLib, from shelllib_test.go) rather than hard-coded a second time
+// here: this test's job is to prove the three CALL SITES agree with each
+// other and with that one shared definition, not to duplicate its value as
+// a fourth place that could itself drift.
+func TestUnit_GPUBranch_UpAndDownAgreeOnTheSameCDISpecPath(t *testing.T) {
+	repo := newComposeFakeRepo(t, "PORTAINER_E2E_DOCKER_SSH="+fakeRemoteHost+"\n")
+
+	if err := os.WriteFile(filepath.Join(repo.binDir, "ssh"), []byte(`#!/usr/bin/env bash
+echo "SSH_CALL: $*" >> "$LOGFILE"
+case "$*" in
+    *"nvidia-smi"*)
+        echo "NVIDIA GeForce RTX FAKE"
+        exit 0
+        ;;
+    *"nvidia-ctk"*)
+        printf 'cdiVersion: 0.7.0\nkind: nvidia.com/gpu\ndevices:\n    - name: all\n'
+        exit 0
+        ;;
+    # write_to_docker_host's remote command ("cat > 'path'") is the one place
+    # this stub is actually fed piped stdin (up.sh's own
+    # "gpu_cdi_spec | write_to_docker_host" pipe) -- draining it here avoids
+    # the writer taking a SIGPIPE from a reader that exited without ever
+    # reading, which is exactly what happened before this branch existed.
+    *"cat >"*)
+        cat >/dev/null
+        exit 0
+        ;;
+esac
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("writing gpu-reporting ssh stub: %v", err)
+	}
+	// The shared docker stub only ever logs DOCKER_HOST; PORTAINER_E2E_CDI_SPEC
+	// is exactly what up.sh's and down.sh's own `docker compose` calls carry
+	// the CDI specification's path through, so this replacement surfaces it
+	// too.
+	if err := os.WriteFile(filepath.Join(repo.binDir, "docker"), []byte(`#!/usr/bin/env bash
+echo "DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>} | PORTAINER_E2E_CDI_SPEC=${PORTAINER_E2E_CDI_SPEC:-<unset>}" >> "$LOGFILE"
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("writing cdi-spec-surfacing docker stub: %v", err)
+	}
+
+	upOutput, upLog, upCode := repo.run(t, "up.sh", "PORTAINER_E2E_REMOTE=1")
+	if upCode != 0 {
+		t.Fatalf("up.sh (gpu present) exited %d; output:\n%s\nlog:\n%s", upCode, upOutput, upLog)
+	}
+	if !strings.Contains(upOutput, "gpu detected on the docker host") {
+		t.Fatalf("up.sh did not report a detected gpu; output:\n%s", upOutput)
+	}
+
+	downOutput, downLog, downCode := repo.run(t, "down.sh")
+	if downCode != 0 {
+		t.Fatalf("down.sh (gpu present) exited %d; output:\n%s\nlog:\n%s", downCode, downOutput, downLog)
+	}
+
+	wantPath := strings.TrimRight(sourceLib(t, "cdi_spec_path"), "\n")
+
+	writeLine, _ := sshLineContaining(t, upLog, "cat >")
+	writtenPath := singleQuoted(t, writeLine)
+	if writtenPath != wantPath {
+		t.Errorf("up.sh's spec-writing call used path %q, want %q (lib.sh's cdi_spec_path); ssh invocation:\n%s", writtenPath, wantPath, writeLine)
+	}
+
+	if !strings.Contains(upLog, "PORTAINER_E2E_CDI_SPEC="+wantPath) {
+		t.Errorf("up.sh's compose call did not carry PORTAINER_E2E_CDI_SPEC=%s; log:\n%s", wantPath, upLog)
+	}
+
+	rmLine, _ := sshLineContaining(t, downLog, "rm -f")
+	removedPath := singleQuoted(t, rmLine)
+	if removedPath != wantPath {
+		t.Errorf("down.sh's teardown rm -f used path %q, want %q (lib.sh's cdi_spec_path); ssh invocation:\n%s", removedPath, wantPath, rmLine)
+	}
+
+	if !strings.Contains(downLog, "-f docker-compose.gpu.yml") {
+		t.Errorf("down.sh's compose invocation did not include -f docker-compose.gpu.yml; log:\n%s", downLog)
 	}
 }

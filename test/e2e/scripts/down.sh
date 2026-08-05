@@ -25,8 +25,9 @@ fi
 
 # The GPU override interpolates PORTAINER_E2E_CDI_SPEC and fails without it,
 # so teardown names the same file only when it can supply the variable. The
-# path is fixed and known, so it does not have to survive from up.sh.
-cdi_spec_path="/tmp/portainer-mcp-e2e-cdi-nvidia.yaml"
+# path is fixed and known (cdi_spec_path in lib.sh), so it does not have to
+# survive from up.sh.
+cdi_spec_path=$(cdi_spec_path)
 compose_files=(-f docker-compose.yml)
 if on_docker_host "$ssh_dest" "test -f '$cdi_spec_path'" 2>/dev/null; then
     compose_files+=(-f docker-compose.gpu.yml)

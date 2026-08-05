@@ -72,6 +72,8 @@ fresh read of the now-deleted marker files:
 ```sh
 [ -n "$dest" ] && ssh "$dest" 'docker ps -a --filter name=portainer-mcp-e2e --format "{{.Names}}" | wc -l'
 [ -n "$k8s_dest" ] && ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}" | { grep -c k3d-portainer-mcp-e2e || true; }'
+# The literal path below must match cdi_spec_path() in test/e2e/scripts/lib.sh
+# exactly -- this checklist is a manual runbook and cannot source that file.
 [ -n "$dest" ] && ssh "$dest" 'test -f /tmp/portainer-mcp-e2e-cdi-nvidia.yaml && echo "LEFTOVER cdi spec" || echo clean'
 ```
 

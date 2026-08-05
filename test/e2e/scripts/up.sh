@@ -51,7 +51,7 @@ gpu_name=$(detect_gpu_name "$ssh_dest")
 gpu_cdi_device=""
 cdi_spec_path=""
 if [[ -n "$gpu_name" ]]; then
-    cdi_spec_path="/tmp/portainer-mcp-e2e-cdi-nvidia.yaml"
+    cdi_spec_path=$(cdi_spec_path)
     # `test -s` is not enough on its own: a generator that dies part-way
     # through leaves a non-empty file that passes it. Check the document is
     # actually shaped like a CDI specification — both keys, at the top level —
