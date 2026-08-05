@@ -47,6 +47,22 @@ spec:
               value: "all"
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "all"
+            # CONTAINER_DRIVER_ROOT alone is not enough for the plugin to
+            # load NVML: it still resolves shared libraries through the
+            # dynamic linker's own search path, which a bind-mounted root at
+            # a NON-standard mount point (/driver-root, not /) does not
+            # populate. Without this the plugin's own pods crash-loop with
+            # "error starting plugins: unable to validate flags: CDI
+            # --device-list-strategy options are only supported on
+            # NVML-based systems" -- a message that names the CDI flag, not
+            # the missing library path, so nothing about it points here.
+            # Measured directly, live, against a real RTX 4060 node: both
+            # pods (this DaemonSet's server AND agent replicas -- a k3d
+            # cluster this task creates with --agents 1 has two) went
+            # Ready and advertised nvidia.com/gpu: 1 only once this variable
+            # and the host-libs volume/mount below were both added.
+            - name: LD_LIBRARY_PATH
+              value: "/host-libs"
           securityContext:
             privileged: true
           volumeMounts:
@@ -59,6 +75,12 @@ spec:
               readOnly: true
             - name: cdi
               mountPath: /etc/cdi
+            # Paired with LD_LIBRARY_PATH above: the actual .so files NVML
+            # needs to load, read-only because the plugin only ever reads
+            # them.
+            - name: host-libs
+              mountPath: /host-libs
+              readOnly: true
       volumes:
         - name: device-plugin
           hostPath:
@@ -72,3 +94,6 @@ spec:
         - name: cdi
           hostPath:
             path: /etc/cdi
+        - name: host-libs
+          hostPath:
+            path: /usr/lib/x86_64-linux-gnu

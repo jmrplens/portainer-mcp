@@ -837,6 +837,33 @@ func TestIsRetryableFixtureError(t *testing.T) {
 	}
 }
 
+// kubectlRunError formats an error from running kubectl for
+// kubernetesNodeCapacity's own diagnostic, surfacing the process's stderr
+// when the failure was a non-zero exit.
+//
+// *exec.ExitError's own Error() method — and therefore a bare "%v" — reports
+// only "exit status 1": it never includes anything the process itself wrote
+// to explain why. exec.Cmd.Output() already captures that text into
+// ExitError.Stderr whenever the caller left Cmd.Stderr nil (kubernetesNodeCapacity's
+// own case, via a bare .Output() call), so the information was always
+// present, just discarded at the point the message was built. A wrong
+// E2E_K3D_CLUSTER or a stale/deleted context both fail this exact way, and
+// without this, both looked identical from the test output: "reading node
+// capacity through kubectl: exit status 1", with no way to tell "no such
+// context" apart from "no such cluster" apart from anything else kubectl
+// might have said.
+//
+// Factored out as a pure function (no *testing.T, no subprocess of its own)
+// specifically so it can be pinned by TestKubectlRunError_SurfacesStderr
+// without needing kubectl, a context, or a cluster at all.
+func kubectlRunError(action string, err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return fmt.Sprintf("%s: %v: %s", action, err, exitErr.Stderr)
+	}
+	return fmt.Sprintf("%s: %v", action, err)
+}
+
 // kubernetesNodeCapacity returns the first node's capacity map, read through
 // kubectl against the context k3d-up.sh created. The suite has no Kubernetes
 // client library and adding one for a single map would be a large dependency
@@ -851,11 +878,37 @@ func kubernetesNodeCapacity(ctx context.Context, t *testing.T) map[string]string
 	out, err := exec.CommandContext(ctx, "kubectl", "--context", "k3d-"+cluster,
 		"get", "node", "-o", "jsonpath={.items[0].status.capacity}").Output()
 	if err != nil {
-		t.Fatalf("reading node capacity through kubectl: %v", err)
+		t.Fatal(kubectlRunError("reading node capacity through kubectl", err))
 	}
 	var capacity map[string]string
 	if err := json.Unmarshal(out, &capacity); err != nil {
 		t.Fatalf("decoding node capacity %q: %v", out, err)
 	}
 	return capacity
+}
+
+// TestKubectlRunError_SurfacesStderr proves the stderr fix directly, with no
+// kubectl, no context, and no cluster involved: a real subprocess (any shell
+// exits non-zero after writing to stderr) reproduces exec.Cmd.Output()'s own
+// failure shape — an *exec.ExitError whose bare Error() text is only "exit
+// status 1", with the actually-useful line sitting unread in its Stderr
+// field. This is the exact gap a live review found: kubernetesNodeCapacity's
+// original "%v"-only message would report nothing beyond "exit status 1" for
+// a wrong E2E_K3D_CLUSTER or a stale context, indistinguishable from any
+// other kubectl failure.
+func TestKubectlRunError_SurfacesStderr(t *testing.T) {
+	t.Parallel()
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "echo custom-diagnostic-text >&2; exit 1")
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("test fixture command unexpectedly succeeded")
+	}
+	got := kubectlRunError("reading node capacity through kubectl", err)
+	if !strings.Contains(got, "custom-diagnostic-text") {
+		t.Errorf("kubectlRunError(...) = %q, want it to contain the process's own stderr %q",
+			got, "custom-diagnostic-text")
+	}
+	if !strings.Contains(got, "exit status 1") {
+		t.Errorf("kubectlRunError(...) = %q, want it to still contain the underlying error too", got)
+	}
 }
