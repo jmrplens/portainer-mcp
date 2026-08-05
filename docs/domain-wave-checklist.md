@@ -70,17 +70,39 @@ Then check the CAPTURED destinations — `$dest`/`$k8s_dest` from above, not a
 fresh read of the now-deleted marker files:
 
 ```sh
-[ -n "$dest" ] && ssh "$dest" 'docker ps -a --filter name=portainer-mcp-e2e --format "{{.Names}}" | wc -l'
-[ -n "$k8s_dest" ] && ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}" | { grep -c k3d-portainer-mcp-e2e || true; }'
+if [ -n "$dest" ]; then
+    if names=$(ssh "$dest" 'docker ps -a --filter name=portainer-mcp-e2e --format "{{.Names}}"'); then
+        echo "compose leg ($dest): $(printf '%s' "$names" | grep -c . || true) container(s) left"
+    else
+        echo "COULD NOT CHECK compose leg ($dest): ssh or docker failed -- this is NOT the same as clean, check by hand" >&2
+    fi
+fi
+if [ -n "$k8s_dest" ]; then
+    if names=$(ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}"'); then
+        echo "kubernetes leg ($k8s_dest): $(printf '%s' "$names" | grep -c k3d-portainer-mcp-e2e || true) container(s) left"
+    else
+        echo "COULD NOT CHECK kubernetes leg ($k8s_dest): ssh or docker failed -- this is NOT the same as clean, check by hand" >&2
+    fi
+fi
 # The literal path below must match cdi_spec_path() in test/e2e/scripts/lib.sh
 # exactly -- this checklist is a manual runbook and cannot source that file.
 [ -n "$dest" ] && ssh "$dest" 'test -f /tmp/portainer-mcp-e2e-cdi-nvidia.yaml && echo "LEFTOVER cdi spec" || echo clean'
 ```
 
-(The middle check uses `|| true`, not `|| echo 0`: `grep -c` already prints
-`0` on its own when nothing matches, and it exits non-zero for that same
-"nothing matched" case — `|| echo 0` fires on that non-zero exit and prints a
-second, redundant `0` line.)
+(Each leg's `docker ps` runs alone over ssh, with nothing piped into it
+remotely: piping straight into `wc -l` or `grep -c` on the remote side, as an
+earlier version of this checklist did, means a failing `ssh` or a failing
+remote `docker` (wrong context, daemon not running, permission denied) leaves
+the pipe's stdin empty and `wc -l`/`grep -c` still print a reassuring `0` —
+indistinguishable from "checked, genuinely nothing left". Checking the `ssh`
+call's own exit status first, before ever counting anything, is what makes
+"could not look" print as a loud, separate line instead of a `0` that reads
+as clean. The two `grep -c ... || true` calls that count locally, once the
+remote call is already known to have succeeded, use `|| true` for the same
+reason the previous version of this checklist noted: `grep -c` already prints
+`0` on its own when nothing matches, and only exits non-zero for that same
+case, so the `|| true` exists purely to keep that non-zero status from
+tripping a `set -e` shell that runs this line — never to print a second `0`.)
 
 Every check that ran (a leg whose marker never existed means that leg never
 left this machine, and is skipped above rather than checked against nothing)
