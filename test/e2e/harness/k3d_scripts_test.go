@@ -347,6 +347,52 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 	}
 }
 
+// TestUnit_K3DUpScript_ExitsBeforeProvisioningWhenTheForwardIsNeverConfirmed
+// pins the FAILURE branch of the tunnel_add_forward call in k3d-up.sh
+// (`if ! tunnel_add_forward ...; then echo ...; exit 1; fi`), which none of
+// this file's other tests exercise — they all supply a stand-in listener
+// that DOES appear, so the poll always succeeds and this branch is never
+// taken.
+//
+// Worth pinning specifically because an unconfirmed forward does not fail
+// loudly on its own: 127.0.0.1:<nodeport> is then either dead (an obviously
+// broken URL the provisioner would fail against immediately, loudly) or
+// held by something foreign (a URL that LOOKS fine and routes the
+// provisioner somewhere that is not Portainer) — the second case is
+// exactly the "routes elsewhere" outcome the last three rounds of this
+// task exist to eliminate, and it is indistinguishable from success unless
+// the script actually stops before ever handing that URL to the
+// provisioner.
+//
+// Both halves below are asserted because either alone is insufficient: a
+// non-zero exit code alone would not catch a script that ran the
+// provisioner FIRST and failed afterwards (still a live URL handed to a
+// real process, just with an exit code appended at the end); the absence
+// of the provisioner call alone would not catch a script that swallowed
+// the failure and exited 0 anyway.
+//
+// No startListenerAfterForwardRequested call here — that omission is the
+// whole point: nothing ever answers this port, so tunnel_add_forward's
+// poll must time out. PORTAINER_E2E_TUNNEL_FORWARD_RETRIES is lowered so
+// the deliberately-unconfirmed poll does not cost the real ~4s budget.
+func TestUnit_K3DUpScript_ExitsBeforeProvisioningWhenTheForwardIsNeverConfirmed(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+		"PORTAINER_E2E_TUNNEL_FORWARD_RETRIES=2",
+	)
+	if code == 0 {
+		t.Fatalf("k3d-up.sh exited 0 despite the NodePort forward never being confirmed; output:\n%s\nlog:\n%s", output, log)
+	}
+	if strings.Contains(log, "GO_CALL") {
+		t.Errorf("k3d-up.sh invoked the provisioner despite the NodePort forward never being confirmed; log:\n%s", log)
+	}
+}
+
 // TestUnit_K3DDownScript_ClearsItsOwnMarkerAndLeavesTheComposeMarkerAlone
 // pins the teardown half of the marker split: with BOTH markers present and
 // DIFFERENT, tearing down the Kubernetes leg must read and clear only its
