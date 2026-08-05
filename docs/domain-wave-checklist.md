@@ -43,24 +43,49 @@ machine"), check the remote host too — it is somebody's real machine, and the
 estate is a guest on it. The two legs record where they went separately
 (`test/e2e/.docker-host` for the compose legs, `test/e2e/.docker-host-kubernetes`
 for the Kubernetes leg), because the two `-remote` targets are independent
-opt-ins and can legitimately name different hosts; read whichever marker(s)
-actually exist rather than assuming one shared destination:
+opt-ins and can legitimately name different hosts.
+
+**Capture both markers BEFORE tearing anything down, in the same shell
+session you will run the `make` commands in.** Both `down.sh` and
+`k3d-down.sh` delete their own marker as part of a normal teardown; reading
+them only *afterward* finds nothing for either leg, so every check below
+silently skips — printing nothing rather than failing — even when a remote
+estate genuinely never came down. That is not hypothetical: an earlier
+version of this checklist did exactly that, read the markers after `make
+e2e-k8s-down && make e2e-down`, and its own "must report nothing left behind"
+line held vacuously, by construction, on every run:
 
 ```sh
 dest=$(cat test/e2e/.docker-host 2>/dev/null)
 k8s_dest=$(cat test/e2e/.docker-host-kubernetes 2>/dev/null)
+```
+
+Then tear down as usual:
+
+```sh
+make e2e-k8s-down && make e2e-down
+```
+
+Then check the CAPTURED destinations — `$dest`/`$k8s_dest` from above, not a
+fresh read of the now-deleted marker files:
+
+```sh
 [ -n "$dest" ] && ssh "$dest" 'docker ps -a --filter name=portainer-mcp-e2e --format "{{.Names}}" | wc -l'
-[ -n "$k8s_dest" ] && ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}" | grep -c k3d-portainer-mcp-e2e || echo 0'
+[ -n "$k8s_dest" ] && ssh "$k8s_dest" 'docker ps -a --format "{{.Names}}" | { grep -c k3d-portainer-mcp-e2e || true; }'
 [ -n "$dest" ] && ssh "$dest" 'test -f /tmp/portainer-mcp-e2e-cdi-nvidia.yaml && echo "LEFTOVER cdi spec" || echo clean'
 ```
 
-After `make e2e-k8s-down && make e2e-down` every check that ran (a leg whose
-marker never existed means that leg never left this machine, and is skipped
-above rather than checked against nothing) must report nothing left behind. A
-non-zero container count means teardown did not reach the remote daemon it
-should have — most often because the marker file was removed by hand, or
-because the estate was brought up by something other than the matching
-`-remote` target.
+(The middle check uses `|| true`, not `|| echo 0`: `grep -c` already prints
+`0` on its own when nothing matches, and it exits non-zero for that same
+"nothing matched" case — `|| echo 0` fires on that non-zero exit and prints a
+second, redundant `0` line.)
+
+Every check that ran (a leg whose marker never existed means that leg never
+left this machine, and is skipped above rather than checked against nothing)
+must report nothing left behind. A non-zero container count means teardown
+did not reach the remote daemon it should have — most often because the
+marker file was removed by hand before teardown ran, or because the estate
+was brought up by something other than the matching `-remote` target.
 
 ## The model, in one paragraph
 
