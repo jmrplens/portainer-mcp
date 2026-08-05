@@ -162,3 +162,40 @@ strip_cdi_hooks() {
         { print }
     '
 }
+
+# cdi_device_id echoes the CDI device the estate asks for. "all" rather than a
+# specific index because the estate does not know how many GPUs the Docker
+# host has and does not need to: one device request that means "whatever is
+# there" is what a test asserting the GPU is reachable actually wants.
+cdi_device_id() {
+    echo "nvidia.com/gpu=all"
+}
+
+# detect_gpu_name echoes the model name of the Docker host's first NVIDIA GPU,
+# or nothing when it has none. Absence is never an error — a contributor
+# without a GPU must still be able to bring the estate up, with the GPU suites
+# skipping the way they skip without a Business Edition licence.
+detect_gpu_name() {
+    local dest="$1"
+    on_docker_host "$dest" \
+        'command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1' \
+        2>/dev/null || true
+}
+
+# gpu_cdi_spec echoes a hookless CDI specification for the Docker host's GPUs,
+# or nothing when nvidia-ctk is unavailable. See strip_cdi_hooks for why the
+# hooks cannot survive: the estate's dind is Alpine and every generated hook
+# invokes a glibc binary.
+#
+# The on_docker_host call is grouped with its own "|| true" before the pipe to
+# strip_cdi_hooks, not appended after it: "A || true | strip_cdi_hooks" would
+# parse as "A || (true | strip_cdi_hooks)", so on a successful A the whole
+# right-hand side — strip_cdi_hooks included — would never run and the hooks
+# would reach the caller unstripped. Grouping keeps "absence is never an
+# error" true without ever bypassing the filter this function exists to run.
+gpu_cdi_spec() {
+    local dest="$1"
+    { on_docker_host "$dest" \
+        'command -v nvidia-ctk >/dev/null 2>&1 && nvidia-ctk cdi generate --format=yaml 2>/dev/null' \
+        2>/dev/null || true; } | strip_cdi_hooks
+}

@@ -245,3 +245,138 @@ devices:
 		}
 	}
 }
+
+// TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi proves the
+// GPU-less path yields empty rather than an error: a developer on a laptop
+// must still be able to bring the estate up, with the GPU suites skipping.
+func TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// A PATH containing only this empty directory guarantees nvidia-smi is
+	// absent regardless of what the machine running the test actually has.
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+` detect_gpu_name ""`), "\n")
+	if got != "" {
+		t.Errorf("detect_gpu_name on a host without nvidia-smi = %q, want empty", got)
+	}
+}
+
+// TestUnit_DetectGPUName_ReportsTheFirstGPUsName stubs nvidia-smi with the
+// exact output shape the real one produces for
+// --query-gpu=name --format=csv,noheader, including the trailing newline and
+// the multi-GPU case: a two-GPU host must yield one name, not both joined.
+func TestUnit_DetectGPUName_ReportsTheFirstGPUsName(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nvidia-smi")
+	body := "#!/usr/bin/env bash\nprintf 'NVIDIA GeForce RTX 4060\\nNVIDIA GeForce RTX 3090\\n'\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing nvidia-smi stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH detect_gpu_name ""`), "\n")
+	if got != "NVIDIA GeForce RTX 4060" {
+		t.Errorf("detect_gpu_name = %q, want %q", got, "NVIDIA GeForce RTX 4060")
+	}
+}
+
+// TestUnit_ComposeGPUOverride_GivesTheDindTheGPUAndTheStrippedSpec reads the
+// override file as text rather than parsing YAML: the point is that these
+// four decisions are present and reviewable, and a YAML round-trip would not
+// make the assertion stronger.
+func TestUnit_ComposeGPUOverride_GivesTheDindTheGPUAndTheStrippedSpec(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../docker-compose.gpu.yml")
+	if err != nil {
+		t.Fatalf("reading the GPU override: %v", err)
+	}
+	for _, want := range []string{
+		"gpus: all",
+		"/etc/cdi/nvidia.yaml:ro",
+		"PORTAINER_E2E_CDI_SPEC",
+		"docker:",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("docker-compose.gpu.yml is missing %q", want)
+		}
+	}
+}
+
+// TestUnit_CDIDeviceID_ReturnsTheConstantNvidiaGPUAllDevice pins the literal
+// value: the compose override and up.sh both need the exact same string, and
+// a typo here would silently make the estate ask the wrong daemon for a
+// device that does not exist.
+func TestUnit_CDIDeviceID_ReturnsTheConstantNvidiaGPUAllDevice(t *testing.T) {
+	t.Parallel()
+	got := strings.TrimRight(sourceLib(t, `cdi_device_id`), "\n")
+	if got != "nvidia.com/gpu=all" {
+		t.Errorf("cdi_device_id = %q, want %q", got, "nvidia.com/gpu=all")
+	}
+}
+
+// TestUnit_GPUCDISpec_ReportsNothingWhenTheHostHasNoNvidiaCtk mirrors
+// detect_gpu_name's GPU-less path: a host without the NVIDIA container
+// toolkit must yield empty, not an error, so bringing the estate up without a
+// GPU still works.
+//
+// gpu_cdi_spec pipes unconditionally through strip_cdi_hooks, even on this
+// empty path, so a PATH containing nothing at all (the trick
+// TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi uses) would
+// make awk itself unresolvable and fail the script for the wrong reason.
+// Symlinking only awk into an otherwise empty directory keeps that guarantee
+// — nvidia-ctk is absent regardless of what the machine running the test
+// actually has — without breaking the pipe.
+func TestUnit_GPUCDISpec_ReportsNothingWhenTheHostHasNoNvidiaCtk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	awkPath, err := exec.LookPath("awk")
+	if err != nil {
+		t.Fatalf("locating awk on this machine: %v", err)
+	}
+	if err := os.Symlink(awkPath, filepath.Join(dir, "awk")); err != nil {
+		t.Fatalf("linking awk into the test PATH: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+` gpu_cdi_spec ""`), "\n")
+	if got != "" {
+		t.Errorf("gpu_cdi_spec on a host without nvidia-ctk = %q, want empty", got)
+	}
+}
+
+// TestUnit_GPUCDISpec_StripsTheHooksFromWhatNvidiaCtkGenerates stubs
+// nvidia-ctk with the same hook-bearing shape used by
+// TestUnit_StripCDIHooks_RemovesHookBlocksAndKeepsEverythingElse. Without this
+// test, gpu_cdi_spec piping through strip_cdi_hooks is not exercised anywhere
+// — TestUnit_ComposeGPUOverride only checks the compose file's text, and
+// TestUnit_StripCDIHooks only checks the filter in isolation, so a version of
+// gpu_cdi_spec that dropped the pipe entirely would have left every other
+// test in this file green.
+func TestUnit_GPUCDISpec_StripsTheHooksFromWhatNvidiaCtkGenerates(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nvidia-ctk")
+	body := "#!/usr/bin/env bash\ncat <<'CDIEOF'\n" +
+		"cdiVersion: 0.7.0\n" +
+		"kind: nvidia.com/gpu\n" +
+		"containerEdits:\n" +
+		"    deviceNodes:\n" +
+		"        - path: /dev/nvidiactl\n" +
+		"    hooks:\n" +
+		"        - hookName: createContainer\n" +
+		"          path: /usr/bin/nvidia-cdi-hook\n" +
+		"          args:\n" +
+		"            - nvidia-cdi-hook\n" +
+		"            - update-ldcache\n" +
+		"devices:\n" +
+		"    - name: all\n" +
+		"CDIEOF\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing nvidia-ctk stub: %v", err)
+	}
+	got := sourceLib(t, `PATH=`+dir+`:$PATH gpu_cdi_spec ""`)
+	if strings.Contains(got, "hookName") || strings.Contains(got, "nvidia-cdi-hook") {
+		t.Errorf("gpu_cdi_spec left hook content behind:\n%s", got)
+	}
+	for _, want := range []string{"cdiVersion: 0.7.0", "/dev/nvidiactl", "name: all"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("gpu_cdi_spec dropped %q; result:\n%s", want, got)
+		}
+	}
+}
