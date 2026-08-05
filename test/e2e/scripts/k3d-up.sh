@@ -149,20 +149,47 @@ fi
 # provision -kubernetes` below it) run on a DIFFERENT machine, which has no
 # route onto the Docker host's bridge network at all — the same reason
 # up.sh's estate is reached through a tunnel rather than a container address.
-# Task 7 only tunnels the k3s API port (kubectl's own traffic); it does not
-# extend that tunnel to server_ip:nodeport, because the port is discovered
-# dynamically, here, after the Service exists, and tunnel_up's current
-# forwarding shape (`-L port:127.0.0.1:port`) can only mirror a port to
-# itself on the remote loopback, not forward to an arbitrary container
-# address. Until that is extended, provisioning the Kubernetes leg against a
-# remote Docker host is expected to fail right here with a connection
-# timeout/refused against server_ip, and that failure is the signal this gap
-# needs closing, not a sign the estate is broken. See task-7-report.md.
+# k8s_url, built below, is what actually gets handed to the provisioner;
+# server_ip:nodeport survives here only because it is also what the forward
+# just below has to name as ITS remote-side target.
 server_ip=$(docker inspect "k3d-$cluster-server-0" \
             --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}")
 if [[ -z "$server_ip" ]]; then
     echo "could not resolve k3d-$cluster-server-0's address on $network" >&2
     exit 1
+fi
+
+# Locally, server_ip:nodeport is exactly what the provisioner (running on
+# this same machine as the Docker daemon) reaches directly, unchanged from
+# before this task. Remotely, this process is NOT the Docker host, so it has
+# no route onto server_ip at all -- the same reason the compose leg's ports
+# are tunnelled rather than dialled by container address. The API port's
+# tunnel (opened above, before Helm ran) cannot carry this forward too: the
+# NodePort is not known until the Service above exists, which is after that
+# tunnel already had to be live for kubectl. tunnel_add_forward asks the
+# SAME already-open master for one more forward instead of closing and
+# reopening it (which would have to remember to re-request the API port
+# forward too, or silently drop it) -- see its own comment in remote.sh for
+# why its success is polled rather than trusted from ssh's exit code alone.
+#
+# The forwarded local port is the NodePort's own number: nothing outside
+# this script's own next few lines refers to it, so there is no reason to
+# invent a second one, and k8s NodePorts (30000-32767 by default) do not
+# collide with this leg's other fixed ports (16443, 19000, 19001).
+#
+# TLS verification still holds after the address changes: ClientWithCA
+# (test/e2e/harness/tls.go) sets the handshake's ServerName from the pinned
+# certificate's own SAN, not from whatever address was dialled -- the same
+# property `kubectl config set-cluster --server https://127.0.0.1:...`
+# already relies on above. Reaching the same server through 127.0.0.1
+# instead of server_ip changes nothing it checks.
+k8s_url="https://${server_ip}:${nodeport}"
+if [[ -n "$ssh_dest" ]]; then
+    if ! tunnel_add_forward "$ssh_dest" "$nodeport" "$server_ip" "$nodeport"; then
+        echo "could not forward the kubernetes leg's NodePort: the provisioner would not be able to reach it" >&2
+        exit 1
+    fi
+    k8s_url="https://127.0.0.1:${nodeport}"
 fi
 
 # The provisioner verifies this server's certificate rather than skipping
@@ -176,7 +203,7 @@ if ! fetch_k8s_ca "k3d-$cluster" "$namespace" > "$ca_file" || ! grep -q "BEGIN C
 fi
 
 PORTAINER_E2E_ESTATE="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}" \
-PORTAINER_E2E_K8S_URL="https://${server_ip}:${nodeport}" \
+PORTAINER_E2E_K8S_URL="$k8s_url" \
 PORTAINER_E2E_K8S_SETUP_TOKEN="$token" \
 PORTAINER_E2E_K8S_CA_FILE="$ca_file" \
 PORTAINER_E2E_LICENCE="$licence" \

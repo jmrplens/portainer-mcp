@@ -1,6 +1,8 @@
 package harness
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,5 +157,126 @@ func TestUnit_TunnelDown_AsksTheMasterToExit(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("tunnel_down did not pass %q to ssh; invocation was:\n%s", want, got)
 		}
+	}
+}
+
+// sourceRemoteCapturingResult is sourceRemote's sibling for
+// tunnel_add_forward, whose success or failure IS the behaviour under test —
+// unlike tunnel_up/tunnel_down, which never fail against a stub ssh that
+// always exits 0. sourceRemote's own script would abort the whole invocation
+// under set -e the moment a called function returns non-zero, which is
+// wrong here: the calling script instead reports the result explicitly
+// (`if fn; then echo RESULT:success; else echo RESULT:failure; fi`, exempt
+// from set -e the same way lib.sh's own capture-then-emit functions are),
+// and this helper returns that stdout alongside the ssh log and the
+// script's own stderr (where tunnel_add_forward's diagnostic goes).
+func sourceRemoteCapturingResult(t *testing.T, script string) (log, sock, stdout, stderrOut string) {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "ssh.log")
+	stub := filepath.Join(dir, "ssh")
+	body := "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 0\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing ssh stub: %v", err)
+	}
+	remote, err := filepath.Abs("../scripts/remote.sh")
+	if err != nil {
+		t.Fatalf("resolving remote.sh: %v", err)
+	}
+	sock = filepath.Join(dir, "t.sock")
+	full := "export PATH=" + dir + ":$PATH\nexport PORTAINER_E2E_TUNNEL_SOCK=" + sock + "\nsource " + remote + "\n" + script
+	cmd := exec.Command("bash", "-euo", "pipefail", "-c", full)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("bash script failed: %v\nstderr:\n%s", err, stderr.String())
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("reading ssh log: %v", readErr)
+	}
+	return string(data), sock, string(out), stderr.String()
+}
+
+func TestUnit_TunnelAddForward_NoDestinationInvokesNoSSH(t *testing.T) {
+	t.Parallel()
+	log, _, out, _ := sourceRemoteCapturingResult(t,
+		`if tunnel_add_forward "" 19999 1.2.3.4 5555; then echo RESULT:success; else echo RESULT:failure; fi`)
+	if log != "" {
+		t.Errorf("tunnel_add_forward with no destination invoked ssh: %q", log)
+	}
+	if !strings.Contains(out, "RESULT:success") {
+		t.Errorf("tunnel_add_forward with no destination did not report success; stdout was %q", out)
+	}
+}
+
+// TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive proves both
+// halves of the contract: the right ssh invocation is made (-O forward
+// against the SAME control socket tunnel_up would have bound, requesting a
+// forward to an arbitrary remote host:port, not the destination's own
+// loopback), and the function actually confirms liveness rather than
+// trusting ssh's exit code — a real listener stands in for what a genuine
+// `-O forward` would have made answer on this port.
+func TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a local port: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	script := fmt.Sprintf(
+		`if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; else echo RESULT:failure; fi`,
+		port, port)
+	log, sock, out, _ := sourceRemoteCapturingResult(t, script)
+
+	if !strings.Contains(out, "RESULT:success") {
+		t.Fatalf("tunnel_add_forward did not report success even though something answers the local port; stdout was %q, ssh log:\n%s", out, log)
+	}
+	forward, _ := sshLineContaining(t, log, "-O forward")
+	for _, want := range []string{
+		"-S", sock,
+		fmt.Sprintf("-L %d:10.0.0.5:%d", port, port),
+		"somehost",
+	} {
+		if !strings.Contains(forward, want) {
+			t.Errorf("tunnel_add_forward's ssh invocation missing %q; invocation was:\n%s", want, forward)
+		}
+	}
+}
+
+// TestUnit_TunnelAddForward_FailsWhenNothingAnswersTheLocalPort is the
+// discriminator for the whole reason this function polls rather than
+// trusting `ssh -O forward`'s own exit code: measured directly (see
+// remote.sh's own comment), that exit code is 0 even when the requested
+// local bind failed. With nothing listening on the chosen port, a version
+// that trusted ssh's exit code would report success here; the real
+// function must report failure, with a diagnostic explaining why.
+// PORTAINER_E2E_TUNNEL_FORWARD_RETRIES is lowered so this does not cost the
+// real-world ~4s budget on every run.
+func TestUnit_TunnelAddForward_FailsWhenNothingAnswersTheLocalPort(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a local port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("freeing the reserved port: %v", err)
+	}
+
+	script := fmt.Sprintf(
+		`export PORTAINER_E2E_TUNNEL_FORWARD_RETRIES=2
+if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; else echo RESULT:failure; fi`,
+		port, port)
+	log, _, out, stderrOut := sourceRemoteCapturingResult(t, script)
+
+	if !strings.Contains(out, "RESULT:failure") {
+		t.Fatalf("tunnel_add_forward reported success with nothing listening on the local port; stdout was %q, ssh log:\n%s", out, log)
+	}
+	if !strings.Contains(stderrOut, "could not confirm the forward") {
+		t.Errorf("tunnel_add_forward's failure carried no diagnostic; stderr was %q", stderrOut)
 	}
 }
