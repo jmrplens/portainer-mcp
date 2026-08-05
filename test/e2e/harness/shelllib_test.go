@@ -323,23 +323,15 @@ func TestUnit_CDIDeviceID_ReturnsTheConstantNvidiaGPUAllDevice(t *testing.T) {
 // toolkit must yield empty, not an error, so bringing the estate up without a
 // GPU still works.
 //
-// gpu_cdi_spec pipes unconditionally through strip_cdi_hooks, even on this
-// empty path, so a PATH containing nothing at all (the trick
-// TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi uses) would
-// make awk itself unresolvable and fail the script for the wrong reason.
-// Symlinking only awk into an otherwise empty directory keeps that guarantee
-// — nvidia-ctk is absent regardless of what the machine running the test
-// actually has — without breaking the pipe.
+// gpu_cdi_spec returns before ever reaching strip_cdi_hooks on this path
+// (the "if ! raw=$(...)" capture fails and returns early), so a PATH
+// containing nothing at all is safe here: unlike an earlier version of this
+// function, awk is never invoked, so there is nothing to symlink onto PATH
+// the way TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi
+// does for nvidia-smi's absence.
 func TestUnit_GPUCDISpec_ReportsNothingWhenTheHostHasNoNvidiaCtk(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	awkPath, err := exec.LookPath("awk")
-	if err != nil {
-		t.Fatalf("locating awk on this machine: %v", err)
-	}
-	if err := os.Symlink(awkPath, filepath.Join(dir, "awk")); err != nil {
-		t.Fatalf("linking awk into the test PATH: %v", err)
-	}
 	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+` gpu_cdi_spec ""`), "\n")
 	if got != "" {
 		t.Errorf("gpu_cdi_spec on a host without nvidia-ctk = %q, want empty", got)

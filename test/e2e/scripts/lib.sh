@@ -186,19 +186,29 @@ cdi_device_id() {
 # set -e — the failing command sits in an if's condition — so no "|| true" is
 # needed at all.
 #
-# The command string sets pipefail itself: without it, "nvidia-smi ... |
-# head -n1" inside the fresh bash -c (or remote shell) reports only head's
-# exit status, so a nvidia-smi that printed a line and then failed would
-# still read as success and its output would still be captured. Verified
-# directly with a stub that does exactly that.
+# There is deliberately no "| head -n1" in the command string, and therefore
+# no "pipefail" either — an earlier version had both, and it was wrong. On a
+# multi-GPU host nvidia-smi writes one line per card; "head -n1" reads its
+# first line and exits, closing the pipe, and if nvidia-smi is still writing
+# its *next* line at that moment it gets SIGPIPE and dies with 141. With
+# pipefail that 141 becomes the pipeline's exit status, "if !" reads it as
+# failure, and a host with a GPU is reported as having none. Measured: a
+# two-line stub with a few milliseconds between writes (roughly what
+# separate GPU query rows cost for real) failed 200/200 sequential runs with
+# pipefail set and 0/200 with it unset — this is not a rare race, it is the
+# common case for anything but a single-GPU host. Fixed by letting the whole
+# remote command finish and taking the first line locally instead, where
+# there is no consumer to close the pipe out from under a still-writing
+# producer.
 detect_gpu_name() {
     local dest="$1" raw
     if ! raw=$(on_docker_host "$dest" \
-        'set -o pipefail; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1' \
+        'command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null' \
         2>/dev/null); then
         return 0
     fi
-    printf '%s\n' "$raw"
+    [[ -n "$raw" ]] || return 0
+    printf '%s\n' "${raw%%$'\n'*}"
 }
 
 # gpu_cdi_spec echoes a hookless CDI specification for the Docker host's GPUs,
