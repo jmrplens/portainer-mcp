@@ -180,15 +180,41 @@ if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.n
         # the server node first, and in practice
         # test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts to
         # agent-0 — the node that version left without a shim.
+        #
+        # Both this loop and the rollout wait below are guarded the same way
+        # the driver-library probe just above is, and for the identical
+        # reason: under set -euo pipefail, `docker exec` failing on either
+        # node, or `rollout status` never converging within its 180s budget,
+        # would otherwise abort the whole script with the cluster (and, if
+        # remote, its SSH tunnel) still running — `k3d cluster create`
+        # installs no cleanup trap, so recovery would need a manual
+        # `make e2e-k8s-down` against a host the operator may not even be
+        # watching. The device plugin cannot do anything useful without the
+        # shim on every node it might land on, so a failed write means
+        # skipping the plugin entirely rather than applying a manifest that
+        # can only fail later; a rollout that never converges means the
+        # DaemonSet stays applied (removing it now would race whatever kubectl
+        # apply already started) but the leg is still reported GPU-less so the
+        # suites skip instead of trusting an unconfirmed plugin.
+        shim_ok=1
         for node in "k3d-${cluster}-server-0" "k3d-${cluster}-agent-0"; do
-            docker exec "$node" sh -c \
-                'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
+            if ! docker exec "$node" sh -c \
+                'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'; then
+                echo "warning: could not write the nvidia-ctk shim onto $node; the device plugin cannot work without it on every node, continuing without the kubernetes leg's GPU" >&2
+                shim_ok=""
+                break
+            fi
         done
-        kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
-        kubectl --context "k3d-$cluster" -n kube-system rollout status \
-            daemonset/nvidia-device-plugin --timeout=180s
-        k8s_gpu="1"
-        echo "gpu advertised to the kubernetes leg" >&2
+        if [[ -n "$shim_ok" ]]; then
+            kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
+            if kubectl --context "k3d-$cluster" -n kube-system rollout status \
+                daemonset/nvidia-device-plugin --timeout=180s; then
+                k8s_gpu="1"
+                echo "gpu advertised to the kubernetes leg" >&2
+            else
+                echo "warning: nvidia-device-plugin daemonset did not roll out within 180s; continuing without the kubernetes leg's GPU" >&2
+            fi
+        fi
     fi
 else
     echo "no GPU on the kubernetes node: GPU suites will skip" >&2

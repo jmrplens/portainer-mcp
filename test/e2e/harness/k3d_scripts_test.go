@@ -185,6 +185,17 @@ if [[ "$1" == "exec" && "$*" == *"libcuda.so"* ]]; then
     fi
     exit 0
 fi
+# The nvidia-ctk shim write -- k3d-up.sh's docker exec into $node, writing
+# a printf'd stub script at /usr/bin/nvidia-ctk. STUB_SHIM_FAILS_ON_NODE
+# names the single node ($2, e.g. the agent) whose shim write should fail,
+# standing in for a docker exec transiently failing on one node of the two
+# -- the other node's write still succeeds, since only $2 is checked.
+if [[ "$1" == "exec" && "$*" == *"nvidia-ctk"* ]]; then
+    if [[ -n "${STUB_SHIM_FAILS_ON_NODE:-}" && "$2" == "$STUB_SHIM_FAILS_ON_NODE" ]]; then
+        exit 1
+    fi
+    exit 0
+fi
 exit 0
 `)
 	writeStub("k3d", `#!/usr/bin/env bash
@@ -209,6 +220,15 @@ case "$args" in
     *"get svc portainer"*) echo "${STUB_NODEPORT:-30443}"; exit 0 ;;
     *"get pod"*"app.kubernetes.io/name=portainer"*) echo "portainer-fake-pod-0"; exit 0 ;;
     *"debug -q"*) printf -- '-----BEGIN CERTIFICATE-----\nFAKECERTDATANOTREAL\n-----END CERTIFICATE-----\n'; exit 0 ;;
+    # STUB_ROLLOUT_FAILS stands in for the nvidia-device-plugin DaemonSet
+    # never converging within its 180s budget -- a stubbed, immediate failure
+    # rather than actually waiting out that timeout in a test.
+    *"rollout status daemonset/nvidia-device-plugin"*)
+        if [[ "${STUB_ROLLOUT_FAILS:-0}" == "1" ]]; then
+            exit 1
+        fi
+        exit 0
+        ;;
     *) exit 0 ;;
 esac
 `)
@@ -569,6 +589,104 @@ func TestUnit_K3DUpScript_MissingDriverLibrariesSkipsTheDevicePluginRatherThanAb
 	}
 	if strings.Contains(output, "gpu advertised to the kubernetes leg") {
 		t.Errorf("k3d-up.sh reported the gpu as advertised despite skipping the device plugin; output:\n%s", output)
+	}
+}
+
+// TestUnit_K3DUpScript_ShimWriteFailureSkipsTheDevicePluginRatherThanAborting
+// is the same class of regression as the libcuda-probe test just above, for
+// the two lines immediately following that probe: writing the nvidia-ctk shim
+// onto every node, and applying/waiting on the device plugin DaemonSet. Both
+// used to run unguarded under set -euo pipefail, so a `docker exec` failing
+// on either node would abort the whole script with the cluster (and, if
+// remote, its SSH tunnel) still running -- exactly the outcome the libcuda
+// probe exists to prevent one line earlier, and no less true here: the
+// device plugin cannot work without the shim on every node it might be
+// scheduled onto, so a failed write has to skip installing it, not abort.
+//
+// STUB_SHIM_FAILS_ON_NODE names the agent node specifically (not the server)
+// so this also proves the loop actually reached the second node before
+// failing -- a version that bailed out of the whole GPU branch the instant
+// server-0's write succeeded would still pass a test that only checked "some
+// node's write was attempted".
+func TestUnit_K3DUpScript_ShimWriteFailureSkipsTheDevicePluginRatherThanAborting(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		"STUB_GPU_PRESENT=1",
+		"STUB_TOOLKIT_PRESENT=1",
+		"STUB_SHIM_FAILS_ON_NODE=k3d-portainer-mcp-e2e-agent-0",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (shim write fails on the agent node) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if !strings.Contains(log, "DOCKER_CALL: exec k3d-portainer-mcp-e2e-server-0 sh -c printf") {
+		t.Errorf("k3d-up.sh never attempted the shim write on the server node; log:\n%s", log)
+	}
+	if !strings.Contains(log, "DOCKER_CALL: exec k3d-portainer-mcp-e2e-agent-0 sh -c printf") {
+		t.Errorf("k3d-up.sh never attempted the shim write on the agent node; log:\n%s", log)
+	}
+	if strings.Contains(log, "apply -f ./k8s/nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh applied the nvidia device plugin despite a failed shim write; log:\n%s", log)
+	}
+	if strings.Contains(log, "rollout status") {
+		t.Errorf("k3d-up.sh waited on a rollout despite never applying the device plugin; log:\n%s", log)
+	}
+	if !strings.Contains(output, "could not write the nvidia-ctk shim onto k3d-portainer-mcp-e2e-agent-0") {
+		t.Errorf("k3d-up.sh's warning did not name the node whose shim write failed; output:\n%s", output)
+	}
+	if strings.Contains(output, "gpu advertised to the kubernetes leg") {
+		t.Errorf("k3d-up.sh reported the gpu as advertised despite the failed shim write; output:\n%s", output)
+	}
+	if !strings.Contains(log, "GO_CALL") {
+		t.Errorf("k3d-up.sh never reached the provisioner despite the shim failure being a skip, not an abort; log:\n%s", log)
+	}
+}
+
+// TestUnit_K3DUpScript_RolloutTimeoutSkipsTheKubernetesGPURatherThanAborting
+// is the sibling regression test for the rollout wait itself: `kubectl
+// rollout status --timeout=180s` failing to converge is exactly the 180s-
+// then-abort path the libcuda probe (and the shim-write guard above) exist to
+// avoid reaching by a different route. The manifest is still applied here --
+// unlike the shim-failure case, there is nothing wrong with the manifest
+// itself, only with whether it ever became ready -- but the leg must still be
+// reported GPU-less so the suites skip rather than trust an unconfirmed
+// DaemonSet.
+func TestUnit_K3DUpScript_RolloutTimeoutSkipsTheKubernetesGPURatherThanAborting(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		"STUB_GPU_PRESENT=1",
+		"STUB_TOOLKIT_PRESENT=1",
+		"STUB_ROLLOUT_FAILS=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (rollout never converges) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if !strings.Contains(log, "apply -f ./k8s/nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh never applied the device plugin manifest before waiting on its rollout; log:\n%s", log)
+	}
+	wantRollout := "KUBECTL_CALL: --context k3d-portainer-mcp-e2e -n kube-system rollout status daemonset/nvidia-device-plugin --timeout=180s"
+	if !strings.Contains(log, wantRollout) {
+		t.Errorf("k3d-up.sh did not wait for the device plugin daemonset's rollout with the expected invocation; want %q in log:\n%s", wantRollout, log)
+	}
+	if !strings.Contains(output, "nvidia-device-plugin daemonset did not roll out within 180s") {
+		t.Errorf("k3d-up.sh's warning did not name the rollout failure; output:\n%s", output)
+	}
+	if strings.Contains(output, "gpu advertised to the kubernetes leg") {
+		t.Errorf("k3d-up.sh reported the gpu as advertised despite the rollout never converging; output:\n%s", output)
+	}
+	if !strings.Contains(log, "GO_CALL") {
+		t.Errorf("k3d-up.sh never reached the provisioner despite the rollout timeout being a skip, not an abort; log:\n%s", log)
 	}
 }
 
