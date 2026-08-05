@@ -70,15 +70,33 @@ fi
 # vendor found", rolling back the entire cluster. That is a hard failure of
 # `make e2e-k8s-up` on exactly the machines this task's own verification step
 # requires to keep working, which is a stricter and more common case than
-# "a GPU-aware host with zero devices" — the docker-compose.gpu.yml override
-# for the compose leg already avoids this same trap by gating on detection
-# rather than passing the flag unconditionally; k3d cluster create gets the
-# same treatment here for the same reason. See detect_gpu_name in lib.sh.
+# "a GPU-aware host with zero devices".
+#
+# The gate is NOT detect_gpu_name alone. An earlier version of this script
+# gated on it directly, which is wrong: detect_gpu_name only proves
+# nvidia-smi answers, and nvidia-smi ships with the DRIVER — a host can have a
+# working driver and no NVIDIA Container Toolkit at all, which is exactly the
+# "failed to discover GPU vendor from CDI" host the paragraph above describes.
+# On such a host the old gate opened anyway and reintroduced the very
+# regression this comment exists to prevent. gpu_cdi_spec is the stronger
+# probe: it shells out to `nvidia-ctk cdi generate`, part of the toolkit
+# itself, so a non-empty, correctly-shaped result means the toolkit --gpus all
+# actually needs is present, not merely that a card exists. up.sh already
+# requires the same thing (a generated and validated CDI specification) before
+# it will offer the compose leg's dind a GPU at all, and degrades to GPU-less
+# with a warning otherwise; this mirrors that rule for the Kubernetes leg's
+# --gpus all, on the same host, for the same reason.
 gpu_flags=()
 gpu_name=$(detect_gpu_name "$ssh_dest")
 if [[ -n "$gpu_name" ]]; then
-    gpu_flags=(--gpus all)
-    echo "gpu detected on the docker host: $gpu_name (passing --gpus all to the kubernetes node)" >&2
+    gpu_cdi_probe=$(gpu_cdi_spec "$ssh_dest")
+    if [[ -n "$gpu_cdi_probe" ]] && printf '%s\n' "$gpu_cdi_probe" | grep -q '^cdiVersion:'; then
+        gpu_flags=(--gpus all)
+        echo "gpu detected on the docker host: $gpu_name (nvidia container toolkit present; passing --gpus all to the kubernetes node)" >&2
+    else
+        echo "warning: $gpu_name present but no usable nvidia container toolkit found (nvidia-ctk cdi generate produced nothing usable); continuing without --gpus all, the kubernetes leg's GPU suites will skip" >&2
+        gpu_name=""
+    fi
 else
     echo "no GPU on the docker host: the kubernetes leg's GPU suites will skip" >&2
 fi

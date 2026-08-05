@@ -116,18 +116,30 @@ func newK3DFakeRepo(t *testing.T) *k3dFakeRepo {
 			t.Fatalf("writing %s stub: %v", name, err)
 		}
 	}
-	// ssh: answers the GPU probe (on_docker_host's nvidia-smi check) per
-	// STUB_GPU_PRESENT, and otherwise just logs and succeeds — the same
-	// "reports 0 regardless" shape production ssh has for -O forward
-	// (see remote.sh), so a script that trusted it blindly would not be
-	// caught by this stub alone; tunnel_add_forward's own preflight/poll are
-	// what have to do the real work, and are exercised for real (not just
-	// logged) via the real listener these tests start.
+	// ssh: answers the driver probe (on_docker_host's nvidia-smi check) per
+	// STUB_GPU_PRESENT and the SEPARATE container-toolkit probe
+	// (on_docker_host's nvidia-ctk check, via gpu_cdi_spec) per
+	// STUB_TOOLKIT_PRESENT — deliberately two independent knobs, not one,
+	// because that is exactly the distinction C2 exists to cover: nvidia-smi
+	// ships with the driver alone, and a host can have a working driver with
+	// no container toolkit installed at all. Everything else just logs and
+	// succeeds — the same "reports 0 regardless" shape production ssh has for
+	// -O forward (see remote.sh), so a script that trusted it blindly would
+	// not be caught by this stub alone; tunnel_add_forward's own
+	// preflight/poll are what have to do the real work, and are exercised for
+	// real (not just logged) via the real listener these tests start.
 	writeStub("ssh", `#!/usr/bin/env bash
 echo "SSH_CALL: $*" >> "$LOGFILE"
 if [[ "$*" == *"nvidia-smi"* ]]; then
     if [[ "${STUB_GPU_PRESENT:-0}" == "1" ]]; then
         echo "NVIDIA GeForce RTX FAKE"
+        exit 0
+    fi
+    exit 1
+fi
+if [[ "$*" == *"nvidia-ctk"* ]]; then
+    if [[ "${STUB_TOOLKIT_PRESENT:-0}" == "1" ]]; then
+        printf 'cdiVersion: 0.7.0\nkind: nvidia.com/gpu\ndevices:\n    - name: all\n'
         exit 0
     fi
     exit 1
@@ -138,10 +150,13 @@ fi
 exit 0
 `)
 	// docker: answers the k3d node's own GPU-device check (`docker exec ...
-	// ls /dev/nvidia0`, k3d-up.sh's gate on installing the device plugin) per
-	// STUB_GPU_PRESENT — the same knob the ssh stub above uses for the host
-	// probe, since in reality a node only has the device file when --gpus
-	// all was actually passed through to it. Any OTHER "exec" call (the
+	// ls /dev/nvidia0`, k3d-up.sh's gate on installing the device plugin) with
+	// BOTH STUB_GPU_PRESENT and STUB_TOOLKIT_PRESENT required — in reality the
+	// node only gets the device file when --gpus all was actually passed to
+	// `k3d cluster create`, and this harness's own k3d-up.sh now withholds
+	// that flag unless the toolkit probe (nvidia-ctk, above) succeeded too, so
+	// a stub answering on STUB_GPU_PRESENT alone would report a device the
+	// real script's own gate never granted. Any OTHER "exec" call (the
 	// nvidia-ctk shim write) falls through to the generic success below, so
 	// it is only ever checked through the log, never made to fail here.
 	writeStub("docker", `#!/usr/bin/env bash
@@ -151,7 +166,7 @@ if [[ "$1" == "inspect" ]]; then
     exit 0
 fi
 if [[ "$1" == "exec" && "$*" == *"nvidia0"* ]]; then
-    if [[ "${STUB_GPU_PRESENT:-0}" == "1" ]]; then
+    if [[ "${STUB_GPU_PRESENT:-0}" == "1" && "${STUB_TOOLKIT_PRESENT:-0}" == "1" ]]; then
         exit 0
     fi
     exit 1
@@ -373,16 +388,21 @@ func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *
 // positive direction of check 2 above: a GPU-less run proves the flag is
 // absent, but only a GPU-present run proves it is EVER added at all — a
 // version that dropped the whole conditional and always omitted the flag
-// would still pass the GPU-less test.
+// would still pass the GPU-less test. It sets BOTH STUB_GPU_PRESENT (the
+// driver, via nvidia-smi) and STUB_TOOLKIT_PRESENT (the container toolkit,
+// via nvidia-ctk cdi generate): this is the "everything a real GPU host
+// needs" case, and TestUnit_K3DUpScript_DriverPresentButToolkitAbsentDoesNotPassGpusAll
+// below is what proves the driver alone is not enough.
 //
-// STUB_GPU_PRESENT also drives the docker stub's answer to the node's own
-// `ls /dev/nvidia0` probe (see newK3DFakeRepo), so this same run is also the
-// one place proving the device-plugin install itself: the nvidia-ctk shim is
-// written on the node, the DaemonSet manifest is applied, its rollout is
-// waited on, and the script says so on stderr. Without a GPU on the node
-// (the sibling test above), none of the four should happen — that test's own
-// negative assertions are what makes this one non-trivial: a version that
-// installed the plugin unconditionally would still pass this test alone.
+// STUB_GPU_PRESENT and STUB_TOOLKIT_PRESENT together also drive the docker
+// stub's answer to the node's own `ls /dev/nvidia0` probe (see
+// newK3DFakeRepo), so this same run is also the one place proving the
+// device-plugin install itself: the nvidia-ctk shim is written on the node,
+// the DaemonSet manifest is applied, its rollout is waited on, and the script
+// says so on stderr. Without a GPU on the node (the sibling test above), none
+// of the four should happen — that test's own negative assertions are what
+// makes this one non-trivial: a version that installed the plugin
+// unconditionally would still pass this test alone.
 func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) {
 	repo := newK3DFakeRepo(t)
 	port := reserveFreeTCPPort(t)
@@ -391,6 +411,7 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 	output, log, code := repo.run(t, "k3d-up.sh",
 		"PORTAINER_E2E_REMOTE=1",
 		"STUB_GPU_PRESENT=1",
+		"STUB_TOOLKIT_PRESENT=1",
 		fmt.Sprintf("STUB_NODEPORT=%d", port),
 		"STUB_SERVER_IP=172.30.5.7",
 	)
@@ -412,6 +433,52 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 	}
 	if !strings.Contains(output, "gpu advertised to the kubernetes leg") {
 		t.Errorf("k3d-up.sh did not report the gpu-advertised message despite a GPU on the node; output:\n%s", output)
+	}
+}
+
+// TestUnit_K3DUpScript_DriverPresentButToolkitAbsentDoesNotPassGpusAll is
+// C2's own regression test: a host can have a working NVIDIA driver
+// (nvidia-smi answers) with no NVIDIA Container Toolkit installed at all —
+// nvidia-smi ships with the driver alone. On such a host `k3d cluster create
+// --gpus all` fails outright with "failed to discover GPU vendor from CDI: no
+// known GPU vendor found" and rolls back the whole cluster, which is exactly
+// the "make e2e-k8s-up now breaks on a local host with a driver but no
+// toolkit" regression the review named. STUB_GPU_PRESENT=1 alone (without
+// STUB_TOOLKIT_PRESENT) reproduces that host: nvidia-smi answers, nvidia-ctk
+// does not.
+//
+// The log is checked for the shim's own install command
+// ("chmod 0755 /usr/bin/nvidia-ctk"), not the bare substring "nvidia-ctk":
+// gpu_cdi_spec's own TOOLKIT PROBE also invokes nvidia-ctk over ssh (to find
+// out whether it exists at all), so a bare substring check would find that
+// probe and pass even if the gate were deleted outright — the probe runs on
+// every GPU-detected host regardless of what it finds, and only the shim
+// write is the thing this test must prove absent.
+func TestUnit_K3DUpScript_DriverPresentButToolkitAbsentDoesNotPassGpusAll(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		"STUB_GPU_PRESENT=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (driver present, no toolkit) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if strings.Contains(log, "--gpus all") {
+		t.Errorf("k3d cluster create passed --gpus all with the driver present but no container toolkit; log:\n%s", log)
+	}
+	if !strings.Contains(output, "no usable nvidia container toolkit found") {
+		t.Errorf("k3d-up.sh did not report the driver-without-toolkit warning; output:\n%s", output)
+	}
+	if strings.Contains(log, "chmod 0755 /usr/bin/nvidia-ctk") {
+		t.Errorf("k3d-up.sh wrote the nvidia-ctk shim onto the node despite no container toolkit on the docker host; log:\n%s", log)
+	}
+	if strings.Contains(log, "nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh applied the nvidia device plugin despite no container toolkit on the docker host; log:\n%s", log)
 	}
 }
 
