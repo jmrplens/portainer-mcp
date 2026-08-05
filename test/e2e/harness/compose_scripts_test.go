@@ -323,6 +323,57 @@ func TestUnit_DownScript_TearsDownAgainstTheRecordedMarker(t *testing.T) {
 	}
 }
 
+// TestUnit_DownScript_KubernetesTeardownFailureDoesNotAbortComposeTeardown is
+// the regression test for the Kubernetes-leg probe's own subshell in
+// down.sh. That block runs under this script's own `set -e`, and a subshell
+// that exits non-zero aborts the parent script exactly like any other failing
+// command would — nothing about `( ... )` on its own protects the statements
+// that follow it. Today every command inside k3d-down.sh that this probe can
+// reach is individually guarded (`|| echo` on the licence release, `|| true`
+// on `k3d cluster delete`), so the trigger is not reachable yet, but the
+// coupling itself is the defect: one future unguarded command inside
+// k3d-down.sh would silently turn into "the compose teardown below never
+// runs", leaving the compose estate up on whatever host it lives on — the
+// exact outcome this script's own header calls worse than a stranded
+// licence. This test stands in for that future command with a stub
+// k3d-down.sh that simply exits 1.
+func TestUnit_DownScript_KubernetesTeardownFailureDoesNotAbortComposeTeardown(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+	repo.seedMarker(t, fakeRemoteHost)
+
+	// down.sh's own probe only calls ./scripts/k3d-down.sh when `command -v
+	// k3d` succeeds AND `k3d cluster list -o json` reports a cluster named
+	// exactly like the default E2E_K3D_CLUSTER ("portainer-mcp-e2e").
+	if err := os.WriteFile(filepath.Join(repo.binDir, "k3d"), []byte(`#!/usr/bin/env bash
+if [[ "$1" == "cluster" && "$2" == "list" ]]; then
+    echo '[{"name":"portainer-mcp-e2e"}]'
+    exit 0
+fi
+exit 0
+`), 0o755); err != nil {
+		t.Fatalf("writing k3d stub: %v", err)
+	}
+	// Stands in for a future, unguarded command inside the real
+	// k3d-down.sh: this replacement always fails.
+	if err := os.WriteFile(filepath.Join(repo.e2eDir, "scripts", "k3d-down.sh"), []byte("#!/usr/bin/env bash\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("writing failing k3d-down.sh stub: %v", err)
+	}
+
+	output, log, code := repo.run(t, "down.sh")
+	if code != 0 {
+		t.Fatalf("down.sh exited %d despite the kubernetes teardown failure being handled; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if !strings.Contains(output, "warning: the kubernetes teardown failed") {
+		t.Errorf("down.sh did not report the kubernetes teardown failure; output:\n%s", output)
+	}
+	if !strings.Contains(log, "DOCKER_CALL: compose -f docker-compose.yml") {
+		t.Errorf("down.sh never reached the compose teardown after the kubernetes teardown failed; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); ok {
+		t.Errorf("down.sh left the compose marker behind after the kubernetes teardown failed: (%q, %v), want it cleared", dest, ok)
+	}
+}
+
 // TestUnit_DownScript_NoMarkerTearsDownLocally is the baseline (unmutated,
 // no earlier remote run) direction: with no marker at all, down.sh must tear
 // down the local daemon, exactly as it always has.

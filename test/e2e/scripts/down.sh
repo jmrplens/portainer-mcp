@@ -66,6 +66,15 @@ cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 # which is precisely why it would go unnoticed in ordinary use. The subshell
 # also keeps the compose destination exported above intact for everything
 # below this block, which still has to run against it.
+#
+# The subshell's own exit status is deliberately not left to abort this
+# script under set -e: a future command inside k3d-down.sh that is not
+# guarded the way its licence release and `k3d cluster delete` already are
+# would otherwise take this whole script down with it, and everything below
+# -- the compose teardown -- would simply never run, leaving the compose
+# estate up on whatever host it lives on. That failure mode is exactly what
+# this script's own header calls worse than a stranded licence, so a failed
+# Kubernetes teardown is reported and swallowed here instead.
 (
     k8s_ssh_dest=$(recorded_docker_host kubernetes)
     if [[ -n "$k8s_ssh_dest" ]]; then
@@ -77,7 +86,7 @@ cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
         echo "kubernetes leg still up: tearing it down first so its licence can be released before this estate file is removed" >&2
         ./scripts/k3d-down.sh
     fi
-)
+) || echo "warning: the kubernetes teardown failed; continuing with the compose teardown" >&2
 
 licence=$(read_licence "$repo_root")
 if [[ -n "$licence" && -f "$estate_file" ]]; then
