@@ -209,9 +209,21 @@ exit 0
 // docker/k3d/kubectl/helm/go invocation log, and its exit code.
 func (r *k3dFakeRepo) run(t *testing.T, scriptName string, extraEnv ...string) (output, log string, exitCode int) {
 	t.Helper()
+	return r.runWithPath(t, scriptName, r.binDir+":"+os.Getenv("PATH"), extraEnv...)
+}
+
+// runWithPath is run's variant for a test that needs to control PATH itself
+// — specifically TestUnit_K3DUpScript_MissingToolLeavesAnExistingMarkerUntouched,
+// which has to simulate a tool genuinely ABSENT rather than merely shadowed:
+// the machine running these tests has its own k3d/kubectl/helm installed
+// (this repository's own e2e tooling needs them), so run()'s
+// binDir-then-real-PATH order would still find the real one further along
+// even with its stub removed from binDir.
+func (r *k3dFakeRepo) runWithPath(t *testing.T, scriptName, path string, extraEnv ...string) (output, log string, exitCode int) {
+	t.Helper()
 	script := filepath.Join(r.e2eDir, "scripts", scriptName)
 	cmd := exec.CommandContext(t.Context(), "bash", script)
-	env := append(os.Environ(), "PATH="+r.binDir+":"+os.Getenv("PATH"), "LOGFILE="+r.logFile)
+	env := append(os.Environ(), "PATH="+path, "LOGFILE="+r.logFile)
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -557,6 +569,134 @@ func TestUnit_K3DUpScript_ExitsBeforeProvisioningWhenTheForwardIsNeverConfirmed(
 	}
 	if _, ok := repo.marker(""); ok {
 		t.Errorf("k3d-up.sh wrote the compose leg's own marker (.docker-host) on a failed run; it must never touch that one")
+	}
+}
+
+// TestUnit_K3DUpScript_RefusesAPlainRunWhenARemoteKubernetesMarkerExists is
+// I2's own regression test for the Kubernetes leg, mirroring
+// TestUnit_UpScript_RefusesAPlainRunWhenARemoteMarkerExists in
+// compose_scripts_test.go for the compose leg: a `make e2e-k8s-up-remote`
+// followed by a plain `make e2e-k8s-up` must refuse rather than silently
+// orphan the still-recorded remote cluster, its licence and its open ssh
+// master. record_docker_host's own "empty destination deletes the marker"
+// rule would otherwise wipe the ONLY record of where that cluster is.
+func TestUnit_K3DUpScript_RefusesAPlainRunWhenARemoteKubernetesMarkerExists(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	const existingHost = "existing-kubernetes-host.invalid"
+	if err := os.WriteFile(filepath.Join(repo.e2eDir, ".docker-host-kubernetes"),
+		[]byte(existingHost+"\n"), 0o644); err != nil {
+		t.Fatalf("seeding the kubernetes marker: %v", err)
+	}
+
+	output, log, code := repo.run(t, "k3d-up.sh")
+	if code == 0 {
+		t.Fatalf("k3d-up.sh (plain run) succeeded despite an existing remote kubernetes marker; output:\n%s\nlog:\n%s", output, log)
+	}
+	if !strings.Contains(output, "refusing to continue") {
+		t.Errorf("k3d-up.sh did not report a refusal; output:\n%s", output)
+	}
+	if strings.Contains(log, "K3D_CALL:") {
+		t.Errorf("k3d-up.sh created a cluster despite refusing the host switch; log:\n%s", log)
+	}
+	if dest, ok := repo.marker("kubernetes"); !ok || dest != existingHost {
+		t.Errorf("kubernetes marker changed after a refused run: (%q, %v), want it untouched at %q", dest, ok, existingHost)
+	}
+}
+
+// TestUnit_K3DUpScript_RefusesSwitchingToADifferentRemoteKubernetesHost is the
+// same guard's other direction: an existing remote kubernetes marker and a
+// NEW run naming a different remote host must also refuse.
+func TestUnit_K3DUpScript_RefusesSwitchingToADifferentRemoteKubernetesHost(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	const otherHost = "a-different-remote-kubernetes-host.invalid"
+	if err := os.WriteFile(filepath.Join(repo.e2eDir, ".docker-host-kubernetes"),
+		[]byte(otherHost+"\n"), 0o644); err != nil {
+		t.Fatalf("seeding the kubernetes marker: %v", err)
+	}
+
+	output, log, code := repo.run(t, "k3d-up.sh", "PORTAINER_E2E_REMOTE=1")
+	if code == 0 {
+		t.Fatalf("k3d-up.sh (remote) succeeded despite an existing marker naming a different host; output:\n%s\nlog:\n%s", output, log)
+	}
+	if !strings.Contains(output, "refusing to continue") {
+		t.Errorf("k3d-up.sh did not report a refusal; output:\n%s", output)
+	}
+	if strings.Contains(log, "K3D_CALL:") {
+		t.Errorf("k3d-up.sh created a cluster despite refusing the host switch; log:\n%s", log)
+	}
+	if dest, ok := repo.marker("kubernetes"); !ok || dest != otherHost {
+		t.Errorf("kubernetes marker changed after a refused run: (%q, %v), want it untouched at %q", dest, ok, otherHost)
+	}
+}
+
+// TestUnit_K3DUpScript_AllowsReRunningAgainstTheSameRecordedKubernetesHost
+// proves the guard is not a blanket refusal: a second `make e2e-k8s-up-remote`
+// against the SAME host an earlier run already recorded must succeed.
+func TestUnit_K3DUpScript_AllowsReRunningAgainstTheSameRecordedKubernetesHost(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	const sameHost = "fake-remote-host-invented-for-this-test.invalid" // matches newK3DFakeRepo's own .env
+	if err := os.WriteFile(filepath.Join(repo.e2eDir, ".docker-host-kubernetes"),
+		[]byte(sameHost+"\n"), 0o644); err != nil {
+		t.Fatalf("seeding the kubernetes marker: %v", err)
+	}
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (remote, re-run against the same host) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if dest, ok := repo.marker("kubernetes"); !ok || dest != sameHost {
+		t.Errorf("kubernetes marker = (%q, %v), want the same destination still recorded", dest, ok)
+	}
+}
+
+// TestUnit_K3DUpScript_MissingToolLeavesAnExistingMarkerUntouched is I2's own
+// regression test for the reordering fix: the required-tool check
+// (`command -v k3d kubectl helm`) now runs BEFORE refuse_docker_host_switch
+// and record_docker_host, so a machine missing one of the three fails without
+// ever touching this leg's marker. Before this fix, record_docker_host ran
+// FIRST: on a machine missing a tool, a plain `make e2e-k8s-up` (empty
+// destination) would delete an existing remote marker and then exit 1 having
+// done nothing else — the exact "wipes the marker and exits 1 having done
+// nothing" defect the review named, distinct from (and reachable even
+// without) the "different destination" case the two tests above cover.
+func TestUnit_K3DUpScript_MissingToolLeavesAnExistingMarkerUntouched(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	const existingHost = "existing-kubernetes-host.invalid"
+	if err := os.WriteFile(filepath.Join(repo.e2eDir, ".docker-host-kubernetes"),
+		[]byte(existingHost+"\n"), 0o644); err != nil {
+		t.Fatalf("seeding the kubernetes marker: %v", err)
+	}
+	if err := os.Remove(filepath.Join(repo.binDir, "helm")); err != nil {
+		t.Fatalf("removing the helm stub to simulate a machine missing it: %v", err)
+	}
+
+	// PATH deliberately excludes the real PATH's own /usr/local/bin (or
+	// wherever this machine's real k3d/kubectl/helm live): appending the full
+	// real PATH after binDir, as run() does, would still find the real helm
+	// further along even with its stub removed here. /usr/bin and /bin are
+	// where the ordinary utilities the scripts also shell out to (grep, awk,
+	// cut, ...) live on this image.
+	output, log, code := repo.runWithPath(t, "k3d-up.sh", repo.binDir+":/usr/bin:/bin")
+	if code == 0 {
+		t.Fatalf("k3d-up.sh succeeded despite a missing tool; output:\n%s\nlog:\n%s", output, log)
+	}
+	if !strings.Contains(output, "helm is required but not installed") {
+		t.Errorf("k3d-up.sh did not report the missing tool; output:\n%s", output)
+	}
+	if strings.Contains(output, "refusing to continue") {
+		t.Errorf("k3d-up.sh reached the host-switch guard before the tool check; output:\n%s", output)
+	}
+	if dest, ok := repo.marker("kubernetes"); !ok || dest != existingHost {
+		t.Errorf("kubernetes marker changed after a missing-tool run: (%q, %v), want it untouched at %q", dest, ok, existingHost)
+	}
+	if strings.Contains(log, "K3D_CALL:") {
+		t.Errorf("k3d-up.sh invoked k3d despite a missing tool; log:\n%s", log)
 	}
 }
 

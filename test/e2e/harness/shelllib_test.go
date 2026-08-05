@@ -212,6 +212,110 @@ func TestUnit_DockerHostMarker_LegsAreIndependent(t *testing.T) {
 	}
 }
 
+// TestUnit_RefuseDockerHostSwitch_NoExistingMarkerAlwaysProceeds pins the
+// case every first run depends on: with nothing recorded yet for this leg,
+// there is nothing to switch away from, so both a local destination and any
+// remote one must be accepted regardless of what is being requested.
+func TestUnit_RefuseDockerHostSwitch_NoExistingMarkerAlwaysProceeds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cd := "cd " + dir + "\n"
+	for _, dest := range []string{"", "truenas"} {
+		if _, err := runLib(t, cd+`refuse_docker_host_switch "`+dest+`"`); err != nil {
+			t.Errorf("refuse_docker_host_switch(%q) with no existing marker failed: %v", dest, err)
+		}
+	}
+}
+
+// TestUnit_RefuseDockerHostSwitch_SameDestinationProceeds proves the guard is
+// not a blanket refusal: up.sh documents itself as idempotent ("running it
+// twice replaces the estate rather than accumulating one"), and a second run
+// against the SAME destination an earlier one already recorded must not be
+// mistaken for a switch.
+func TestUnit_RefuseDockerHostSwitch_SameDestinationProceeds(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cd := "cd " + dir + "\n"
+	sourceLib(t, cd+`record_docker_host "truenas"`)
+	if _, err := runLib(t, cd+`refuse_docker_host_switch "truenas"`); err != nil {
+		t.Errorf("refuse_docker_host_switch(\"truenas\") against a marker already naming \"truenas\" failed: %v", err)
+	}
+}
+
+// TestUnit_RefuseDockerHostSwitch_DifferentDestinationFails is the guard's
+// whole reason to exist, exercised at the function level rather than only
+// through a full script run: an existing marker naming one destination and a
+// request for a DIFFERENT one — including the empty (local) destination a
+// plain `make e2e-up` always resolves to — must fail loudly rather than let
+// the caller go on to call record_docker_host, which would otherwise silently
+// delete or overwrite the only record of where the earlier estate actually
+// is.
+func TestUnit_RefuseDockerHostSwitch_DifferentDestinationFails(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name           string
+		recorded, dest string
+	}{
+		{"remote recorded, local requested", "truenas", ""},
+		{"remote recorded, a different remote requested", "truenas", "some-other-host"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			cd := "cd " + dir + "\n"
+			sourceLib(t, cd+`record_docker_host "`+tc.recorded+`"`)
+			out, err := runLib(t, cd+`refuse_docker_host_switch "`+tc.dest+`"`)
+			if err == nil {
+				t.Fatalf("refuse_docker_host_switch(%q) against a marker naming %q succeeded, want a non-zero exit", tc.dest, tc.recorded)
+			}
+			if !strings.Contains(out, "refusing to continue") {
+				t.Errorf("refuse_docker_host_switch's failure carried no diagnostic; stderr was %q", out)
+			}
+		})
+	}
+}
+
+// TestUnit_RefuseDockerHostSwitch_LegArgumentChecksThatLegsOwnMarker proves
+// the leg argument is honoured: a mismatch recorded under the "kubernetes"
+// leg must not be raised against a call checking the compose leg (leg ""),
+// and vice versa — the same independence
+// TestUnit_DockerHostMarker_LegsAreIndependent already proves for
+// record_docker_host/recorded_docker_host themselves.
+func TestUnit_RefuseDockerHostSwitch_LegArgumentChecksThatLegsOwnMarker(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cd := "cd " + dir + "\n"
+	sourceLib(t, cd+`record_docker_host "truenas" "kubernetes"`)
+	// The compose leg's own marker is untouched, so a compose-leg check
+	// against any destination must proceed regardless of the kubernetes
+	// leg's recorded value.
+	if _, err := runLib(t, cd+`refuse_docker_host_switch "some-other-host"`); err != nil {
+		t.Errorf("refuse_docker_host_switch for the compose leg was refused by the kubernetes leg's own marker: %v", err)
+	}
+	// The kubernetes leg's own check against a genuinely different
+	// destination must still refuse.
+	if _, err := runLib(t, cd+`refuse_docker_host_switch "some-other-host" "kubernetes"`); err == nil {
+		t.Error("refuse_docker_host_switch for the kubernetes leg succeeded despite its own marker naming a different host")
+	}
+}
+
+// runLib is sourceLib's sibling for a script whose FAILURE is the behaviour
+// under test: sourceLib's t.Fatalf on any non-zero exit is exactly wrong
+// here, since a refusal is the expected outcome for several of these tests.
+// It returns the combined stdout+stderr (refuse_docker_host_switch's own
+// diagnostic goes to stderr) and the command's error, letting the caller
+// decide what a non-nil error means.
+func runLib(t *testing.T, script string) (string, error) {
+	t.Helper()
+	lib, err := filepath.Abs("../scripts/lib.sh")
+	if err != nil {
+		t.Fatalf("resolving lib.sh: %v", err)
+	}
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func TestUnit_OnDockerHost_EmptyDestinationRunsLocally(t *testing.T) {
 	t.Parallel()
 	got := strings.TrimRight(sourceLib(t, `on_docker_host "" 'echo ran-locally'`), "\n")
@@ -522,9 +626,18 @@ func TestUnit_GPUCDISpec_DiscardsAPartialSpecWhenNvidiaCtkFailsMidGeneration(t *
 
 // TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery mirrors
 // the gpu_cdi_spec case at the level that matters here: nvidia-smi prints a
-// name and then exits non-zero. Without pipefail inside the command string,
-// "nvidia-smi ... | head -n1" reports only head's exit status, so this
-// failure would otherwise go unnoticed and the name would still be returned.
+// name and then exits non-zero. detect_gpu_name has no "| head -n1" in its
+// remote command string and no pipefail (see its own doc for why: a
+// still-writing nvidia-smi piped into head can take SIGPIPE and be
+// misread as "no GPU"). Instead it captures the WHOLE command's output into a
+// variable first ("if ! raw=$(...); then return 0; fi") and only takes the
+// first line locally afterward, so a failing nvidia-smi has to be caught
+// through on_docker_host's own exit status, not a pipe stage failing on its
+// behalf. Without that capture-then-check shape, a bare "|| true" style
+// implementation would forward whatever nvidia-smi had already written even
+// though it went on to fail — the same trap gpu_cdi_spec's own doc describes
+// for a truncated CDI specification, one severity level lower here because a
+// partial display name is still just a name.
 func TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

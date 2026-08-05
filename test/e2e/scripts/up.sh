@@ -23,6 +23,12 @@ if [[ -n "$ssh_dest" ]]; then
     export DOCKER_HOST="ssh://$ssh_dest"
     echo "running the estate on $ssh_dest via $DOCKER_HOST" >&2
 fi
+# Refuses rather than silently orphaning a still-running estate this run would
+# otherwise stop being able to find: see refuse_docker_host_switch's own doc
+# for the plain-`make e2e-up`-after-`make e2e-up-remote` scenario this exists
+# to catch. Must run before record_docker_host, which unconditionally deletes
+# the marker on an empty destination.
+refuse_docker_host_switch "$ssh_dest"
 # Recorded before anything is created, not after: a run that dies half way
 # through still has to be tearable down against the right daemon.
 record_docker_host "$ssh_dest"

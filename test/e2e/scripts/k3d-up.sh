@@ -31,21 +31,34 @@ if [[ -n "$ssh_dest" ]]; then
     export DOCKER_HOST="ssh://$ssh_dest"
     echo "running the kubernetes leg on $ssh_dest via $DOCKER_HOST" >&2
 fi
+
+cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
+network="${E2E_NETWORK:-portainer-mcp-e2e_default}"
+namespace=portainer
+
+# Checked BEFORE anything below touches the marker: on a machine missing one
+# of these, record_docker_host used to run first and wipe whatever this leg's
+# marker already recorded, then exit 1 having done nothing else -- a run that
+# fails immediately still left a still-running remote cluster's own marker
+# gone. Failing here first means a missing tool never touches state at all.
+for tool in k3d kubectl helm; do
+    command -v "$tool" >/dev/null || { echo "$tool is required but not installed" >&2; exit 1; }
+done
+
 # The Kubernetes leg records its OWN marker, never the compose one. The two
 # legs are brought up by separate targets and can legitimately live in
 # different places — `make e2e-k8s-up` (local) alongside `make e2e-up-remote`
 # is a combination a user can type. Writing a single shared marker would make
 # whichever ran second silently redirect the other's teardown; Task 4 split
 # the marker per leg for exactly this reason.
+#
+# refuse_docker_host_switch runs first for the identical reason it does in
+# up.sh: record_docker_host with an empty destination deletes this leg's
+# marker unconditionally, and a plain `make e2e-k8s-up` typed after
+# `make e2e-k8s-up-remote` must not silently orphan the still-running remote
+# cluster that marker is the only record of.
+refuse_docker_host_switch "$ssh_dest" kubernetes
 record_docker_host "$ssh_dest" kubernetes
-
-cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
-network="${E2E_NETWORK:-portainer-mcp-e2e_default}"
-namespace=portainer
-
-for tool in k3d kubectl helm; do
-    command -v "$tool" >/dev/null || { echo "$tool is required but not installed" >&2; exit 1; }
-done
 
 # Same gitignored .env the compose legs (up.sh) read. Its absence is not an
 # error: the Kubernetes leg still comes up, just as Community Edition, and the

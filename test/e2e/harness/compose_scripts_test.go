@@ -1,0 +1,342 @@
+package harness
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// This file runs the COMMITTED test/e2e/scripts/up.sh and down.sh against
+// stub ssh/docker/go binaries, inside an isolated fake repository these tests
+// fully control — never the real repository root's .env, and never any real
+// network destination.
+//
+// It exists for the reason k3d_scripts_test.go's own top-of-file comment
+// gives for the Kubernetes leg's scripts: a live review mutated up.sh:21's
+// `ssh_dest=$(docker_ssh_dest "$repo_root")` to
+// `ssh_dest=$(read_env_var "$repo_root" PORTAINER_E2E_DOCKER_SSH)` — which
+// sends a plain `make e2e-up` to whatever host .env names, exactly the
+// failure mode the repository owner named by name — and down.sh:20's
+// `ssh_dest=$(recorded_docker_host)` to `ssh_dest=""`, and `go test ./...`,
+// `go build`, `go vet` and `bash -n` all stayed green throughout: nothing
+// below cmd/portainer-mcp or internal/... ever runs these scripts, and
+// shelllib_test.go only exercises docker_ssh_dest and recorded_docker_host as
+// bare functions, never the two scripts' own use of them. Both mutations are
+// pinned here, red, before being reverted.
+
+// composeFakeRepo is composeFakeRepo's own isolated repository shape, built
+// exactly like k3dFakeRepo for the identical reason: a fresh copy of the
+// CURRENTLY COMMITTED scripts, so a regression introduced into the real files
+// is exercised the next time these tests run.
+type composeFakeRepo struct {
+	e2eDir  string // .../fakerepo/test/e2e — the scripts' own working directory
+	binDir  string
+	logFile string
+}
+
+// newComposeFakeRepo builds the fake repository. envContents lets a caller
+// seed a specific .env shape (a destination present or absent) without every
+// test needing its own copy of the boilerplate around it.
+func newComposeFakeRepo(t *testing.T, envContents string) *composeFakeRepo {
+	t.Helper()
+	root := t.TempDir()
+	e2eDir := filepath.Join(root, "fakerepo", "test", "e2e")
+	scriptsDir := filepath.Join(e2eDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("creating fake scripts dir: %v", err)
+	}
+	for _, name := range []string{"up.sh", "down.sh", "lib.sh", "remote.sh"} {
+		src, err := filepath.Abs(filepath.Join("..", "scripts", name))
+		if err != nil {
+			t.Fatalf("resolving %s: %v", name, err)
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatalf("reading committed %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(scriptsDir, name), data, 0o755); err != nil {
+			t.Fatalf("writing fake %s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "fakerepo", ".env"), []byte(envContents), 0o644); err != nil {
+		t.Fatalf("writing fake .env: %v", err)
+	}
+
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("creating fake bin dir: %v", err)
+	}
+	logFile := filepath.Join(root, "log.txt")
+	writeStub := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("writing %s stub: %v", name, err)
+		}
+	}
+	// docker: the only thing up.sh/down.sh ever call it for is `docker
+	// compose ...` — logging the invocation together with DOCKER_HOST is
+	// enough to prove which daemon a call was aimed at, exactly like
+	// k3d_scripts_test.go's own docker stub does for the same purpose.
+	writeStub("docker", `#!/usr/bin/env bash
+echo "DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>}" >> "$LOGFILE"
+exit 0
+`)
+	// go: stands in for `go run ./harness/cmd/provision`. Never writes an
+	// estate file or edge environment — these tests do not need either, only
+	// that the provisioner was invoked, and up.sh's own "no edge endpoint
+	// provisioned" branch handles a missing edge.env file gracefully.
+	writeStub("go", `#!/usr/bin/env bash
+echo "GO_CALL: $*" >> "$LOGFILE"
+exit 0
+`)
+	// ssh: answers the GPU/CDI probes (nvidia-smi, nvidia-ctk) and the
+	// leftover-CDI-file check (test -f) as absent/false — these tests are not
+	// about the GPU path — and otherwise just logs and succeeds, the same
+	// "reports 0 regardless" shape production ssh has (see remote.sh), which
+	// is fine here: unlike the Kubernetes leg's tunnel_add_forward, up.sh only
+	// ever calls tunnel_up/tunnel_down, neither of which polls for
+	// confirmation.
+	writeStub("ssh", `#!/usr/bin/env bash
+echo "SSH_CALL: $*" >> "$LOGFILE"
+case "$*" in
+    *"nvidia-smi"*|*"nvidia-ctk"*|*"test -f"*)
+        exit 1
+        ;;
+esac
+exit 0
+`)
+	// No k3d/kubectl/helm on this PATH at all: down.sh's own
+	// `command -v k3d` guard is what is supposed to make its Kubernetes-leg
+	// probe a no-op on a machine that never installed it, and a fake
+	// repository standing in for a compose-only checkout is exactly that
+	// machine.
+
+	return &composeFakeRepo{e2eDir: e2eDir, binDir: binDir, logFile: logFile}
+}
+
+// run executes one of the fake repo's own scripts (up.sh or down.sh) with the
+// stub PATH prepended and the given extra environment entries, and returns
+// the script's own combined stdout+stderr, its ssh/docker/go invocation log,
+// and its exit code.
+func (r *composeFakeRepo) run(t *testing.T, scriptName string, extraEnv ...string) (output, log string, exitCode int) {
+	t.Helper()
+	script := filepath.Join(r.e2eDir, "scripts", scriptName)
+	cmd := exec.CommandContext(t.Context(), "bash", script)
+	env := append(os.Environ(), "PATH="+r.binDir+":"+os.Getenv("PATH"), "LOGFILE="+r.logFile)
+	env = append(env, extraEnv...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		} else {
+			t.Fatalf("running %s: %v\noutput:\n%s", scriptName, err, out)
+		}
+	}
+	logData, readErr := os.ReadFile(r.logFile)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("reading invocation log: %v", readErr)
+	}
+	return string(out), string(logData), code
+}
+
+// marker reads the compose leg's own marker (up.sh/down.sh never touch a
+// named leg's — that is the Kubernetes leg's own k3d_scripts_test.go's
+// concern), the same shape k3dFakeRepo.marker uses for its own default case.
+func (r *composeFakeRepo) marker() (string, bool) {
+	data, err := os.ReadFile(filepath.Join(r.e2eDir, ".docker-host"))
+	if os.IsNotExist(err) {
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimRight(string(data), "\n"), true
+}
+
+// seedMarker writes the compose leg's marker directly, standing in for an
+// earlier run's own record_docker_host call.
+func (r *composeFakeRepo) seedMarker(t *testing.T, dest string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(r.e2eDir, ".docker-host"), []byte(dest+"\n"), 0o644); err != nil {
+		t.Fatalf("seeding the compose marker: %v", err)
+	}
+}
+
+const fakeRemoteHost = "fake-remote-host-invented-for-this-test.invalid"
+
+// TestUnit_UpScript_PlainRunNeverTouchesTheHostNamedInEnv is the mutation-
+// proof for up.sh:21. A destination sitting in .env, with no
+// PORTAINER_E2E_REMOTE set (exactly what a plain `make e2e-up` gets), must
+// leave the docker compose call untouched — local, no DOCKER_HOST — and must
+// never invoke ssh at all. Replacing docker_ssh_dest with a bare
+// read_env_var, as a live review did, makes this red: the destination sitting
+// in .env would flow straight through with no flag required at all.
+func TestUnit_UpScript_PlainRunNeverTouchesTheHostNamedInEnv(t *testing.T) {
+	repo := newComposeFakeRepo(t, "PORTAINER_E2E_DOCKER_SSH="+fakeRemoteHost+"\n")
+
+	output, log, code := repo.run(t, "up.sh")
+	if code != 0 {
+		t.Fatalf("up.sh (plain run) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+
+	if !strings.Contains(log, "DOCKER_CALL:") {
+		t.Fatalf("up.sh never invoked docker compose; log:\n%s", log)
+	}
+	if strings.Contains(log, "DOCKER_HOST=ssh://") {
+		t.Errorf("up.sh's docker compose call carried a remote DOCKER_HOST despite no PORTAINER_E2E_REMOTE; log:\n%s", log)
+	}
+	if !strings.Contains(log, "DOCKER_HOST=<unset>") {
+		t.Errorf("up.sh's docker compose call did not target the local daemon; log:\n%s", log)
+	}
+	if strings.Contains(log, "SSH_CALL:") {
+		t.Errorf("up.sh invoked ssh at all despite no PORTAINER_E2E_REMOTE; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); ok {
+		t.Errorf("up.sh recorded a compose marker on a plain local run: (%q, %v)", dest, ok)
+	}
+}
+
+// TestUnit_UpScript_RemoteFlagUsesSSHDockerHostAndRecordsTheMarker is the
+// positive direction: PORTAINER_E2E_REMOTE=1 (what `make e2e-up-remote` sets)
+// must actually reach the docker compose call as DOCKER_HOST=ssh://... and
+// record the marker. Without this, the sibling test above could pass for the
+// wrong reason — a version that deleted remote support outright would also
+// never touch DOCKER_HOST or ssh.
+func TestUnit_UpScript_RemoteFlagUsesSSHDockerHostAndRecordsTheMarker(t *testing.T) {
+	repo := newComposeFakeRepo(t, "PORTAINER_E2E_DOCKER_SSH="+fakeRemoteHost+"\n")
+
+	output, log, code := repo.run(t, "up.sh", "PORTAINER_E2E_REMOTE=1")
+	if code != 0 {
+		t.Fatalf("up.sh (remote) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+
+	if !strings.Contains(log, "DOCKER_HOST=ssh://"+fakeRemoteHost) {
+		t.Errorf("up.sh's docker compose call did not target the remote daemon; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); !ok || dest != fakeRemoteHost {
+		t.Errorf("compose marker = (%q, %v), want the remote destination recorded", dest, ok)
+	}
+}
+
+// TestUnit_UpScript_RefusesAPlainRunWhenARemoteMarkerExists is I2's own
+// regression test, at the level the review named: a `make e2e-up-remote`
+// followed by a plain `make e2e-up` must refuse rather than silently orphan
+// the still-recorded remote estate. Before this guard existed,
+// record_docker_host's own unconditional "empty destination deletes the
+// marker" rule meant this exact sequence deleted the ONLY record of where the
+// remote estate, its Business Edition licence and its open ssh master
+// actually are — and did so as a side effect of a run that otherwise
+// completed and reported success.
+func TestUnit_UpScript_RefusesAPlainRunWhenARemoteMarkerExists(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+	repo.seedMarker(t, fakeRemoteHost)
+
+	output, log, code := repo.run(t, "up.sh")
+	if code == 0 {
+		t.Fatalf("up.sh (plain run) succeeded despite an existing remote marker; output:\n%s\nlog:\n%s", output, log)
+	}
+	if !strings.Contains(output, "refusing to continue") {
+		t.Errorf("up.sh did not report a refusal; output:\n%s", output)
+	}
+	if strings.Contains(log, "DOCKER_CALL:") {
+		t.Errorf("up.sh brought the estate up despite refusing the host switch; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); !ok || dest != fakeRemoteHost {
+		t.Errorf("compose marker changed after a refused run: (%q, %v), want it untouched at %q", dest, ok, fakeRemoteHost)
+	}
+}
+
+// TestUnit_UpScript_RefusesSwitchingToADifferentRemoteHost is the same guard
+// in its other direction: an existing remote marker and a NEW run naming a
+// different remote host must also refuse, not silently redirect teardown to
+// the new host while the old one's estate is still running unreachable.
+func TestUnit_UpScript_RefusesSwitchingToADifferentRemoteHost(t *testing.T) {
+	repo := newComposeFakeRepo(t, "PORTAINER_E2E_DOCKER_SSH="+fakeRemoteHost+"\n")
+	const otherHost = "a-different-remote-host.invalid"
+	repo.seedMarker(t, otherHost)
+
+	output, log, code := repo.run(t, "up.sh", "PORTAINER_E2E_REMOTE=1")
+	if code == 0 {
+		t.Fatalf("up.sh (remote) succeeded despite an existing marker naming a different host; output:\n%s\nlog:\n%s", output, log)
+	}
+	if !strings.Contains(output, "refusing to continue") {
+		t.Errorf("up.sh did not report a refusal; output:\n%s", output)
+	}
+	if strings.Contains(log, "DOCKER_CALL:") {
+		t.Errorf("up.sh brought the estate up despite refusing the host switch; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); !ok || dest != otherHost {
+		t.Errorf("compose marker changed after a refused run: (%q, %v), want it untouched at %q", dest, ok, otherHost)
+	}
+}
+
+// TestUnit_UpScript_AllowsReRunningAgainstTheSameRecordedDestination proves
+// the guard is not a blanket refusal: up.sh's own doc says it is idempotent
+// ("running it twice replaces the estate rather than accumulating one"), and
+// a second `make e2e-up-remote` against the SAME host an earlier run already
+// recorded must succeed, not be mistaken for a host switch.
+func TestUnit_UpScript_AllowsReRunningAgainstTheSameRecordedDestination(t *testing.T) {
+	repo := newComposeFakeRepo(t, "PORTAINER_E2E_DOCKER_SSH="+fakeRemoteHost+"\n")
+	repo.seedMarker(t, fakeRemoteHost)
+
+	output, log, code := repo.run(t, "up.sh", "PORTAINER_E2E_REMOTE=1")
+	if code != 0 {
+		t.Fatalf("up.sh (remote, re-run against the same host) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if !strings.Contains(log, "DOCKER_HOST=ssh://"+fakeRemoteHost) {
+		t.Errorf("up.sh's docker compose call did not target the remote daemon; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); !ok || dest != fakeRemoteHost {
+		t.Errorf("compose marker = (%q, %v), want the remote destination still recorded", dest, ok)
+	}
+}
+
+// TestUnit_DownScript_TearsDownAgainstTheRecordedMarker is the mutation-proof
+// for down.sh:20. With a marker recorded by an earlier (simulated) `up`, a
+// plain `make e2e-down` must tear down against THAT destination — the whole
+// point of the marker existing at all — and must clear it afterward.
+// Replacing `ssh_dest=$(recorded_docker_host)` with `ssh_dest=""`, as a live
+// review did, makes this red: down.sh would tear down locally regardless of
+// what the marker names.
+func TestUnit_DownScript_TearsDownAgainstTheRecordedMarker(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+	repo.seedMarker(t, fakeRemoteHost)
+
+	output, log, code := repo.run(t, "down.sh")
+	if code != 0 {
+		t.Fatalf("down.sh exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+
+	if !strings.Contains(log, "DOCKER_HOST=ssh://"+fakeRemoteHost) {
+		t.Errorf("down.sh's docker compose call did not target the recorded remote daemon; log:\n%s", log)
+	}
+	if strings.Contains(log, "DOCKER_HOST=<unset>") {
+		t.Errorf("down.sh also (or instead) tore down the local daemon; log:\n%s", log)
+	}
+	if dest, ok := repo.marker(); ok {
+		t.Errorf("down.sh left the compose marker behind: (%q, %v), want it cleared", dest, ok)
+	}
+}
+
+// TestUnit_DownScript_NoMarkerTearsDownLocally is the baseline (unmutated,
+// no earlier remote run) direction: with no marker at all, down.sh must tear
+// down the local daemon, exactly as it always has.
+func TestUnit_DownScript_NoMarkerTearsDownLocally(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+
+	output, log, code := repo.run(t, "down.sh")
+	if code != 0 {
+		t.Fatalf("down.sh exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if !strings.Contains(log, "DOCKER_HOST=<unset>") {
+		t.Errorf("down.sh's docker compose call did not target the local daemon; log:\n%s", log)
+	}
+	if strings.Contains(log, "DOCKER_HOST=ssh://") {
+		t.Errorf("down.sh's docker compose call targeted a remote daemon despite no recorded marker; log:\n%s", log)
+	}
+}

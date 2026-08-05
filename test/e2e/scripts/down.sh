@@ -50,24 +50,22 @@ cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 # the documented sequence.
 #
 # This whole probe runs in a subshell with its own DOCKER_HOST, deliberately
-# not the compose leg's exported above. The Kubernetes leg has no remote
-# wiring of its own yet — k3d-up.sh never calls record_docker_host, so its
-# marker is always absent and recorded_docker_host below always answers
-# local — but the compose leg above may well have just exported
-# DOCKER_HOST=ssh://truenas. Leaving that in place here would point `k3d
-# cluster list`, and any k3d-down.sh it triggers, at the compose leg's remote
-# daemon instead, where a cluster of this name never existed; the check
-# would then silently find nothing and skip a real cluster still running
-# locally with a Business Edition licence attached to it. Do not "simplify"
-# this back to a bare `if`: that silent skip is exactly the bug this
-# subshell exists to prevent, and it does not reproduce on any host that
-# does not already have a remote compose leg AND a local Kubernetes leg up
-# at once, which is precisely why it would go unnoticed in ordinary use.
-# The subshell also keeps the compose destination exported above intact for
-# everything below this block, which still has to run against it. Once
-# Task 7 wires remote support into k3d-up.sh (recording through
-# record_docker_host "$dest" "kubernetes"), this already reads the right
-# marker — there is nothing left to change here.
+# not the compose leg's exported above. k3d-up.sh records the Kubernetes
+# leg's OWN destination under its own marker (record_docker_host "$dest"
+# "kubernetes"), which can legitimately differ from the compose leg's — local
+# Kubernetes alongside a remote compose estate, a different remote host for
+# each, or either one alone — but the compose leg above may well have just
+# exported DOCKER_HOST=ssh://truenas. Leaving that in place here would point
+# `k3d cluster list`, and any k3d-down.sh it triggers, at the compose leg's
+# daemon instead of the Kubernetes leg's own recorded one; when the two
+# differ, the check would then silently find nothing and skip a real cluster
+# still running elsewhere with a Business Edition licence attached to it. Do
+# not "simplify" this back to a bare `if`: that silent skip is exactly the bug
+# this subshell exists to prevent, and it does not reproduce on any host
+# where the compose and Kubernetes legs happen to share the same destination,
+# which is precisely why it would go unnoticed in ordinary use. The subshell
+# also keeps the compose destination exported above intact for everything
+# below this block, which still has to run against it.
 (
     k8s_ssh_dest=$(recorded_docker_host kubernetes)
     if [[ -n "$k8s_ssh_dest" ]]; then

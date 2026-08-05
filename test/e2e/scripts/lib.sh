@@ -131,6 +131,36 @@ recorded_docker_host() {
     head -n1 "$marker"
 }
 
+# refuse_docker_host_switch dies with a clear message when leg's marker
+# already names a destination different from dest, the one this run is about
+# to use. Absence of an existing marker is never a mismatch -- it means no
+# earlier run recorded anything for this leg, so the first run (local or
+# remote) is always free to proceed and record. Re-running against the SAME
+# destination an existing marker already names is also not a mismatch: up.sh's
+# own doc says it is idempotent, and a second `make e2e-up-remote` against the
+# same host is exactly that, not a host switch.
+#
+# Call this before record_docker_host, never after: record_docker_host with an
+# empty destination DELETES the marker (see its own doc), and up.sh/k3d-up.sh
+# both call it unconditionally on every run. Without this guard, a plain
+# `make e2e-up` typed after `make e2e-up-remote` would resolve ssh_dest to
+# empty (make e2e-up never sets PORTAINER_E2E_REMOTE) and record_docker_host
+# would delete the ONLY record of where the earlier remote estate, its
+# Business Edition licence and its open ssh master actually are. `make
+# e2e-down` then reads no marker, tears down locally -- where nothing exists
+# -- and reports success while the real estate, licence and tunnel are all
+# still running, unreachable, on somebody else's machine.
+refuse_docker_host_switch() {
+    local dest="$1" leg="${2:-}" existing
+    existing=$(recorded_docker_host "$leg")
+    [[ -n "$existing" ]] || return 0
+    [[ "$existing" == "$dest" ]] && return 0
+    local legname="${leg:-compose}" marker
+    marker=$(docker_host_marker "$leg")
+    echo "refusing to continue: $marker already names '$existing' from an earlier, still-recorded $legname run, but this run would use '${dest:-the local docker daemon}'. Tear that estate down first with its own matching teardown target, or remove the marker by hand if you are certain it is stale and nothing is really running there." >&2
+    return 1
+}
+
 # on_docker_host runs a command on whichever machine the Docker daemon lives
 # on. With an empty destination that is this machine; otherwise it is over
 # SSH. BatchMode refuses to prompt: a script that blocks on a passphrase in
