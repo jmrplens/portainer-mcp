@@ -18,15 +18,32 @@ import (
 // any real network destination: the SSH "destination" used throughout is
 // an invented hostname that resolves nowhere.
 //
-// What a green run here proves, and what it does NOT: this proves the
-// SCRIPTS' own decisions — which marker they touch, what they pass to
-// ssh/kubectl/k3d, which branch of the remote-vs-local logic they took —
-// because a stub records exactly what it was asked to do. It does NOT
+// What a green run here proves, and what it does NOT: for each thing it
+// actually asserts on — which marker is touched, whether --gpus all is
+// passed, the exact `-L` spec tunnel_add_forward is asked for, which
+// destination k3d-down.sh tears down against — a stub records precisely
+// what it was asked to do, so a pass means the script really made that
+// decision. It is NOT a blanket claim that every ssh/kubectl/k3d invocation
+// is checked in full: only what an assertion below names. It does NOT
 // prove that a real k3d cluster, a real kubectl, or a real SSH connection
 // to a real Docker host behaves the way the stubs assume. That is what the
 // controller's live run against the real remote host is for (see
 // task-7-report.md); mistaking a green run here for "remote execution
 // verified" would be exactly the mistake this comment exists to prevent.
+//
+// A review round found this claim overstated for one specific call: the
+// original version here checked the resulting PORTAINER_E2E_K8S_URL but
+// never the arguments tunnel_add_forward was actually invoked with. Since
+// K8S_URL is built from local_port alone and never reflects the remote
+// target, two mutations at the k3d-up.sh call site — forwarding to
+// 127.0.0.1 instead of $server_ip, and pointing the remote end at $api_port
+// instead of $nodeport — both produced a live local port, a confident
+// "forward confirmed", and an unchanged, still-correct-looking K8S_URL.
+// The fix is TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort's
+// own assertion on the exact `-O forward -L <port>:<server_ip>:<port>`
+// invocation, below — the same thing tunnel_test.go's
+// TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive already
+// does for the underlying function; this does it at the call site too.
 //
 // These tests exist because a prior review round mutated the committed
 // scripts directly — dropping the "kubernetes" leg argument from either
@@ -107,6 +124,9 @@ if [[ "$*" == *"nvidia-smi"* ]]; then
         exit 0
     fi
     exit 1
+fi
+if [[ "$*" == *"-O forward"* ]]; then
+    touch "${LOGFILE}.forward-requested"
 fi
 exit 0
 `)
@@ -189,17 +209,37 @@ func (r *k3dFakeRepo) marker(leg string) (string, bool) {
 	return strings.TrimRight(string(data), "\n"), true
 }
 
-// startDelayedListener starts a real TCP listener at port only after a
-// short delay, standing in for "the NodePort forward became live shortly
-// after tunnel_add_forward requested it" — the same technique
+// startListenerAfterForwardRequested starts a real TCP listener at port
+// only once the stub ssh has actually logged an "-O forward" request
+// (signalled by a marker file the stub touches the instant it sees that
+// call), standing in for "the NodePort forward became live shortly after
+// tunnel_add_forward requested it" — the same idea
 // TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive uses, and
 // for the same reason: present only from partway through the call, so a
 // pass here proves the confirmation poll actually ran, not merely that
 // something happened to already be there.
-func startDelayedListener(t *testing.T, port int) {
+//
+// An earlier version used a fixed delay (time.Sleep(150ms)) instead of this
+// marker. That raced tunnel_add_forward's own PREFLIGHT check under load:
+// this test's baseline (correct, unmutated) run intermittently failed —
+// reproduced directly, 1 failure in an 11-run sample under a loaded
+// system — because the cumulative overhead of the dozen-odd stub process
+// spawns k3d-up.sh makes before ever reaching tunnel_add_forward
+// occasionally exceeded 150ms, so the listener came up BEFORE the
+// preflight check ran, and the preflight correctly rejected it as a
+// pre-existing occupant. Tying the listener's start to the actual
+// -O forward request (which the preflight always precedes, by
+// construction) removes the race instead of just narrowing it.
+func startListenerAfterForwardRequested(t *testing.T, forwardMarker string, port int) {
 	t.Helper()
 	go func() {
-		time.Sleep(150 * time.Millisecond)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(forwardMarker); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			return
@@ -214,27 +254,34 @@ func startDelayedListener(t *testing.T, port int) {
 
 // TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort is
 // the baseline (unmutated) remote run of k3d-up.sh. It pins, in one
-// end-to-end pass, the four decisions a later review found completely
-// uncovered:
+// end-to-end pass, five decisions a review found completely uncovered:
 //
 //  1. record_docker_host is called WITH the "kubernetes" leg argument — the
 //     Kubernetes marker is written, and the compose marker (.docker-host,
 //     with no suffix) is not.
 //  2. --gpus all is passed to `k3d cluster create` only when the GPU probe
 //     (stubbed here to report no GPU) found one — absent in this run.
-//  3. The NodePort is forwarded and PORTAINER_E2E_K8S_URL passed to the
-//     provisioner is the forwarded 127.0.0.1 address, not server_ip:nodeport
-//     directly.
-//  4. The API port's kubeconfig rewrite (kubectl config set-cluster) runs.
+//  3. tunnel_add_forward is asked for the RIGHT forward: `-L
+//     <port>:<server_ip>:<port>`, not merely some forward. This is the
+//     sharper check a first round of this test omitted: K8S_URL alone
+//     (checked below too) is built from local_port alone and stays
+//     identical whether the remote end names server_ip, 127.0.0.1, or the
+//     API port — so checking only the resulting URL let a misaimed forward
+//     through silently. See this file's own top-of-file comment for the
+//     two mutations that exposed this.
+//  4. PORTAINER_E2E_K8S_URL passed to the provisioner is the forwarded
+//     127.0.0.1 address, not server_ip:nodeport directly.
+//  5. The API port's kubeconfig rewrite (kubectl config set-cluster) runs.
 func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *testing.T) {
 	repo := newK3DFakeRepo(t)
 	port := reserveFreeTCPPort(t)
-	startDelayedListener(t, port)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+	const serverIP = "172.30.5.7"
 
 	output, log, code := repo.run(t, "k3d-up.sh",
 		"PORTAINER_E2E_REMOTE=1",
 		fmt.Sprintf("STUB_NODEPORT=%d", port),
-		"STUB_SERVER_IP=172.30.5.7",
+		"STUB_SERVER_IP="+serverIP,
 	)
 	if code != 0 {
 		t.Fatalf("k3d-up.sh (remote, no GPU) exited %d; output:\n%s\nlog:\n%s", code, output, log)
@@ -251,11 +298,23 @@ func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *
 		t.Errorf("k3d cluster create passed --gpus all with no GPU detected; log:\n%s", log)
 	}
 
+	// The exact forward request, not merely "a forward happened". A
+	// misaimed forward (wrong remote host, or the API port's number instead
+	// of the NodePort's) still produces a live local port, a confirmed
+	// poll, and — since K8S_URL is built from local_port alone — an
+	// UNCHANGED, still-correct-looking URL below. Only inspecting the
+	// actual `-L` spec catches that.
+	forward, _ := sshLineContaining(t, log, "-O forward")
+	wantSpec := fmt.Sprintf("-L %d:%s:%d", port, serverIP, port)
+	if !strings.Contains(forward, wantSpec) {
+		t.Errorf("tunnel_add_forward was not asked to forward to the k3d server's own address and NodePort; want %q in its ssh invocation:\n%s", wantSpec, forward)
+	}
+
 	wantURL := fmt.Sprintf("K8S_URL=https://127.0.0.1:%d", port)
 	if !strings.Contains(log, wantURL) {
 		t.Errorf("provisioner was not given the forwarded NodePort address; want %q in log:\n%s", wantURL, log)
 	}
-	if strings.Contains(log, fmt.Sprintf("K8S_URL=https://172.30.5.7:%d", port)) {
+	if strings.Contains(log, fmt.Sprintf("K8S_URL=https://%s:%d", serverIP, port)) {
 		t.Errorf("provisioner was given the raw server_ip:nodeport address instead of the forwarded one; log:\n%s", log)
 	}
 
@@ -272,7 +331,7 @@ func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *
 func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) {
 	repo := newK3DFakeRepo(t)
 	port := reserveFreeTCPPort(t)
-	startDelayedListener(t, port)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
 
 	output, log, code := repo.run(t, "k3d-up.sh",
 		"PORTAINER_E2E_REMOTE=1",
