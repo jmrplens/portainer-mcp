@@ -139,42 +139,57 @@ fi
 k8s_gpu=""
 if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.name}' >/dev/null 2>&1 \
    && docker exec "k3d-${cluster}-server-0" sh -c 'ls /dev/nvidia0' >/dev/null 2>&1; then
-    # The device plugin generates its own CDI specification, and that
-    # specification carries hooks invoking /usr/bin/nvidia-ctk. The k3s node
-    # image has no standard libc layout — neither /lib/ld-musl* nor
-    # /lib64/ld-linux-x86-64.so.2 — so a real nvidia-ctk cannot run there, and
-    # container creation fails with "fork/exec /usr/bin/nvidia-ctk: no such
-    # file or directory".
-    #
-    # The hook only has to exist and exit zero: the device nodes and the
-    # library mounts come from the specification itself, not from the hook.
-    # On the single-node cluster an earlier reconnaissance used, this alone
-    # was enough for a pod requesting nvidia.com/gpu:1 to run and report the
-    # real card. That result did NOT reproduce on the two-node (--agents 1)
-    # cluster this script actually creates: see docs/api-divergences.md
-    # §10.3, an open item this shim does not resolve by itself. Node capacity
-    # (what the DaemonSet below advertises, and what GetKubernetesGPUInfo
-    # will read) is reliable; a scheduled GPU workload is not, yet.
-    #
-    # Installed on EVERY node of the cluster, not just the server. The
-    # DaemonSet's own tolerations (`operator: Exists`, see
-    # test/e2e/k8s/nvidia-device-plugin.yaml) schedule it onto both nodes of
-    # this --agents 1 cluster, and a plugin pod on a node with no shim fails
-    # exactly like §10.3's open item the moment it tries to create a
-    # container. An earlier version of this script wrote the shim only onto
-    # server-0; kubectl's own node listing is not guaranteed to sort the
-    # server node first, and in practice
-    # test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts to
-    # agent-0 — the node that version left without a shim.
-    for node in "k3d-${cluster}-server-0" "k3d-${cluster}-agent-0"; do
-        docker exec "$node" sh -c \
-            'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
-    done
-    kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
-    kubectl --context "k3d-$cluster" -n kube-system rollout status \
-        daemonset/nvidia-device-plugin --timeout=180s
-    k8s_gpu="1"
-    echo "gpu advertised to the kubernetes leg" >&2
+    # test/e2e/k8s/nvidia-device-plugin.yaml hardcodes /usr/lib/x86_64-linux-gnu
+    # as the node's driver library directory (its host-libs volume) — a
+    # Debian/amd64 assumption. On a node whose driver libraries live
+    # elsewhere (arm64, a non-Debian base image) the plugin's pods crash-loop
+    # on a missing LD_LIBRARY_PATH target, and the rollout wait below would
+    # burn the full 180s before failing and aborting this script under
+    # set -euo pipefail — with the cluster (and, if remote, the SSH tunnel to
+    # it) still running, since `k3d cluster create` installs no cleanup trap.
+    # Probing for the directory first turns that into an immediate, named
+    # skip instead.
+    if ! docker exec "k3d-${cluster}-server-0" sh -c 'ls /usr/lib/x86_64-linux-gnu/libcuda.so.*' >/dev/null 2>&1; then
+        echo "warning: gpu detected on the kubernetes node but /usr/lib/x86_64-linux-gnu (the driver library path test/e2e/k8s/nvidia-device-plugin.yaml hardcodes) is missing there; continuing without the kubernetes leg's GPU" >&2
+    else
+        # The device plugin generates its own CDI specification, and that
+        # specification carries hooks invoking /usr/bin/nvidia-ctk. The k3s
+        # node image has no standard libc layout — neither /lib/ld-musl* nor
+        # /lib64/ld-linux-x86-64.so.2 — so a real nvidia-ctk cannot run there,
+        # and container creation fails with "fork/exec /usr/bin/nvidia-ctk: no
+        # such file or directory".
+        #
+        # The hook only has to exist and exit zero: the device nodes and the
+        # library mounts come from the specification itself, not from the
+        # hook. On the single-node cluster an earlier reconnaissance used,
+        # this alone was enough for a pod requesting nvidia.com/gpu:1 to run
+        # and report the real card. That result did NOT reproduce on the
+        # two-node (--agents 1) cluster this script actually creates: see
+        # docs/api-divergences.md §10.3, an open item this shim does not
+        # resolve by itself. Node capacity (what the DaemonSet below
+        # advertises, and what GetKubernetesGPUInfo will read) is reliable; a
+        # scheduled GPU workload is not, yet.
+        #
+        # Installed on EVERY node of the cluster, not just the server. The
+        # DaemonSet's own tolerations (`operator: Exists`, see
+        # test/e2e/k8s/nvidia-device-plugin.yaml) schedule it onto both nodes
+        # of this --agents 1 cluster, and a plugin pod on a node with no shim
+        # fails exactly like §10.3's open item the moment it tries to create a
+        # container. An earlier version of this script wrote the shim only
+        # onto server-0; kubectl's own node listing is not guaranteed to sort
+        # the server node first, and in practice
+        # test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts to
+        # agent-0 — the node that version left without a shim.
+        for node in "k3d-${cluster}-server-0" "k3d-${cluster}-agent-0"; do
+            docker exec "$node" sh -c \
+                'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
+        done
+        kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
+        kubectl --context "k3d-$cluster" -n kube-system rollout status \
+            daemonset/nvidia-device-plugin --timeout=180s
+        k8s_gpu="1"
+        echo "gpu advertised to the kubernetes leg" >&2
+    fi
 else
     echo "no GPU on the kubernetes node: GPU suites will skip" >&2
 fi

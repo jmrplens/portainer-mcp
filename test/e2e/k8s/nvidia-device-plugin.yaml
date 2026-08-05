@@ -97,3 +97,4 @@ spec:
         - name: host-libs
           hostPath:
             path: /usr/lib/x86_64-linux-gnu
+            type: Directory

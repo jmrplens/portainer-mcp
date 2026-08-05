@@ -159,6 +159,14 @@ exit 0
 	// real script's own gate never granted. Any OTHER "exec" call (the
 	// nvidia-ctk shim write) falls through to the generic success below, so
 	// it is only ever checked through the log, never made to fail here.
+	//
+	// The "libcuda.so" branch answers k3d-up.sh's own probe for the driver
+	// library directory the device plugin manifest hardcodes
+	// (/usr/lib/x86_64-linux-gnu). It succeeds by default — every existing
+	// GPU-present test in this file expects the device plugin to be applied
+	// — and only STUB_LIBCUDA_MISSING=1 makes it fail, standing in for a node
+	// whose driver libraries live somewhere else entirely (arm64, a
+	// non-Debian base image).
 	writeStub("docker", `#!/usr/bin/env bash
 echo "DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>}" >> "$LOGFILE"
 if [[ "$1" == "inspect" ]]; then
@@ -170,6 +178,12 @@ if [[ "$1" == "exec" && "$*" == *"nvidia0"* ]]; then
         exit 0
     fi
     exit 1
+fi
+if [[ "$1" == "exec" && "$*" == *"libcuda.so"* ]]; then
+    if [[ "${STUB_LIBCUDA_MISSING:-0}" == "1" ]]; then
+        exit 1
+    fi
+    exit 0
 fi
 exit 0
 `)
@@ -502,6 +516,53 @@ func TestUnit_K3DUpScript_InstallsTheNvidiaCtkShimOnEveryNode(t *testing.T) {
 		if !strings.Contains(log, want) {
 			t.Errorf("k3d-up.sh did not write the nvidia-ctk shim on %s; log:\n%s", node, log)
 		}
+	}
+}
+
+// TestUnit_K3DUpScript_MissingDriverLibrariesSkipsTheDevicePluginRatherThanAborting
+// is the regression test for the node-library probe k3d-up.sh now runs before
+// applying the device plugin. test/e2e/k8s/nvidia-device-plugin.yaml
+// hardcodes /usr/lib/x86_64-linux-gnu (a Debian/amd64 path) as the node's
+// driver library directory. Without this probe, a GPU-and-toolkit-detected
+// run on a node whose driver libraries live elsewhere would apply the
+// manifest anyway, then wait the full 180s on `rollout status` before
+// aborting under set -euo pipefail — with the cluster (and, remotely, its
+// SSH tunnel) left running, since `k3d cluster create` installs no cleanup
+// trap.
+//
+// The driver, toolkit and /dev/nvidia0 stubs all report success — this is
+// otherwise exactly TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate's
+// own setup — and only the libcuda probe is made to fail, isolating this
+// specific gate from the others already covered above.
+func TestUnit_K3DUpScript_MissingDriverLibrariesSkipsTheDevicePluginRatherThanAborting(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	output, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		"STUB_GPU_PRESENT=1",
+		"STUB_TOOLKIT_PRESENT=1",
+		"STUB_LIBCUDA_MISSING=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (gpu present, driver libraries missing on the node) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+	if strings.Contains(log, "apply -f ./k8s/nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh applied the nvidia device plugin despite the node missing its hardcoded driver library path; log:\n%s", log)
+	}
+	if strings.Contains(log, "rollout status") {
+		t.Errorf("k3d-up.sh waited on the device plugin's rollout despite never applying it; log:\n%s", log)
+	}
+	for _, want := range []string{"/usr/lib/x86_64-linux-gnu", "nvidia-device-plugin.yaml"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("k3d-up.sh's warning did not name %q so a reader knows where to look; output:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "gpu advertised to the kubernetes leg") {
+		t.Errorf("k3d-up.sh reported the gpu as advertised despite skipping the device plugin; output:\n%s", output)
 	}
 }
 
