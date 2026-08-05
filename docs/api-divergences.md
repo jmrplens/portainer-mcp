@@ -1013,6 +1013,21 @@ state and watching the plugin's own write succeed or fail.
 Whoever picks this up next should start there: does the plugin actually
 write `/etc/cdi/k8s.device-plugin.nvidia.com-gpu.json` at all (permissions?
 does the hostPath mount even allow it to?), and does containerd's own
-configuration point at the same directory the plugin writes to. Until this
-is resolved, treat `nvidia.com/gpu` capacity on the Kubernetes leg as
+configuration point at the same directory the plugin writes to.
+
+**A second, unverified candidate cause**, not yet ruled out and not
+mutually exclusive with the one above: until this branch's own review, the
+`nvidia-ctk` shim (§10.2's two-line `#!/bin/sh` / `exit 0` file) was
+installed on `k3d-<cluster>-server-0` only, never on the cluster's agent
+node — a gap fixed alongside this write-up. If the pod whose failure is
+quoted above happened to schedule on the node without the shim, the
+`unresolvable CDI devices` error could be this gap surfacing under a
+different name, rather than (or in addition to) the empty-`/etc/cdi`
+hypothesis. This has not been tested either way: the fix landed without a
+hardware run to confirm or rule it out, so it is recorded here as a second
+hypothesis, not a second finding. Whoever reproduces this next should check
+which node the failing pod actually landed on before assuming the first
+hypothesis is the whole story.
+
+Until this is resolved, treat `nvidia.com/gpu` capacity on the Kubernetes leg as
 reliable, and a scheduled GPU workload there as unverified.
