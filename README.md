@@ -300,7 +300,9 @@ specification under `/tmp` — is removed by teardown.
 different levels of confidence. The Docker leg is confirmed end to end: the containers Portainer
 manages get the card through a hookless CDI specification bind-mounted into the estate's own dind
 (nested `--gpus` cannot work there — see `docs/api-divergences.md`), and a container that requests it
-reports the real device. The Kubernetes leg is confirmed only as far as **node capacity** — the k3s
+reports the real device. That leg's override (`test/e2e/docker-compose.gpu.yml`, applying the `gpus:`
+key) needs Docker Compose v2.30 or newer on the Docker host — an older Compose does not understand
+the key. The Kubernetes leg is confirmed only as far as **node capacity** — the k3s
 node advertises `nvidia.com/gpu`, which is the fact `GetKubernetesGPUInfo` reads — not as far as
 running a workload through it: a pod that *claims* the GPU still fails at container creation with
 `unresolvable CDI devices …`, an open item recorded in `docs/api-divergences.md` §10.3. No extra key

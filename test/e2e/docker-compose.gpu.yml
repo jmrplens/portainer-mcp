@@ -2,6 +2,10 @@
 # Without it the estate is exactly what it has always been, so a machine
 # without a GPU sees no change at all.
 #
+# The `gpus:` key below needs Docker Compose v2.30 or newer; an older Compose
+# on the Docker host silently ignores or rejects it rather than granting the
+# device.
+#
 # Two edits to the dind, and nothing else:
 #
 #   gpus: all       gives the dind container the device nodes and the driver
