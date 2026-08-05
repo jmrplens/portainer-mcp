@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sourceRemote runs script with test/e2e/scripts/remote.sh sourced, with a
@@ -94,6 +95,17 @@ func TestUnit_TunnelUp_ForwardsEveryRequestedPortFromTheRemoteLoopback(t *testin
 		// non-zero exit here, rather than a suite that starts and then fails
 		// against whatever else is listening on 19000.
 		"-o ExitOnForwardFailure=yes",
+		// AddressFamily=inet is what makes ExitOnForwardFailure's own promise
+		// actually hold. Measured directly against a real sshd: without it, a
+		// taken 127.0.0.1:<port> makes ssh silently retry the bind on ::1 and
+		// exit 0 once THAT succeeds -- ExitOnForwardFailure never fires,
+		// because as far as ssh is concerned the forward did not fail, it just
+		// landed somewhere else. It also has to live here, on the master's own
+		// connection, rather than on any later per-forward request: measured
+		// separately, the same option passed to `ssh -O forward` has no
+		// effect, because the address family is negotiated once, when this
+		// connection is established.
+		"-o AddressFamily=inet",
 		// BatchMode refuses to prompt and ConnectTimeout bounds the attempt:
 		// without either, a missing or stale key turns a CI failure into a
 		// hang until the job itself times out.
@@ -216,16 +228,33 @@ func TestUnit_TunnelAddForward_NoDestinationInvokesNoSSH(t *testing.T) {
 // against the SAME control socket tunnel_up would have bound, requesting a
 // forward to an arbitrary remote host:port, not the destination's own
 // loopback), and the function actually confirms liveness rather than
-// trusting ssh's exit code — a real listener stands in for what a genuine
-// `-O forward` would have made answer on this port.
+// trusting ssh's exit code.
+//
+// The listener standing in for "the forward is now live" is started only
+// AFTER a short delay, deliberately — not present when the call begins.
+// That is what exercises both checks rather than either one alone: if it
+// were listening from the start, this would pass even with the preflight
+// check deleted (there would be nothing for the preflight to reject, since
+// by construction it looks identical to a genuine forward already being
+// up); started only after the request, it can only be observed by the
+// POLL, proving that half of the function actually runs and actually
+// waits rather than checking once and giving up.
 func TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a local port: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-	port := ln.Addr().(*net.TCPAddr).Port
+	port := reserveFreeTCPPort(t)
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return
+		}
+		defer func() { _ = ln.Close() }()
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
 
 	script := fmt.Sprintf(
 		`if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; else echo RESULT:failure; fi`,
@@ -233,7 +262,7 @@ func TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive(t *testing.
 	log, sock, out, _ := sourceRemoteCapturingResult(t, script)
 
 	if !strings.Contains(out, "RESULT:success") {
-		t.Fatalf("tunnel_add_forward did not report success even though something answers the local port; stdout was %q, ssh log:\n%s", out, log)
+		t.Fatalf("tunnel_add_forward did not report success even though the forward became live; stdout was %q, ssh log:\n%s", out, log)
 	}
 	forward, _ := sshLineContaining(t, log, "-O forward")
 	for _, want := range []string{
@@ -250,22 +279,15 @@ func TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive(t *testing.
 // TestUnit_TunnelAddForward_FailsWhenNothingAnswersTheLocalPort is the
 // discriminator for the whole reason this function polls rather than
 // trusting `ssh -O forward`'s own exit code: measured directly (see
-// remote.sh's own comment), that exit code is 0 even when the requested
-// local bind failed. With nothing listening on the chosen port, a version
-// that trusted ssh's exit code would report success here; the real
+// remote.sh's own comment), that exit code can be 0 even when the requested
+// forward never came up. With nothing ever listening on the chosen port, a
+// version that trusted ssh's exit code would report success here; the real
 // function must report failure, with a diagnostic explaining why.
 // PORTAINER_E2E_TUNNEL_FORWARD_RETRIES is lowered so this does not cost the
 // real-world ~4s budget on every run.
 func TestUnit_TunnelAddForward_FailsWhenNothingAnswersTheLocalPort(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a local port: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := ln.Close(); err != nil {
-		t.Fatalf("freeing the reserved port: %v", err)
-	}
+	port := reserveFreeTCPPort(t)
 
 	script := fmt.Sprintf(
 		`export PORTAINER_E2E_TUNNEL_FORWARD_RETRIES=2
@@ -279,4 +301,59 @@ if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; els
 	if !strings.Contains(stderrOut, "could not confirm the forward") {
 		t.Errorf("tunnel_add_forward's failure carried no diagnostic; stderr was %q", stderrOut)
 	}
+}
+
+// TestUnit_TunnelAddForward_FailsWhenSomethingAlreadyOccupiesTheLocalPort is
+// the direct regression test for a false positive a live review reproduced
+// against a real sshd: with an unrelated process already holding
+// 127.0.0.1:<port> before this is ever called, ssh's own `-O forward` can
+// silently satisfy the request on ::1 instead and still exit 0 (see
+// tunnel_up's AddressFamily=inet comment for the mechanism) — and even once
+// that is closed, `-O forward` against an already-occupied port simply
+// fails without disturbing the pre-existing occupant, so a poll afterwards
+// would still connect to it and report success for a forward that was
+// never made. This is what the preflight check exists to catch, and it
+// must catch it BEFORE ever asking ssh for anything: the stub ssh here
+// answers every request with an unconditional exit 0 (exactly the trap),
+// so if the preflight did not short-circuit first, this test would pass
+// for the wrong reason.
+func TestUnit_TunnelAddForward_FailsWhenSomethingAlreadyOccupiesTheLocalPort(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a local port: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	script := fmt.Sprintf(
+		`if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; else echo RESULT:failure; fi`,
+		port, port)
+	log, _, out, stderrOut := sourceRemoteCapturingResult(t, script)
+
+	if !strings.Contains(out, "RESULT:failure") {
+		t.Fatalf("tunnel_add_forward reported success with an unrelated process already occupying the port; stdout was %q, ssh log:\n%s", out, log)
+	}
+	if !strings.Contains(stderrOut, "already listening") {
+		t.Errorf("tunnel_add_forward's failure carried no diagnostic about the pre-existing occupant; stderr was %q", stderrOut)
+	}
+	if strings.Contains(log, "-O forward") {
+		t.Errorf("tunnel_add_forward asked ssh for a forward despite the port already being occupied; ssh log:\n%s", log)
+	}
+}
+
+// reserveFreeTCPPort returns a TCP port free at the moment of the call, by
+// binding then immediately releasing it. The small window before a caller
+// rebinds it is an accepted, ordinary risk in this style of test.
+func reserveFreeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a local port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("freeing the reserved port: %v", err)
+	}
+	return port
 }
