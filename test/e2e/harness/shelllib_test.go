@@ -254,6 +254,10 @@ func TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi(t *testing.T
 	dir := t.TempDir()
 	// A PATH containing only this empty directory guarantees nvidia-smi is
 	// absent regardless of what the machine running the test actually has.
+	// It also makes the nested "bash -c" inside on_docker_host's local branch
+	// unresolvable, which fails on_docker_host outright rather than merely
+	// failing "command -v nvidia-smi" inside it — both converge on the same
+	// "if !" capture in detect_gpu_name, so either way the result is empty.
 	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+` detect_gpu_name ""`), "\n")
 	if got != "" {
 		t.Errorf("detect_gpu_name on a host without nvidia-smi = %q, want empty", got)
@@ -269,6 +273,36 @@ func TestUnit_DetectGPUName_ReportsTheFirstGPUsName(t *testing.T) {
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "nvidia-smi")
 	body := "#!/usr/bin/env bash\nprintf 'NVIDIA GeForce RTX 4060\\nNVIDIA GeForce RTX 3090\\n'\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing nvidia-smi stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH detect_gpu_name ""`), "\n")
+	if got != "NVIDIA GeForce RTX 4060" {
+		t.Errorf("detect_gpu_name = %q, want %q", got, "NVIDIA GeForce RTX 4060")
+	}
+}
+
+// TestUnit_DetectGPUName_DoesNotDiscardAGPUWhenTheQueryOutlivesTheFirstLine
+// guards a regression this file's history already fixed once: a version of
+// detect_gpu_name that piped "nvidia-smi ... | head -n1" with pipefail set
+// discarded a real GPU's name almost every time on a multi-GPU host. head
+// reads its first line and exits, closing the pipe; if nvidia-smi is still
+// writing its next line at that moment it dies with SIGPIPE (141); pipefail
+// promotes that 141 to the capture's exit status, and "if !" reads it as
+// failure, discarding a raw value that was already correct.
+//
+// TestUnit_DetectGPUName_ReportsTheFirstGPUsName's stub writes both lines in
+// one printf with no gap between them, so head is never in a position to
+// close the pipe while nvidia-smi still has something left to write — that
+// stub cannot reproduce the bug it looks like it should catch, and did not:
+// reintroducing the pipefail+head form passed 20/20 against it. This stub
+// pauses between the two writes long enough to force the collision
+// deterministically instead.
+func TestUnit_DetectGPUName_DoesNotDiscardAGPUWhenTheQueryOutlivesTheFirstLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nvidia-smi")
+	body := "#!/usr/bin/env bash\nprintf 'NVIDIA GeForce RTX 4060\\n'\nsleep 0.05\nprintf 'NVIDIA GeForce RTX 3090\\n'\n"
 	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
 		t.Fatalf("writing nvidia-smi stub: %v", err)
 	}
@@ -324,7 +358,10 @@ func TestUnit_CDIDeviceID_ReturnsTheConstantNvidiaGPUAllDevice(t *testing.T) {
 // GPU still works.
 //
 // gpu_cdi_spec returns before ever reaching strip_cdi_hooks on this path
-// (the "if ! raw=$(...)" capture fails and returns early), so a PATH
+// (the "if ! raw=$(...)" capture fails and returns early — either because
+// "command -v nvidia-ctk" genuinely fails, or, with a PATH this empty,
+// because the nested "bash -c" inside on_docker_host's local branch is
+// itself unresolvable; both converge on the same capture failing), so a PATH
 // containing nothing at all is safe here: unlike an earlier version of this
 // function, awk is never invoked, so there is nothing to symlink onto PATH
 // the way TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi
@@ -425,5 +462,37 @@ func TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery(t *te
 	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH detect_gpu_name ""`), "\n")
 	if got != "" {
 		t.Errorf("detect_gpu_name with a mid-query failure = %q, want empty", got)
+	}
+}
+
+// TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails guards the
+// last path in either GPU function that could still kill a caller.
+// strip_cdi_hooks's only dependency is awk; an earlier version of
+// gpu_cdi_spec ran "printf ... | strip_cdi_hooks" bare, so a broken awk's
+// exit status escaped as gpu_cdi_spec's own, and under a caller's
+// set -euo pipefail that terminates the whole script. Verified directly:
+// shadowing awk with a stub that exits 127, with nvidia-ctk otherwise
+// succeeding, made a statement placed right after the call never run.
+func TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ctkStub := filepath.Join(dir, "nvidia-ctk")
+	ctkBody := "#!/usr/bin/env bash\ncat <<'CDIEOF'\n" +
+		"cdiVersion: 0.7.0\n" +
+		"kind: nvidia.com/gpu\n" +
+		"containerEdits:\n" +
+		"    deviceNodes:\n" +
+		"        - path: /dev/nvidiactl\n" +
+		"CDIEOF\n"
+	if err := os.WriteFile(ctkStub, []byte(ctkBody), 0o700); err != nil {
+		t.Fatalf("writing nvidia-ctk stub: %v", err)
+	}
+	awkStub := filepath.Join(dir, "awk")
+	if err := os.WriteFile(awkStub, []byte("#!/usr/bin/env bash\nexit 127\n"), 0o700); err != nil {
+		t.Fatalf("writing failing awk stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH gpu_cdi_spec ""`), "\n")
+	if got != "" {
+		t.Errorf("gpu_cdi_spec with a failing awk = %q, want empty", got)
 	}
 }

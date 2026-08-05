@@ -238,13 +238,25 @@ detect_gpu_name() {
 # the caller unstripped. Capturing into a variable first removes the pipe
 # from this function entirely, so that trap cannot recur here even by
 # accident.
+#
+# The local pipe into strip_cdi_hooks is captured the same way, for the same
+# reason: "printf ... | strip_cdi_hooks" run bare would let a broken awk (the
+# filter's only dependency) escape as this function's own exit status, and
+# under a caller's set -euo pipefail that kills the whole script — the one
+# failure mode every other path in both GPU functions was already closed
+# against. Verified directly: shadowing awk with a stub that exits 127, with
+# nvidia-ctk otherwise succeeding, made the bare pipe form propagate 127 and
+# a statement placed right after the call never ran.
 gpu_cdi_spec() {
-    local dest="$1" raw
+    local dest="$1" raw stripped
     if ! raw=$(on_docker_host "$dest" \
         'command -v nvidia-ctk >/dev/null 2>&1 && nvidia-ctk cdi generate --format=yaml 2>/dev/null' \
         2>/dev/null); then
         return 0
     fi
     [[ -n "$raw" ]] || return 0
-    printf '%s\n' "$raw" | strip_cdi_hooks
+    if ! stripped=$(printf '%s\n' "$raw" | strip_cdi_hooks); then
+        return 0
+    fi
+    printf '%s\n' "$stripped"
 }
