@@ -371,6 +371,28 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 // of the provisioner call alone would not catch a script that swallowed
 // the failure and exited 0 anyway.
 //
+// A third thing is asserted for a reason that has nothing to do with the
+// forward itself: the kubernetes marker must still be recorded even though
+// this run fails, and the compose marker must still be untouched.
+// record_docker_host "$ssh_dest" kubernetes runs early in the real script —
+// before cluster creation, before any of this — specifically so a run that
+// dies partway through remains tearable down against the right host. That
+// ordering is not enforced by anything the language checks; it is a
+// convention a later edit could disturb without any type error, any lint
+// warning, or any OTHER assertion in this file noticing, because every
+// other test here only exercises the SUCCESS path, where the marker gets
+// written either way regardless of when the line runs. If it moved to just
+// before the final "kubernetes leg ready" echo — a plausible-looking
+// "consolidate the bookkeeping at the end" edit — a run that fails here,
+// before ever reaching that echo, would leave NO marker at all. The
+// consequence is not merely "a test would have caught this": with no
+// marker, `k3d-down.sh` reads no destination, never exports DOCKER_HOST,
+// and runs `k3d cluster delete` against the LOCAL daemon, where no such
+// cluster exists — a silent no-op, exit 0, no warning. The real cluster,
+// its Business Edition licence assignment, and the SSH master tunnel_up
+// opened all stay orphaned on somebody's actual machine, and the teardown
+// that was supposed to catch that reports success.
+//
 // No startListenerAfterForwardRequested call here — that omission is the
 // whole point: nothing ever answers this port, so tunnel_add_forward's
 // poll must time out. PORTAINER_E2E_TUNNEL_FORWARD_RETRIES is lowered so
@@ -390,6 +412,16 @@ func TestUnit_K3DUpScript_ExitsBeforeProvisioningWhenTheForwardIsNeverConfirmed(
 	}
 	if strings.Contains(log, "GO_CALL") {
 		t.Errorf("k3d-up.sh invoked the provisioner despite the NodePort forward never being confirmed; log:\n%s", log)
+	}
+
+	// The marker must survive this failure — see the comment above for why
+	// its absence is not merely wrong bookkeeping, but an orphaned remote
+	// cluster, licence and tunnel that teardown will silently fail to find.
+	if dest, ok := repo.marker("kubernetes"); !ok || dest != "fake-remote-host-invented-for-this-test.invalid" {
+		t.Errorf("kubernetes marker = (%q, %v) after a failed run, want the fake destination still recorded so teardown can find the right host", dest, ok)
+	}
+	if _, ok := repo.marker(""); ok {
+		t.Errorf("k3d-up.sh wrote the compose leg's own marker (.docker-host) on a failed run; it must never touch that one")
 	}
 }
 
