@@ -20,6 +20,16 @@ func sourceLib(t *testing.T, script string) string {
 		t.Fatalf("resolving lib.sh: %v", err)
 	}
 	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
+	// PORTAINER_E2E_REMOTE="" overrides whatever the developer's own shell
+	// happens to export, so a test's own inline "PORTAINER_E2E_REMOTE=1 some_fn
+	// ..." prefix (a bash per-command assignment, which always wins over the
+	// inherited environment for that one command regardless of what is set
+	// here) is still the only way any of these calls sees it set. Without
+	// this, TestUnit_DockerSSHDest_NeedsBothTheFlagAndTheKey's own
+	// "key present but no flag yields local" case — the guard the repository
+	// owner asked for by name — silently flips to reporting a destination the
+	// moment PORTAINER_E2E_REMOTE=1 is exported in the shell running `go test`.
+	cmd.Env = append(os.Environ(), "PORTAINER_E2E_REMOTE=")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -103,6 +113,12 @@ func TestUnit_DockerSSHDest_NeedsBothTheFlagAndTheKey(t *testing.T) {
 	// skip every GPU suite and report green.
 	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c",
 		"source ../scripts/lib.sh\nPORTAINER_E2E_REMOTE=1 docker_ssh_dest "+noKey)
+	// See sourceLib's own comment: this call's own inline
+	// "PORTAINER_E2E_REMOTE=1" prefix already wins over whatever this clears,
+	// but leaving the developer's shell to flow in here uncleared would still
+	// be one more untested assumption about what this exec.Cmd actually runs
+	// with, at exactly the site the review named by name.
+	cmd.Env = append(os.Environ(), "PORTAINER_E2E_REMOTE=")
 	if err := cmd.Run(); err == nil {
 		t.Error("docker_ssh_dest with the flag set and no key succeeded; want a non-zero exit")
 	}
@@ -312,6 +328,10 @@ func runLib(t *testing.T, script string) (string, error) {
 		t.Fatalf("resolving lib.sh: %v", err)
 	}
 	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
+	// See sourceLib's own comment: cleared here for the same reason, so this
+	// helper's callers are not exposed to whatever the developer's own shell
+	// happens to export.
+	cmd.Env = append(os.Environ(), "PORTAINER_E2E_REMOTE=")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

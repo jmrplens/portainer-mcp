@@ -244,7 +244,13 @@ func (r *k3dFakeRepo) runWithPath(t *testing.T, scriptName, path string, extraEn
 	t.Helper()
 	script := filepath.Join(r.e2eDir, "scripts", scriptName)
 	cmd := exec.CommandContext(t.Context(), "bash", script)
-	env := append(os.Environ(), "PATH="+path, "LOGFILE="+r.logFile)
+	// PORTAINER_E2E_REMOTE="" is appended BEFORE extraEnv for the same reason
+	// compose_scripts_test.go's own run() does: exec.Cmd keeps only the LAST
+	// occurrence of a duplicate key, so a test that actually wants remote
+	// behaviour (extraEnv containing "PORTAINER_E2E_REMOTE=1", which every
+	// test in this file does) still wins, while a value the developer's own
+	// shell happens to export does not silently leak into this run.
+	env := append(os.Environ(), "PATH="+path, "LOGFILE="+r.logFile, "PORTAINER_E2E_REMOTE=")
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()

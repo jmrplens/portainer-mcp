@@ -125,7 +125,16 @@ func (r *composeFakeRepo) run(t *testing.T, scriptName string, extraEnv ...strin
 	t.Helper()
 	script := filepath.Join(r.e2eDir, "scripts", scriptName)
 	cmd := exec.CommandContext(t.Context(), "bash", script)
-	env := append(os.Environ(), "PATH="+r.binDir+":"+os.Getenv("PATH"), "LOGFILE="+r.logFile)
+	// PORTAINER_E2E_REMOTE="" is appended BEFORE extraEnv, deliberately: Go's
+	// exec.Cmd keeps only the LAST occurrence of a duplicate key, so a test
+	// that actually wants remote behaviour (extraEnv containing
+	// "PORTAINER_E2E_REMOTE=1") still wins. Without this, a developer running
+	// `PORTAINER_E2E_REMOTE=1 go test ./test/e2e/harness/...` in their own
+	// shell would have that value flow into os.Environ() and silently reach
+	// every "plain run" test below as if PORTAINER_E2E_REMOTE=1 had been
+	// requested, even though CI never sets it and nothing here ever asked for
+	// remote behaviour.
+	env := append(os.Environ(), "PATH="+r.binDir+":"+os.Getenv("PATH"), "LOGFILE="+r.logFile, "PORTAINER_E2E_REMOTE=")
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
