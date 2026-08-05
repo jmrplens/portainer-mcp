@@ -45,6 +45,35 @@ func sourceRemote(t *testing.T, script string) (log, sock string) {
 	return string(data), sock
 }
 
+// sshLineContaining returns the single logged ssh invocation containing
+// marker, together with its position among the logged lines (so a caller can
+// also assert relative order between two invocations). It fails the test
+// unless exactly one line matches: zero means the invocation never happened,
+// and more than one would make "the line containing marker" itself
+// ambiguous — a helper that tolerated either would reintroduce the same
+// whole-log vagueness this exists to rule out. tunnel_up logs two
+// invocations (a cleanup and a master), so a plain strings.Contains over the
+// whole log cannot tell which one a flag or value belongs to; this pins an
+// assertion to one specific call.
+func sshLineContaining(t *testing.T, log, marker string) (line string, index int) {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+	found := -1
+	for i, l := range lines {
+		if strings.Contains(l, marker) {
+			if found != -1 {
+				t.Fatalf("more than one ssh invocation contained %q; log was:\n%s", marker, log)
+			}
+			found = i
+			line = l
+		}
+	}
+	if found == -1 {
+		t.Fatalf("no ssh invocation contained %q; log was:\n%s", marker, log)
+	}
+	return line, found
+}
+
 func TestUnit_TunnelUp_NoDestinationInvokesNoSSH(t *testing.T) {
 	t.Parallel()
 	if got, _ := sourceRemote(t, `tunnel_up "" 19000 19001`); got != "" {
@@ -68,43 +97,37 @@ func TestUnit_TunnelUp_ForwardsEveryRequestedPortFromTheRemoteLoopback(t *testin
 		// hang until the job itself times out.
 		"-o BatchMode=yes",
 		"-o ConnectTimeout=10",
-		// -M opens a *controllable* master, and sock is the literal path this
-		// test configured through PORTAINER_E2E_TUNNEL_SOCK (not a hardcoded
-		// guess). This is the seam where a defect leaks a live background ssh
-		// process and its forwarded ports on every teardown: without -M there
-		// is no master for tunnel_down to address at all; if the socket that
-		// travels with it were ever wrong, tunnel_down's `-O exit` would find
-		// nothing to close. Either way tunnel_down's own `2>/dev/null ||
-		// true` — there to let a legitimate no-op succeed — swallows the
-		// evidence, so nothing would ever report the leak.
-		"-M",
-		sock,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("tunnel_up did not pass %q to ssh; invocation was:\n%s", want, got)
 		}
 	}
+
+	// tunnel_up logs two ssh invocations: the pre-emptive cleanup call
+	// (-O exit) and the new master (-M). A whole-log strings.Contains for the
+	// socket path cannot tell which invocation carries it — if the master
+	// bound a different (wrong) socket while the cleanup line still had the
+	// right one, a whole-log check would be satisfied by the cleanup line
+	// alone and the defect would pass silently. Pinning the socket to each
+	// invocation individually is what actually proves the master binds the
+	// configured control socket, and that a later tunnel_down addresses that
+	// same one — the pairing whose absence lets ssh -M leak, unnoticed,
+	// because tunnel_down's own `2>/dev/null || true` swallows the evidence.
+	master, masterLine := sshLineContaining(t, got, "-M")
+	if !strings.Contains(master, sock) {
+		t.Errorf("tunnel_up's master invocation did not bind the configured socket %q; invocation was:\n%s", sock, master)
+	}
+	cleanup, cleanupLine := sshLineContaining(t, got, "-O exit")
+	if !strings.Contains(cleanup, sock) {
+		t.Errorf("tunnel_up's cleanup invocation did not address the configured socket %q; invocation was:\n%s", sock, cleanup)
+	}
+
 	// tunnel_up closes any stale tunnel before opening a new master, so a
 	// socket left behind by a crashed run does not make the fresh `ssh -M`
-	// refuse to bind. Both the cleanup call and the master call mention their
-	// flags somewhere in the full log regardless of order, so only checking
-	// the relative order of the two logged lines actually pins that the
-	// cleanup ran first.
-	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	exitLine, masterLine := -1, -1
-	for i, line := range lines {
-		if exitLine == -1 && strings.Contains(line, "-O exit") {
-			exitLine = i
-		}
-		if masterLine == -1 && strings.Contains(line, "-M") {
-			masterLine = i
-		}
-	}
-	if exitLine == -1 || masterLine == -1 {
-		t.Fatalf("expected both a cleanup (-O exit) and a master (-M) ssh invocation; got:\n%s", got)
-	}
-	if exitLine >= masterLine {
-		t.Errorf("tunnel_up did not close a stale tunnel before opening a new master; -O exit logged at line %d, -M at line %d:\n%s", exitLine, masterLine, got)
+	// refuse to bind. Only the relative order of the two logged lines pins
+	// that the cleanup ran first.
+	if cleanupLine >= masterLine {
+		t.Errorf("tunnel_up did not close a stale tunnel before opening a new master; -O exit logged at line %d, -M at line %d:\n%s", cleanupLine, masterLine, got)
 	}
 }
 
