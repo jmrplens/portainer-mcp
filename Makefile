@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-up-remote e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-up-remote e2e-down e2e-k8s-up e2e-k8s-up-remote e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -57,6 +57,11 @@ e2e-down:
 
 e2e-k8s-up:
 	./test/e2e/scripts/k3d-up.sh
+
+# Same rule as e2e-up-remote: the address lives in .env, but only this target
+# supplies the intent.
+e2e-k8s-up-remote:
+	PORTAINER_E2E_REMOTE=1 ./test/e2e/scripts/k3d-up.sh
 
 e2e-k8s-down:
 	./test/e2e/scripts/k3d-down.sh

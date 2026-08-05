@@ -9,6 +9,36 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo_root=$(cd ../.. && pwd)
 source ./scripts/lib.sh
+source ./scripts/remote.sh
+
+api_port="${E2E_K3D_API_PORT:-16443}"
+
+# The Kubernetes leg's tunnel needs its own control socket, distinct from the
+# compose leg's default (.ssh-tunnel.sock — see remote.sh). Both legs can
+# legitimately be remote at the same time: `make e2e-up-remote` followed by
+# `make e2e-k8s-up-remote` is exactly the combination record_docker_host's own
+# per-leg marker exists for, and tunnel_up's first act is to close whatever
+# already holds ITS socket. Sharing the compose leg's socket would make this
+# leg's tunnel_up silently tear down the compose leg's already-open tunnel the
+# moment both run remotely together — invisible until the compose suite's
+# next request against http://localhost:19000 fails with connection refused.
+# See test/e2e/.gitignore's .k8s-tunnel.sock entry, which exists for exactly
+# this path.
+export PORTAINER_E2E_TUNNEL_SOCK="$PWD/.k8s-tunnel.sock"
+
+ssh_dest=$(docker_ssh_dest "$repo_root")
+if [[ -n "$ssh_dest" ]]; then
+    export DOCKER_HOST="ssh://$ssh_dest"
+    echo "running the kubernetes leg on $ssh_dest via $DOCKER_HOST" >&2
+fi
+# The Kubernetes leg records its OWN marker, never the compose one. The two
+# legs are brought up by separate targets and can legitimately live in
+# different places — `make e2e-k8s-up` (local) alongside `make e2e-up-remote`
+# is a combination a user can type. Writing a single shared marker would make
+# whichever ran second silently redirect the other's teardown; Task 4 split
+# the marker per leg for exactly this reason.
+record_docker_host "$ssh_dest" kubernetes
+
 cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 network="${E2E_NETWORK:-portainer-mcp-e2e_default}"
 namespace=portainer
@@ -25,7 +55,45 @@ if [[ -z "$licence" ]]; then
     echo "no PORTAINER_LICENSE in .env: Kubernetes leg will be Community Edition only" >&2
 fi
 
-k3d cluster create "$cluster" --network "$network" --agents 1 --wait
+# --api-port is pinned rather than left to k3d because a remote cluster is
+# only reachable through an SSH tunnel (the k3s serving certificate covers
+# 127.0.0.1 and not the host's LAN address), and a tunnel cannot forward a
+# port nobody recorded.
+#
+# --gpus all is NOT unconditional, despite the plan's own description of it
+# as "harmless on a host without one". Measured directly on a host with no
+# NVIDIA Container Toolkit installed at all (the ordinary case for a
+# contributor's laptop or a CI runner, as opposed to a host that has the
+# toolkit but simply has no card): `docker run --gpus all` — and therefore
+# `k3d cluster create --gpus all`, which passes the flag straight through —
+# fails outright with "failed to discover GPU vendor from CDI: no known GPU
+# vendor found", rolling back the entire cluster. That is a hard failure of
+# `make e2e-k8s-up` on exactly the machines this task's own verification step
+# requires to keep working, which is a stricter and more common case than
+# "a GPU-aware host with zero devices" — the docker-compose.gpu.yml override
+# for the compose leg already avoids this same trap by gating on detection
+# rather than passing the flag unconditionally; k3d cluster create gets the
+# same treatment here for the same reason. See detect_gpu_name in lib.sh.
+gpu_flags=()
+gpu_name=$(detect_gpu_name "$ssh_dest")
+if [[ -n "$gpu_name" ]]; then
+    gpu_flags=(--gpus all)
+    echo "gpu detected on the docker host: $gpu_name (passing --gpus all to the kubernetes node)" >&2
+else
+    echo "no GPU on the docker host: the kubernetes leg's GPU suites will skip" >&2
+fi
+
+k3d cluster create "$cluster" --network "$network" --agents 1 --wait \
+    --api-port "127.0.0.1:${api_port}" "${gpu_flags[@]}"
+
+# When the cluster is remote, k3d writes a kubeconfig naming a host this
+# machine cannot use: the SSH alias does not resolve, and the k3s serving
+# certificate does not cover the LAN address either. Forward the API port and
+# point the context at the one address the certificate does cover.
+if [[ -n "$ssh_dest" ]]; then
+    tunnel_up "$ssh_dest" "$api_port"
+    kubectl config set-cluster "k3d-$cluster" --server "https://127.0.0.1:${api_port}" >/dev/null
+fi
 
 # The published chart's own app version is ee-2.39.5, five minor versions
 # behind the product. The image tag is overridden so the Kubernetes leg tests
@@ -75,6 +143,21 @@ fi
 # any port publish, which is the same property --network was chosen for in
 # the first place, just used from the host side instead of a sibling
 # container's.
+#
+# That routing property belongs to whichever machine runs the Docker daemon.
+# When $ssh_dest is non-empty this script (and the `go run ./harness/cmd/
+# provision -kubernetes` below it) run on a DIFFERENT machine, which has no
+# route onto the Docker host's bridge network at all — the same reason
+# up.sh's estate is reached through a tunnel rather than a container address.
+# Task 7 only tunnels the k3s API port (kubectl's own traffic); it does not
+# extend that tunnel to server_ip:nodeport, because the port is discovered
+# dynamically, here, after the Service exists, and tunnel_up's current
+# forwarding shape (`-L port:127.0.0.1:port`) can only mirror a port to
+# itself on the remote loopback, not forward to an arbitrary container
+# address. Until that is extended, provisioning the Kubernetes leg against a
+# remote Docker host is expected to fail right here with a connection
+# timeout/refused against server_ip, and that failure is the signal this gap
+# needs closing, not a sign the estate is broken. See task-7-report.md.
 server_ip=$(docker inspect "k3d-$cluster-server-0" \
             --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}")
 if [[ -z "$server_ip" ]]; then
