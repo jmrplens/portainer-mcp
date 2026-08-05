@@ -251,43 +251,60 @@ func fakeKubernetesServer(t *testing.T) (server *httptest.Server, caFile string)
 // Kubernetes-leg run. The estate seeded here already carries a GPU, as it
 // would after a real compose leg ran first; the assertion is that it comes
 // back unchanged after runKubernetes has loaded, merged and saved twice.
+//
+// Not folded into TestUnit_RunKubernetes_RecordsItsOwnGPUFromEnvironment
+// below despite the overlapping scenario (that table's own "compose leg has
+// a gpu, kubernetes leg does not" case seeds the same shape of estate): the
+// two tests guard different mechanisms. That table proves
+// HasKubernetesGPU() is derived from k8sGPUEnv independently of the compose
+// leg's own field, checking only booleans; this test proves runKubernetes
+// never reads gpuNameEnv/gpuCDIDeviceEnv (a compose-leg-only pair of
+// variables the table never touches) and reassigns estate.GPU with them,
+// which needs the stronger exact-value equality below plus the
+// HasKubernetes() sanity check — neither of which the table's per-case
+// shape carries. Folding would either weaken this test's own assertions
+// down to the table's booleans or force an unrelated field onto every other
+// case just to satisfy one of them; a single t.Run keeps the convention
+// without either.
 func TestUnit_RunKubernetes_PreservesAlreadyRecordedComposeGPU(t *testing.T) {
-	server, caFile := fakeKubernetesServer(t)
+	t.Run("gpu already recorded by the compose leg survives a kubernetes-leg run", func(t *testing.T) {
+		server, caFile := fakeKubernetesServer(t)
 
-	estatePath := filepath.Join(t.TempDir(), "estate.json")
-	wantGPU := harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
-	seed := harness.Estate{
-		CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
-		GPU: wantGPU,
-	}
-	if err := seed.SaveTo(estatePath); err != nil {
-		t.Fatalf("seed estate: SaveTo() error = %v", err)
-	}
+		estatePath := filepath.Join(t.TempDir(), "estate.json")
+		wantGPU := harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
+		seed := harness.Estate{
+			CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
+			GPU: wantGPU,
+		}
+		if err := seed.SaveTo(estatePath); err != nil {
+			t.Fatalf("seed estate: SaveTo() error = %v", err)
+		}
 
-	t.Setenv(k8sBaseURLEnv, server.URL)
-	t.Setenv(envK8sSetup, "the-setup-token")
-	t.Setenv(k8sCAFileEnv, caFile)
-	t.Setenv(licenceEnv, "")
+		t.Setenv(k8sBaseURLEnv, server.URL)
+		t.Setenv(envK8sSetup, "the-setup-token")
+		t.Setenv(k8sCAFileEnv, caFile)
+		t.Setenv(licenceEnv, "")
 
-	if err := runKubernetes(estatePath); err != nil {
-		t.Fatalf("runKubernetes() error = %v, want nil", err)
-	}
+		if err := runKubernetes(estatePath); err != nil {
+			t.Fatalf("runKubernetes() error = %v, want nil", err)
+		}
 
-	got, err := harness.LoadEstate(estatePath)
-	if err != nil {
-		t.Fatalf("LoadEstate() error = %v", err)
-	}
-	if got.GPU != wantGPU {
-		t.Errorf("GPU after runKubernetes = %+v, want %+v unchanged", got.GPU, wantGPU)
-	}
-	if !got.HasGPU() {
-		t.Error("HasGPU() = false after runKubernetes ran against an estate that already recorded one")
-	}
-	// Sanity: the Kubernetes leg itself must have actually been provisioned,
-	// not merely have returned early without doing anything.
-	if !got.HasKubernetes() {
-		t.Error("HasKubernetes() = false: runKubernetes did not actually provision the leg this test exercises")
-	}
+		got, err := harness.LoadEstate(estatePath)
+		if err != nil {
+			t.Fatalf("LoadEstate() error = %v", err)
+		}
+		if got.GPU != wantGPU {
+			t.Errorf("GPU after runKubernetes = %+v, want %+v unchanged", got.GPU, wantGPU)
+		}
+		if !got.HasGPU() {
+			t.Error("HasGPU() = false after runKubernetes ran against an estate that already recorded one")
+		}
+		// Sanity: the Kubernetes leg itself must have actually been provisioned,
+		// not merely have returned early without doing anything.
+		if !got.HasKubernetes() {
+			t.Error("HasKubernetes() = false: runKubernetes did not actually provision the leg this test exercises")
+		}
+	})
 }
 
 // TestUnit_RunKubernetes_RecordsItsOwnGPUFromEnvironment is I5's own
