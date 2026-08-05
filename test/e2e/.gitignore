@@ -1,4 +1,5 @@
 .ssh-tunnel.sock
 .k8s-tunnel.sock
 .docker-host
+.docker-host-*
 .cdi-nvidia.yaml

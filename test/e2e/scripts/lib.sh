@@ -87,13 +87,36 @@ docker_ssh_dest() {
 # running on somebody else's machine — the single worst failure mode this
 # feature has. The marker is written after the estate is up and removed by
 # teardown; an empty or absent file means local.
+#
+# All three functions take an optional leg argument. Each leg — the compose
+# estate, the Kubernetes cluster k3d-up.sh brings up — can end up on a
+# different machine (today only the compose leg has remote wiring at all;
+# Task 7 adds it to the Kubernetes one), so one shared marker cannot describe
+# both without one leg's record clobbering the other's the moment they
+# differ. The default (no argument, or an empty string) is today's compose
+# marker, at today's path, so every existing caller and test is unaffected.
+# A named leg gets its own file instead — docker_host_marker "kubernetes" ->
+# ".docker-host-kubernetes" — never the default ".docker-host".
+#
+# PORTAINER_E2E_DOCKER_HOST_FILE overrides only the default marker's path,
+# deliberately not a named leg's. It exists so a test can point the compose
+# marker at a scratch file without touching the real one under $PWD; the
+# same override applying to every leg would collapse all of them back onto
+# the single file this split exists to get away from, which defeats the
+# point for exactly the multi-leg case it would be invoked for. A leg-scoped
+# override can be added if a real need for one ever shows up; none has yet.
 docker_host_marker() {
-    echo "${PORTAINER_E2E_DOCKER_HOST_FILE:-$PWD/.docker-host}"
+    local leg="${1:-}"
+    if [[ -z "$leg" ]]; then
+        echo "${PORTAINER_E2E_DOCKER_HOST_FILE:-$PWD/.docker-host}"
+    else
+        echo "$PWD/.docker-host-$leg"
+    fi
 }
 
 record_docker_host() {
-    local dest="$1" marker
-    marker=$(docker_host_marker)
+    local dest="$1" leg="${2:-}" marker
+    marker=$(docker_host_marker "$leg")
     if [[ -z "$dest" ]]; then
         rm -f "$marker"
     else
@@ -102,8 +125,8 @@ record_docker_host() {
 }
 
 recorded_docker_host() {
-    local marker
-    marker=$(docker_host_marker)
+    local leg="${1:-}" marker
+    marker=$(docker_host_marker "$leg")
     [[ -f "$marker" ]] || return 0
     head -n1 "$marker"
 }

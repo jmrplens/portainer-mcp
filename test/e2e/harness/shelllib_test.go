@@ -138,6 +138,80 @@ func TestUnit_DockerHostMarker_CarriesTheDestinationFromUpToDown(t *testing.T) {
 	}
 }
 
+// TestUnit_DockerHostMarker_NamedLegGetsItsOwnFile pins the shape of a named
+// leg's marker path: a suffix distinct from the shared, no-argument default,
+// so the compose leg's own marker (.docker-host) is never the file a named
+// leg such as "kubernetes" writes to.
+func TestUnit_DockerHostMarker_NamedLegGetsItsOwnFile(t *testing.T) {
+	t.Parallel()
+	got := strings.TrimRight(sourceLib(t, `unset PORTAINER_E2E_DOCKER_HOST_FILE; docker_host_marker kubernetes`), "\n")
+	if !strings.HasSuffix(got, "/.docker-host-kubernetes") {
+		t.Errorf("docker_host_marker kubernetes = %q, want suffix %q", got, "/.docker-host-kubernetes")
+	}
+}
+
+// TestUnit_DockerHostMarker_NamedLegIgnoresTheOverrideEnvVar pins the
+// deliberate asymmetry documented in lib.sh: PORTAINER_E2E_DOCKER_HOST_FILE
+// redirects only the default (no-argument) marker. A test, or a future
+// caller, pointing that override at a scratch file must not also divert a
+// named leg's marker there — that would silently collapse every leg back
+// onto one shared file, the exact problem the leg argument exists to avoid.
+func TestUnit_DockerHostMarker_NamedLegIgnoresTheOverrideEnvVar(t *testing.T) {
+	t.Parallel()
+	override := filepath.Join(t.TempDir(), "wrong-file")
+	env := "export PORTAINER_E2E_DOCKER_HOST_FILE=" + override + "\n"
+	got := strings.TrimRight(sourceLib(t, env+`docker_host_marker kubernetes`), "\n")
+	if got == override {
+		t.Errorf("docker_host_marker kubernetes honoured PORTAINER_E2E_DOCKER_HOST_FILE; got %q", got)
+	}
+	if !strings.HasSuffix(got, "/.docker-host-kubernetes") {
+		t.Errorf("docker_host_marker kubernetes = %q, want suffix %q", got, "/.docker-host-kubernetes")
+	}
+}
+
+// TestUnit_DockerHostMarker_LegsAreIndependent is the coverage the review
+// asked for by name: the compose leg's marker and a named leg's marker,
+// recorded in the same directory, must be two different files, and clearing
+// either one's record must leave the other's destination untouched. Without
+// this, a single shared marker would let `make e2e-up-remote` (compose) and
+// a same-machine Kubernetes leg silently clobber each other's recorded
+// destination the moment the two legs are not colocated.
+func TestUnit_DockerHostMarker_LegsAreIndependent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cd := "cd " + dir + "\n"
+
+	sourceLib(t, cd+`record_docker_host "truenas"`)
+	sourceLib(t, cd+`record_docker_host "k3d-host" "kubernetes"`)
+
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host`), "\n"); got != "truenas" {
+		t.Errorf("recorded_docker_host (compose leg) = %q, want %q", got, "truenas")
+	}
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host kubernetes`), "\n"); got != "k3d-host" {
+		t.Errorf("recorded_docker_host kubernetes = %q, want %q", got, "k3d-host")
+	}
+
+	// Clearing the Kubernetes leg's marker must not touch the compose leg's.
+	sourceLib(t, cd+`record_docker_host "" "kubernetes"`)
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host kubernetes`), "\n"); got != "" {
+		t.Errorf("recorded_docker_host kubernetes after clearing it = %q, want empty", got)
+	}
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host`), "\n"); got != "truenas" {
+		t.Errorf("recorded_docker_host (compose leg) after clearing the kubernetes leg = %q, want %q", got, "truenas")
+	}
+
+	// And the reverse: clearing the compose leg's marker must not touch a
+	// still-recorded named leg's.
+	sourceLib(t, cd+`record_docker_host "k3d-host" "kubernetes"`)
+	sourceLib(t, cd+`record_docker_host ""`)
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host`), "\n"); got != "" {
+		t.Errorf("recorded_docker_host (compose leg) after clearing it = %q, want empty", got)
+	}
+	if got := strings.TrimRight(sourceLib(t, cd+`recorded_docker_host kubernetes`), "\n"); got != "k3d-host" {
+		t.Errorf("recorded_docker_host kubernetes after clearing the compose leg = %q, want %q", got, "k3d-host")
+	}
+}
+
 func TestUnit_OnDockerHost_EmptyDestinationRunsLocally(t *testing.T) {
 	t.Parallel()
 	got := strings.TrimRight(sourceLib(t, `on_docker_host "" 'echo ran-locally'`), "\n")

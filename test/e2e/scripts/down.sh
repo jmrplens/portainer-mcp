@@ -48,10 +48,38 @@ cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 # regardless of which order the two `make` targets were invoked in, makes
 # `make e2e-down` alone safe rather than relying on every caller to remember
 # the documented sequence.
-if command -v k3d >/dev/null && k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"$cluster\""; then
-    echo "kubernetes leg still up: tearing it down first so its licence can be released before this estate file is removed" >&2
-    ./scripts/k3d-down.sh
-fi
+#
+# This whole probe runs in a subshell with its own DOCKER_HOST, deliberately
+# not the compose leg's exported above. The Kubernetes leg has no remote
+# wiring of its own yet — k3d-up.sh never calls record_docker_host, so its
+# marker is always absent and recorded_docker_host below always answers
+# local — but the compose leg above may well have just exported
+# DOCKER_HOST=ssh://truenas. Leaving that in place here would point `k3d
+# cluster list`, and any k3d-down.sh it triggers, at the compose leg's remote
+# daemon instead, where a cluster of this name never existed; the check
+# would then silently find nothing and skip a real cluster still running
+# locally with a Business Edition licence attached to it. Do not "simplify"
+# this back to a bare `if`: that silent skip is exactly the bug this
+# subshell exists to prevent, and it does not reproduce on any host that
+# does not already have a remote compose leg AND a local Kubernetes leg up
+# at once, which is precisely why it would go unnoticed in ordinary use.
+# The subshell also keeps the compose destination exported above intact for
+# everything below this block, which still has to run against it. Once
+# Task 7 wires remote support into k3d-up.sh (recording through
+# record_docker_host "$dest" "kubernetes"), this already reads the right
+# marker — there is nothing left to change here.
+(
+    k8s_ssh_dest=$(recorded_docker_host kubernetes)
+    if [[ -n "$k8s_ssh_dest" ]]; then
+        export DOCKER_HOST="ssh://$k8s_ssh_dest"
+    else
+        unset DOCKER_HOST
+    fi
+    if command -v k3d >/dev/null && k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"$cluster\""; then
+        echo "kubernetes leg still up: tearing it down first so its licence can be released before this estate file is removed" >&2
+        ./scripts/k3d-down.sh
+    fi
+)
 
 licence=$(read_licence "$repo_root")
 if [[ -n "$licence" && -f "$estate_file" ]]; then
