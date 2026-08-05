@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SSH tunnel lifecycle for an estate whose Docker daemon runs on another host.
-# Sourced by up.sh and down.sh; not meant to be run directly.
+# Sourced by up.sh, down.sh, k3d-up.sh and k3d-down.sh; not meant to be run
+# directly.
 #
 # docker-compose.yml publishes Portainer on 127.0.0.1 of whichever machine
 # runs the daemon. Run remotely that is the remote loopback, so the Go suite
