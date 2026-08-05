@@ -282,6 +282,12 @@ func TestUnit_DetectGPUName_ReportsTheFirstGPUsName(t *testing.T) {
 // override file as text rather than parsing YAML: the point is that these
 // four decisions are present and reviewable, and a YAML round-trip would not
 // make the assertion stronger.
+//
+// The third check pins the literal "${PORTAINER_E2E_CDI_SPEC:?" guard form,
+// not just the bare variable name: a bare "${PORTAINER_E2E_CDI_SPEC}" also
+// contains the substring "PORTAINER_E2E_CDI_SPEC" and would have passed a
+// check that only looked for that, silently losing the "must fail loudly
+// rather than mount an empty path" behaviour the brief names by name.
 func TestUnit_ComposeGPUOverride_GivesTheDindTheGPUAndTheStrippedSpec(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile("../docker-compose.gpu.yml")
@@ -291,7 +297,7 @@ func TestUnit_ComposeGPUOverride_GivesTheDindTheGPUAndTheStrippedSpec(t *testing
 	for _, want := range []string{
 		"gpus: all",
 		"/etc/cdi/nvidia.yaml:ro",
-		"PORTAINER_E2E_CDI_SPEC",
+		"${PORTAINER_E2E_CDI_SPEC:?",
 		"docker:",
 	} {
 		if !strings.Contains(string(data), want) {
@@ -378,5 +384,54 @@ func TestUnit_GPUCDISpec_StripsTheHooksFromWhatNvidiaCtkGenerates(t *testing.T) 
 		if !strings.Contains(got, want) {
 			t.Errorf("gpu_cdi_spec dropped %q; result:\n%s", want, got)
 		}
+	}
+}
+
+// TestUnit_GPUCDISpec_DiscardsAPartialSpecWhenNvidiaCtkFailsMidGeneration
+// stubs nvidia-ctk to print a well-formed-looking but truncated document and
+// then exit non-zero — the shape of a generator that dies partway through.
+// An earlier version of gpu_cdi_spec forwarded that truncated document as if
+// it were complete: "|| true" discards a failing command's exit status, not
+// whatever it had already written to stdout. Task 4 mounts this output into
+// the dind and only checks the file is non-empty, so a truncated document
+// would pass that check and corrupt every nested GPU container silently.
+// Getting nothing here is the only correct outcome.
+func TestUnit_GPUCDISpec_DiscardsAPartialSpecWhenNvidiaCtkFailsMidGeneration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nvidia-ctk")
+	body := "#!/usr/bin/env bash\ncat <<'CDIEOF'\n" +
+		"cdiVersion: 0.7.0\n" +
+		"kind: nvidia.com/gpu\n" +
+		"containerEdits:\n" +
+		"    deviceNodes:\n" +
+		"        - path: /dev/nvidiactl\n" +
+		"CDIEOF\n" +
+		"exit 1\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing failing nvidia-ctk stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH gpu_cdi_spec ""`), "\n")
+	if got != "" {
+		t.Errorf("gpu_cdi_spec with a mid-generation failure = %q, want empty", got)
+	}
+}
+
+// TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery mirrors
+// the gpu_cdi_spec case at the level that matters here: nvidia-smi prints a
+// name and then exits non-zero. Without pipefail inside the command string,
+// "nvidia-smi ... | head -n1" reports only head's exit status, so this
+// failure would otherwise go unnoticed and the name would still be returned.
+func TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "nvidia-smi")
+	body := "#!/usr/bin/env bash\nprintf 'NVIDIA GeForce RTX 4060\\n'\nexit 1\n"
+	if err := os.WriteFile(stub, []byte(body), 0o700); err != nil {
+		t.Fatalf("writing failing nvidia-smi stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH detect_gpu_name ""`), "\n")
+	if got != "" {
+		t.Errorf("detect_gpu_name with a mid-query failure = %q, want empty", got)
 	}
 }

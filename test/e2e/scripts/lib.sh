@@ -175,27 +175,66 @@ cdi_device_id() {
 # or nothing when it has none. Absence is never an error — a contributor
 # without a GPU must still be able to bring the estate up, with the GPU suites
 # skipping the way they skip without a Business Edition licence.
+#
+# The result is captured into a variable first and only emitted once
+# on_docker_host has actually succeeded, rather than letting its stdout reach
+# the caller directly with a trailing "|| true": that would forward whatever
+# nvidia-smi had already written even when it went on to fail, which is lower
+# stakes here than for gpu_cdi_spec (a truncated display name is still just a
+# name) but is still not a distinction a reader of this file should have to
+# make between the two functions. "if ! raw=$(...); then" is exempt from
+# set -e — the failing command sits in an if's condition — so no "|| true" is
+# needed at all.
+#
+# The command string sets pipefail itself: without it, "nvidia-smi ... |
+# head -n1" inside the fresh bash -c (or remote shell) reports only head's
+# exit status, so a nvidia-smi that printed a line and then failed would
+# still read as success and its output would still be captured. Verified
+# directly with a stub that does exactly that.
 detect_gpu_name() {
-    local dest="$1"
-    on_docker_host "$dest" \
-        'command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1' \
-        2>/dev/null || true
+    local dest="$1" raw
+    if ! raw=$(on_docker_host "$dest" \
+        'set -o pipefail; command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1' \
+        2>/dev/null); then
+        return 0
+    fi
+    printf '%s\n' "$raw"
 }
 
 # gpu_cdi_spec echoes a hookless CDI specification for the Docker host's GPUs,
-# or nothing when nvidia-ctk is unavailable. See strip_cdi_hooks for why the
-# hooks cannot survive: the estate's dind is Alpine and every generated hook
-# invokes a glibc binary.
+# or nothing when nvidia-ctk is unavailable or fails. See strip_cdi_hooks for
+# why the hooks cannot survive: the estate's dind is Alpine and every
+# generated hook invokes a glibc binary.
 #
-# The on_docker_host call is grouped with its own "|| true" before the pipe to
-# strip_cdi_hooks, not appended after it: "A || true | strip_cdi_hooks" would
-# parse as "A || (true | strip_cdi_hooks)", so on a successful A the whole
-# right-hand side — strip_cdi_hooks included — would never run and the hooks
-# would reach the caller unstripped. Grouping keeps "absence is never an
-# error" true without ever bypassing the filter this function exists to run.
+# The generator's output is captured into a variable first and only piped
+# through strip_cdi_hooks once on_docker_host has actually succeeded. An
+# earlier version of this function ran the generator directly into the pipe
+# with a trailing "|| true": that discards the exit *status* of a failing
+# nvidia-ctk but not whatever partial, well-formed-looking YAML it had
+# already written to stdout before dying — which strip_cdi_hooks would then
+# happily forward as if it were a complete specification. Task 4 mounts this
+# output into the dind and only checks that the file is non-empty, so a
+# truncated document would pass that check and break every nested GPU
+# container, silently, on exactly the hosts this feature exists for.
+# Verified directly: a stub nvidia-ctk that prints a well-formed but
+# truncated document and then exits 1 made the earlier version return that
+# truncated document instead of nothing.
+#
+# This shape also sidesteps the grouping the earlier version needed: an
+# on_docker_host call piped straight into strip_cdi_hooks with "A || true"
+# appended, rather than grouped as "{ A || true; }", parses as
+# "A || (true | strip_cdi_hooks)" — on a successful A the whole right-hand
+# side, strip_cdi_hooks included, would never run, and the hooks would reach
+# the caller unstripped. Capturing into a variable first removes the pipe
+# from this function entirely, so that trap cannot recur here even by
+# accident.
 gpu_cdi_spec() {
-    local dest="$1"
-    { on_docker_host "$dest" \
+    local dest="$1" raw
+    if ! raw=$(on_docker_host "$dest" \
         'command -v nvidia-ctk >/dev/null 2>&1 && nvidia-ctk cdi generate --format=yaml 2>/dev/null' \
-        2>/dev/null || true; } | strip_cdi_hooks
+        2>/dev/null); then
+        return 0
+    fi
+    [[ -n "$raw" ]] || return 0
+    printf '%s\n' "$raw" | strip_cdi_hooks
 }
