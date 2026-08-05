@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -194,14 +195,15 @@ exit 0
 func (r *k3dFakeRepo) run(t *testing.T, scriptName string, extraEnv ...string) (output, log string, exitCode int) {
 	t.Helper()
 	script := filepath.Join(r.e2eDir, "scripts", scriptName)
-	cmd := exec.Command("bash", script)
+	cmd := exec.CommandContext(t.Context(), "bash", script)
 	env := append(os.Environ(), "PATH="+r.binDir+":"+os.Getenv("PATH"), "LOGFILE="+r.logFile)
 	env = append(env, extraEnv...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			code = exitErr.ExitCode()
 		} else {
 			t.Fatalf("running %s: %v\noutput:\n%s", scriptName, err, out)
@@ -252,6 +254,7 @@ func (r *k3dFakeRepo) marker(leg string) (string, bool) {
 // construction) removes the race instead of just narrowing it.
 func startListenerAfterForwardRequested(t *testing.T, forwardMarker string, port int) {
 	t.Helper()
+	ctx := t.Context()
 	go func() {
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
@@ -260,7 +263,8 @@ func startListenerAfterForwardRequested(t *testing.T, forwardMarker string, port
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		var lc net.ListenConfig
+		ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			return
 		}

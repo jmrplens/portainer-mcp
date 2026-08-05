@@ -32,7 +32,7 @@ func sourceRemote(t *testing.T, script string) (log, sock string) {
 	}
 	sock = filepath.Join(dir, "t.sock")
 	full := "export PATH=" + dir + ":$PATH\nexport PORTAINER_E2E_TUNNEL_SOCK=" + sock + "\nsource " + remote + "\n" + script
-	cmd := exec.Command("bash", "-euo", "pipefail", "-c", full)
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", full)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if _, err := cmd.Output(); err != nil {
@@ -197,7 +197,7 @@ func sourceRemoteCapturingResult(t *testing.T, script string) (log, sock, stdout
 	}
 	sock = filepath.Join(dir, "t.sock")
 	full := "export PATH=" + dir + ":$PATH\nexport PORTAINER_E2E_TUNNEL_SOCK=" + sock + "\nsource " + remote + "\n" + script
-	cmd := exec.Command("bash", "-euo", "pipefail", "-c", full)
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", full)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -243,9 +243,11 @@ func TestUnit_TunnelAddForward_RequestsTheForwardAndConfirmsItIsLive(t *testing.
 	t.Parallel()
 	port := reserveFreeTCPPort(t)
 
+	ctx := t.Context()
 	go func() {
 		time.Sleep(150 * time.Millisecond)
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		var lc net.ListenConfig
+		ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			return
 		}
@@ -319,7 +321,8 @@ if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; els
 // for the wrong reason.
 func TestUnit_TunnelAddForward_FailsWhenSomethingAlreadyOccupiesTheLocalPort(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserving a local port: %v", err)
 	}
@@ -347,7 +350,8 @@ func TestUnit_TunnelAddForward_FailsWhenSomethingAlreadyOccupiesTheLocalPort(t *
 // rebinds it is an accepted, ordinary risk in this style of test.
 func reserveFreeTCPPort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserving a local port: %v", err)
 	}

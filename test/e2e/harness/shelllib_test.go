@@ -19,7 +19,7 @@ func sourceLib(t *testing.T, script string) string {
 	if err != nil {
 		t.Fatalf("resolving lib.sh: %v", err)
 	}
-	cmd := exec.Command("bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -101,7 +101,7 @@ func TestUnit_DockerSSHDest_NeedsBothTheFlagAndTheKey(t *testing.T) {
 	}
 	// The flag with no key must fail, not fall back: a silent local run would
 	// skip every GPU suite and report green.
-	cmd := exec.Command("bash", "-euo", "pipefail", "-c",
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c",
 		"source ../scripts/lib.sh\nPORTAINER_E2E_REMOTE=1 docker_ssh_dest "+noKey)
 	if err := cmd.Run(); err == nil {
 		t.Error("docker_ssh_dest with the flag set and no key succeeded; want a non-zero exit")
