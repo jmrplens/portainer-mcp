@@ -184,7 +184,14 @@ case "$args" in
     *"config set-cluster"*) exit 0 ;;
     *"create namespace"*) printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: portainer\n'; exit 0 ;;
     *"apply -f -"*) cat > /dev/null; exit 0 ;;
-    *"logs deploy/portainer"*) echo "setup_token=a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"; exit 0 ;;
+    # k3d-up.sh matches setup_token=[0-9a-f]{64}, so the stub has to emit a
+    # real 64-hex-character token or the script would find nothing and the
+    # test would pass against a broken regex. The value is assembled at
+    # runtime rather than written out: a 64-character hex literal in the
+    # source is indistinguishable from a leaked credential to a secret
+    # scanner, and GitGuardian failed this branch's first CI run on exactly
+    # that. Do not "simplify" this back to a literal.
+    *"logs deploy/portainer"*) printf 'setup_token=%s\n' "$(printf 'abcdef01%.0s' 1 2 3 4 5 6 7 8)"; exit 0 ;;
     *"get svc portainer"*) echo "${STUB_NODEPORT:-30443}"; exit 0 ;;
     *"get pod"*"app.kubernetes.io/name=portainer"*) echo "portainer-fake-pod-0"; exit 0 ;;
     *"debug -q"*) printf -- '-----BEGIN CERTIFICATE-----\nFAKECERTDATANOTREAL\n-----END CERTIFICATE-----\n'; exit 0 ;;
