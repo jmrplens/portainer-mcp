@@ -242,7 +242,7 @@ a named message if any is missing rather than doing something partial.
 The estate normally runs on the Docker daemon of the machine you are on. Set one key in the
 gitignored `.env` at the repository root to run it somewhere else instead:
 
-```
+```dotenv
 PORTAINER_E2E_DOCKER_SSH=truenas
 ```
 
@@ -256,7 +256,7 @@ owner: a distracted `make e2e-up` must never reach their production NAS. Remote 
 own targets, and each fails loudly and creates nothing if `PORTAINER_E2E_DOCKER_SSH` is unset,
 rather than silently falling back to local:
 
-```
+```bash
 make e2e-up-remote        # the compose legs, on the remote host
 make e2e-k8s-up-remote    # the Kubernetes leg — can legitimately be a different host
 ```
@@ -266,7 +266,7 @@ Teardown takes no flag. `up` records where it went — `test/e2e/.docker-host` f
 end up on different machines — and `make e2e-down` / `make e2e-k8s-down` read that marker back, so
 the ordinary sequence works unchanged regardless of where anything actually ran:
 
-```
+```bash
 make e2e-up-remote && make e2e-k8s-up-remote
 go test -tags e2e -timeout 15m -count=1 ./test/e2e/suite/...
 make e2e-k8s-down && make e2e-down
@@ -314,7 +314,7 @@ fast as it was.
 **Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
 gitignored `.env` at the repository root (see `.env.example`):
 
-```
+```dotenv
 PORTAINER_LICENSE=your-business-edition-key
 ```
 
