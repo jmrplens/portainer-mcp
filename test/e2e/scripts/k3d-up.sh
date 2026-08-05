@@ -95,6 +95,37 @@ if [[ -n "$ssh_dest" ]]; then
     kubectl config set-cluster "k3d-$cluster" --server "https://127.0.0.1:${api_port}" >/dev/null
 fi
 
+# GPU support for the Kubernetes leg, when the node has a card. Absent means
+# the GPU suites skip, exactly as they do without a Business Edition licence.
+#
+# This checks the NODE itself (docker exec ... ls /dev/nvidia0), not merely
+# whether --gpus all was passed to `k3d cluster create` above: the node
+# container is where the device actually has to show up for the device
+# plugin below to find anything, and it is the same signal the device plugin
+# itself depends on.
+if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.name}' >/dev/null 2>&1 \
+   && docker exec "k3d-${cluster}-server-0" sh -c 'ls /dev/nvidia0' >/dev/null 2>&1; then
+    # The device plugin generates its own CDI specification, and that
+    # specification carries hooks invoking /usr/bin/nvidia-ctk. The k3s node
+    # image has no standard libc layout — neither /lib/ld-musl* nor
+    # /lib64/ld-linux-x86-64.so.2 — so a real nvidia-ctk cannot run there, and
+    # container creation fails with "fork/exec /usr/bin/nvidia-ctk: no such
+    # file or directory".
+    #
+    # The hook only has to exist and exit zero: the device nodes and the
+    # library mounts come from the specification itself, not from the hook.
+    # Measured: with this two-line shim in place, a pod requesting
+    # nvidia.com/gpu:1 runs and reports the real card.
+    docker exec "k3d-${cluster}-server-0" sh -c \
+        'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
+    kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
+    kubectl --context "k3d-$cluster" -n kube-system rollout status \
+        daemonset/nvidia-device-plugin --timeout=180s
+    echo "gpu advertised to the kubernetes leg" >&2
+else
+    echo "no GPU on the kubernetes node: GPU suites will skip" >&2
+fi
+
 # The published chart's own app version is ee-2.39.5, five minor versions
 # behind the product. The image tag is overridden so the Kubernetes leg tests
 # the same 2.44.0 our vendored specs describe; without this the API surface

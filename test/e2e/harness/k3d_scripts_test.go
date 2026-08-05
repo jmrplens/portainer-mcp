@@ -21,15 +21,21 @@ import (
 // What a green run here proves, and what it does NOT: for each thing it
 // actually asserts on — which marker is touched, whether --gpus all is
 // passed, the exact `-L` spec tunnel_add_forward is asked for, which
-// destination k3d-down.sh tears down against — a stub records precisely
+// destination k3d-down.sh tears down against, whether the nvidia device
+// plugin gets its shim and its DaemonSet applied — a stub records precisely
 // what it was asked to do, so a pass means the script really made that
 // decision. It is NOT a blanket claim that every ssh/kubectl/k3d invocation
 // is checked in full: only what an assertion below names. It does NOT
 // prove that a real k3d cluster, a real kubectl, or a real SSH connection
-// to a real Docker host behaves the way the stubs assume. That is what the
-// controller's live run against the real remote host is for (see
-// task-7-report.md); mistaking a green run here for "remote execution
-// verified" would be exactly the mistake this comment exists to prevent.
+// to a real Docker host behaves the way the stubs assume — and, for the GPU
+// branch specifically, it does NOT prove the DaemonSet itself works: a
+// stubbed `kubectl apply` and `rollout status` both exit 0 unconditionally,
+// so this can only prove k3d-up.sh DECIDES correctly whether to install it,
+// never that the manifest itself makes a real node advertise nvidia.com/gpu.
+// That is what the controller's live run against the real remote GPU host is
+// for (see task-7-report.md and task-8-report.md); mistaking a green run
+// here for "remote execution verified" or "the GPU is really advertised"
+// would be exactly the mistake this comment exists to prevent.
 //
 // A review round found this claim overstated for one specific call: the
 // original version here checked the resulting PORTAINER_E2E_K8S_URL but
@@ -130,10 +136,24 @@ if [[ "$*" == *"-O forward"* ]]; then
 fi
 exit 0
 `)
+	// docker: answers the k3d node's own GPU-device check (`docker exec ...
+	// ls /dev/nvidia0`, k3d-up.sh's gate on installing the device plugin) per
+	// STUB_GPU_PRESENT — the same knob the ssh stub above uses for the host
+	// probe, since in reality a node only has the device file when --gpus
+	// all was actually passed through to it. Any OTHER "exec" call (the
+	// nvidia-ctk shim write) falls through to the generic success below, so
+	// it is only ever checked through the log, never made to fail here.
 	writeStub("docker", `#!/usr/bin/env bash
 echo "DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>}" >> "$LOGFILE"
 if [[ "$1" == "inspect" ]]; then
     echo "${STUB_SERVER_IP:-10.99.0.5}"
+    exit 0
+fi
+if [[ "$1" == "exec" && "$*" == *"nvidia0"* ]]; then
+    if [[ "${STUB_GPU_PRESENT:-0}" == "1" ]]; then
+        exit 0
+    fi
+    exit 1
 fi
 exit 0
 `)
@@ -272,6 +292,11 @@ func startListenerAfterForwardRequested(t *testing.T, forwardMarker string, port
 //  4. PORTAINER_E2E_K8S_URL passed to the provisioner is the forwarded
 //     127.0.0.1 address, not server_ip:nodeport directly.
 //  5. The API port's kubeconfig rewrite (kubectl config set-cluster) runs.
+//  6. With no GPU on the node (the docker exec ls /dev/nvidia0 probe stubbed
+//     to fail — the default here), the nvidia device plugin is neither
+//     applied nor given its nvidia-ctk shim, and the script says so on
+//     stderr. TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate
+//     below is this check's positive direction.
 func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *testing.T) {
 	repo := newK3DFakeRepo(t)
 	port := reserveFreeTCPPort(t)
@@ -321,6 +346,23 @@ func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *
 	if !strings.Contains(log, "config set-cluster") {
 		t.Errorf("kubectl config set-cluster was never invoked; log:\n%s", log)
 	}
+
+	// The device-plugin install is gated on the NODE's own device file
+	// (docker exec ... ls /dev/nvidia0), stubbed to fail by default (see
+	// newK3DFakeRepo's docker stub) — nothing in this run ever sets
+	// STUB_GPU_PRESENT. TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate
+	// is the run that proves the opposite branch is ever taken at all; this
+	// half alone would pass even if that branch were deleted outright, the
+	// same reason the sibling test's own doc comment gives for --gpus all.
+	if strings.Contains(log, "nvidia-ctk") {
+		t.Errorf("k3d-up.sh wrote the nvidia-ctk shim with no GPU on the node; log:\n%s", log)
+	}
+	if strings.Contains(log, "nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh applied the nvidia device plugin with no GPU on the node; log:\n%s", log)
+	}
+	if !strings.Contains(output, "no GPU on the kubernetes node: GPU suites will skip") {
+		t.Errorf("k3d-up.sh did not report the no-GPU-on-node message; output:\n%s", output)
+	}
 }
 
 // TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate is the
@@ -328,6 +370,15 @@ func TestUnit_K3DUpScript_RemoteRunRecordsItsOwnMarkerAndForwardsTheNodePort(t *
 // absent, but only a GPU-present run proves it is EVER added at all — a
 // version that dropped the whole conditional and always omitted the flag
 // would still pass the GPU-less test.
+//
+// STUB_GPU_PRESENT also drives the docker stub's answer to the node's own
+// `ls /dev/nvidia0` probe (see newK3DFakeRepo), so this same run is also the
+// one place proving the device-plugin install itself: the nvidia-ctk shim is
+// written on the node, the DaemonSet manifest is applied, its rollout is
+// waited on, and the script says so on stderr. Without a GPU on the node
+// (the sibling test above), none of the four should happen — that test's own
+// negative assertions are what makes this one non-trivial: a version that
+// installed the plugin unconditionally would still pass this test alone.
 func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) {
 	repo := newK3DFakeRepo(t)
 	port := reserveFreeTCPPort(t)
@@ -344,6 +395,19 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 	}
 	if !strings.Contains(log, "--gpus all") {
 		t.Errorf("k3d cluster create did not pass --gpus all despite a detected GPU; log:\n%s", log)
+	}
+
+	if !strings.Contains(log, "nvidia-ctk") {
+		t.Errorf("k3d-up.sh did not write the nvidia-ctk shim despite a GPU on the node; log:\n%s", log)
+	}
+	if !strings.Contains(log, "apply -f ./k8s/nvidia-device-plugin.yaml") {
+		t.Errorf("k3d-up.sh did not apply the nvidia device plugin despite a GPU on the node; log:\n%s", log)
+	}
+	if !strings.Contains(log, "rollout status") || !strings.Contains(log, "daemonset/nvidia-device-plugin") {
+		t.Errorf("k3d-up.sh did not wait for the device plugin daemonset's rollout; log:\n%s", log)
+	}
+	if !strings.Contains(output, "gpu advertised to the kubernetes leg") {
+		t.Errorf("k3d-up.sh did not report the gpu-advertised message despite a GPU on the node; output:\n%s", output)
 	}
 }
 

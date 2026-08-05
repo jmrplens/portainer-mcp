@@ -1,0 +1,74 @@
+# Applied by k3d-up.sh only when the cluster's node actually has a GPU.
+#
+# This is not the manifest NVIDIA publishes. Theirs assumes the NVIDIA
+# container runtime is the node's default, which is true on a real GPU node
+# and false in a k3d node container: the node has the device files and the
+# driver libraries (k3d passes --gpus all straight through to `docker run`),
+# but no toolkit and no nvidia runtime. Every difference below exists because
+# the published manifest was measured failing without it.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: plugin
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+          env:
+            # Allocation answers with CDI device names. containerd 2.x takes
+            # CDI devices only through the CRI field the kubelet fills from a
+            # device plugin — cdi.k8s.io/* pod annotations are ignored, which
+            # was measured: an annotated pod started with no GPU at all.
+            - name: DEVICE_LIST_STRATEGY
+              value: "cdi-cri"
+            # The driver root as the NODE sees it. The CDI spec this plugin
+            # generates writes host paths relative to this value, so pointing
+            # it at the in-pod mount makes containerd fail to stat
+            # /driver-root/dev/nvidia-uvm.
+            - name: NVIDIA_DRIVER_ROOT
+              value: "/"
+            # …and where that root is mounted inside THIS pod, so the plugin
+            # can load NVML. Without a whole root it cannot find
+            # libcuda.so.<version> and crash-loops.
+            - name: CONTAINER_DRIVER_ROOT
+              value: "/driver-root"
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "all"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev
+              mountPath: /dev
+            - name: driver-root
+              mountPath: /driver-root
+              readOnly: true
+            - name: cdi
+              mountPath: /etc/cdi
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: driver-root
+          hostPath:
+            path: /
+        - name: cdi
+          hostPath:
+            path: /etc/cdi

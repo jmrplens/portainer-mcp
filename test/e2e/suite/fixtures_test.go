@@ -4,11 +4,14 @@ package suite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -832,4 +835,27 @@ func TestIsRetryableFixtureError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// kubernetesNodeCapacity returns the first node's capacity map, read through
+// kubectl against the context k3d-up.sh created. The suite has no Kubernetes
+// client library and adding one for a single map would be a large dependency
+// for a small need; kubectl is already a hard requirement of the Kubernetes
+// leg (k3d-up.sh, k3d-down.sh and lib.sh's fetch_k8s_ca all shell out to it).
+func kubernetesNodeCapacity(ctx context.Context, t *testing.T) map[string]string {
+	t.Helper()
+	cluster := os.Getenv("E2E_K3D_CLUSTER")
+	if cluster == "" {
+		cluster = "portainer-mcp-e2e"
+	}
+	out, err := exec.CommandContext(ctx, "kubectl", "--context", "k3d-"+cluster,
+		"get", "node", "-o", "jsonpath={.items[0].status.capacity}").Output()
+	if err != nil {
+		t.Fatalf("reading node capacity through kubectl: %v", err)
+	}
+	var capacity map[string]string
+	if err := json.Unmarshal(out, &capacity); err != nil {
+		t.Fatalf("decoding node capacity %q: %v", out, err)
+	}
+	return capacity
 }
