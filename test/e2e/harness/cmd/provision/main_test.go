@@ -241,9 +241,9 @@ func fakeKubernetesServer(t *testing.T) (server *httptest.Server, caFile string)
 	return tlsServer, path
 }
 
-// TestRunKubernetes_PreservesAlreadyRecordedGPU is the regression proof for
-// the deliberate omission next to runKubernetes' LoadEstate call: this
-// invocation's own environment never carries gpuNameEnv or
+// TestUnit_RunKubernetes_PreservesAlreadyRecordedComposeGPU is the regression
+// proof for the deliberate omission next to runKubernetes' LoadEstate call:
+// this invocation's own environment never carries gpuNameEnv or
 // gpuCDIDeviceEnv (k3d-up.sh does not export them — only up.sh does, for the
 // compose leg), so a version of runKubernetes that read them here and
 // assigned estate.GPU unconditionally, mirroring what run() does, would
@@ -251,7 +251,7 @@ func fakeKubernetesServer(t *testing.T) (server *httptest.Server, caFile string)
 // Kubernetes-leg run. The estate seeded here already carries a GPU, as it
 // would after a real compose leg ran first; the assertion is that it comes
 // back unchanged after runKubernetes has loaded, merged and saved twice.
-func TestRunKubernetes_PreservesAlreadyRecordedGPU(t *testing.T) {
+func TestUnit_RunKubernetes_PreservesAlreadyRecordedComposeGPU(t *testing.T) {
 	server, caFile := fakeKubernetesServer(t)
 
 	estatePath := filepath.Join(t.TempDir(), "estate.json")
@@ -287,6 +287,77 @@ func TestRunKubernetes_PreservesAlreadyRecordedGPU(t *testing.T) {
 	// not merely have returned early without doing anything.
 	if !got.HasKubernetes() {
 		t.Error("HasKubernetes() = false: runKubernetes did not actually provision the leg this test exercises")
+	}
+}
+
+// TestUnit_RunKubernetes_RecordsItsOwnGPUFromEnvironment is I5's own
+// regression test at the provisioner level: k8sGPUEnv (PORTAINER_E2E_K8S_GPU,
+// set by k3d-up.sh once its device plugin DaemonSet rollout succeeds) must
+// land on estate.KubernetesGPU, independently of whatever the compose leg's
+// GPU field already carries — the split-host combination README.md calls
+// legitimate means the two can disagree.
+func TestUnit_RunKubernetes_RecordsItsOwnGPUFromEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		k8sGPUEnvVal  string
+		wantK8sGPU    bool
+		composeGPU    harness.GPU
+		wantComposeOK bool
+	}{
+		{
+			name:          "kubernetes leg has a gpu, compose leg does not",
+			k8sGPUEnvVal:  "1",
+			wantK8sGPU:    true,
+			composeGPU:    harness.GPU{},
+			wantComposeOK: false,
+		},
+		{
+			name:          "neither leg has a gpu",
+			k8sGPUEnvVal:  "",
+			wantK8sGPU:    false,
+			composeGPU:    harness.GPU{},
+			wantComposeOK: false,
+		},
+		{
+			name:          "compose leg has a gpu, kubernetes leg does not (split host)",
+			k8sGPUEnvVal:  "",
+			wantK8sGPU:    false,
+			composeGPU:    harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"},
+			wantComposeOK: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, caFile := fakeKubernetesServer(t)
+			estatePath := filepath.Join(t.TempDir(), "estate.json")
+			seed := harness.Estate{
+				CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
+				GPU: tc.composeGPU,
+			}
+			if err := seed.SaveTo(estatePath); err != nil {
+				t.Fatalf("seed estate: SaveTo() error = %v", err)
+			}
+
+			t.Setenv(k8sBaseURLEnv, server.URL)
+			t.Setenv(envK8sSetup, "the-setup-token")
+			t.Setenv(k8sCAFileEnv, caFile)
+			t.Setenv(licenceEnv, "")
+			t.Setenv(k8sGPUEnv, tc.k8sGPUEnvVal)
+
+			if err := runKubernetes(estatePath); err != nil {
+				t.Fatalf("runKubernetes() error = %v, want nil", err)
+			}
+
+			got, err := harness.LoadEstate(estatePath)
+			if err != nil {
+				t.Fatalf("LoadEstate() error = %v", err)
+			}
+			if got.HasKubernetesGPU() != tc.wantK8sGPU {
+				t.Errorf("HasKubernetesGPU() = %v, want %v", got.HasKubernetesGPU(), tc.wantK8sGPU)
+			}
+			if got.HasGPU() != tc.wantComposeOK {
+				t.Errorf("HasGPU() (compose leg) = %v, want %v -- runKubernetes must never derive one leg's GPU from the other's", got.HasGPU(), tc.wantComposeOK)
+			}
+		})
 	}
 }
 

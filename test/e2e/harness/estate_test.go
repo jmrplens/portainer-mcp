@@ -430,3 +430,59 @@ func TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
 		t.Error("HasGPU() = false after a round trip that carried both fields")
 	}
 }
+
+// TestUnit_HasKubernetesGPU_IsIndependentOfTheComposeLegsGPU is I5's own
+// regression test: KubernetesGPU and GPU/HasGPU must be able to disagree,
+// covering the split-host combination README.md calls legitimate (a
+// different Docker host for each leg). A version that (re)used HasGPU for
+// the Kubernetes leg's own test would incorrectly tie the two together.
+func TestUnit_HasKubernetesGPU_IsIndependentOfTheComposeLegsGPU(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		gpu           GPU
+		kubernetesGPU bool
+		wantGPU       bool
+		wantK8sGPU    bool
+	}{
+		{"neither leg has a gpu", GPU{}, false, false, false},
+		{"only the compose leg has a gpu", GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}, false, true, false},
+		{"only the kubernetes leg has a gpu", GPU{}, true, false, true},
+		{"both legs have a gpu", GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}, true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := Estate{GPU: tc.gpu, KubernetesGPU: tc.kubernetesGPU}
+			if got := e.HasGPU(); got != tc.wantGPU {
+				t.Errorf("HasGPU() = %v, want %v", got, tc.wantGPU)
+			}
+			if got := e.HasKubernetesGPU(); got != tc.wantK8sGPU {
+				t.Errorf("HasKubernetesGPU() = %v, want %v", got, tc.wantK8sGPU)
+			}
+		})
+	}
+}
+
+// TestUnit_Estate_KubernetesGPUSurvivesTheRoundTripThroughDisk mirrors
+// TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk for the new field: a
+// value that is set in memory but absent from the JSON would make
+// TestE2E_GPU_KubernetesNodeAdvertisesTheCard skip on a machine that has a
+// card, silently, indistinguishable from one that does not.
+func TestUnit_Estate_KubernetesGPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "estate.json")
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, KubernetesGPU: true}
+	if err := seed.SaveTo(path); err != nil {
+		t.Fatalf("SaveTo() error = %v", err)
+	}
+	got, err := LoadEstate(path)
+	if err != nil {
+		t.Fatalf("LoadEstate() error = %v", err)
+	}
+	if !got.KubernetesGPU {
+		t.Error("KubernetesGPU = false after a round trip that carried true")
+	}
+	if !got.HasKubernetesGPU() {
+		t.Error("HasKubernetesGPU() = false after a round trip that carried true")
+	}
+}

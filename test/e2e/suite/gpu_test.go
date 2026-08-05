@@ -88,7 +88,7 @@ func readBody(t *testing.T, resp *http.Response) string {
 // output is short enough to land inside a single frame; it is not something
 // this test can rely on by construction, since the frame boundary is decided
 // by how the container's own stdout buffered its writes; not by where the
-// expected text happens to sit. See TestDemuxDockerLogs for the case where
+// expected text happens to sit. See TestUnit_DemuxDockerLogs_ReassemblesFramesAcrossPayloadBoundaries for the case where
 // naive Contains would fail and this does not.
 func demuxDockerLogs(t *testing.T, raw []byte) string {
 	t.Helper()
@@ -108,7 +108,7 @@ func demuxDockerLogs(t *testing.T, raw []byte) string {
 	return out.String()
 }
 
-// TestDemuxDockerLogs proves demuxDockerLogs actually undoes the Docker
+// TestUnit_DemuxDockerLogs_ReassemblesFramesAcrossPayloadBoundaries proves demuxDockerLogs actually undoes the Docker
 // Engine API's log framing rather than merely stripping bytes that never
 // mattered in the one live run this suite has been measured against.
 //
@@ -124,7 +124,7 @@ func demuxDockerLogs(t *testing.T, raw []byte) string {
 // no-op implementation fails this test: the 8 header bytes between the two
 // payloads keep "NVIDIA GeForce RTX " and "4060" apart in the raw bytes, so
 // only a genuine demultiplexer reassembles the name.
-func TestDemuxDockerLogs(t *testing.T) {
+func TestUnit_DemuxDockerLogs_ReassemblesFramesAcrossPayloadBoundaries(t *testing.T) {
 	frame := func(streamType byte, payload string) []byte {
 		header := make([]byte, 8)
 		header[0] = streamType
@@ -311,7 +311,7 @@ func TestE2E_GPU_PortainerRunsAContainerOnTheRealCard(t *testing.T) {
 	}
 	// The container was created without "Tty": true, so this response is the
 	// multiplexed stream demuxDockerLogs exists to undo (see its own doc and
-	// TestDemuxDockerLogs) — asserting against the raw bytes here would be
+	// TestUnit_DemuxDockerLogs_ReassemblesFramesAcrossPayloadBoundaries) — asserting against the raw bytes here would be
 	// correct only by luck, not by construction.
 	demuxed := demuxDockerLogs(t, []byte(logBody))
 	if !strings.Contains(demuxed, estate.GPU.Name) {

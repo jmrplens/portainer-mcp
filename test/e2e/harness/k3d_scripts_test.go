@@ -434,17 +434,67 @@ func TestUnit_K3DUpScript_GPUDetectedPassesGpusAllToClusterCreate(t *testing.T) 
 		t.Errorf("k3d cluster create did not pass --gpus all despite a detected GPU; log:\n%s", log)
 	}
 
-	if !strings.Contains(log, "nvidia-ctk") {
-		t.Errorf("k3d-up.sh did not write the nvidia-ctk shim despite a GPU on the node; log:\n%s", log)
+	// The bare substring "nvidia-ctk" is deliberately not used here: it also
+	// matches gpu_cdi_spec's own TOOLKIT PROBE over ssh (see
+	// TestUnit_K3DUpScript_DriverPresentButToolkitAbsentDoesNotPassGpusAll's
+	// own doc), so it cannot tell "the shim was written" apart from "the
+	// probe merely ran". TestUnit_K3DUpScript_InstallsTheNvidiaCtkShimOnEveryNode
+	// below is the one place that pins the actual shim-install invocations,
+	// on both nodes.
+	if !strings.Contains(log, "DOCKER_CALL: exec k3d-portainer-mcp-e2e-server-0 sh -c printf") {
+		t.Errorf("k3d-up.sh did not write the nvidia-ctk shim on the server node despite a GPU on the node; log:\n%s", log)
 	}
 	if !strings.Contains(log, "apply -f ./k8s/nvidia-device-plugin.yaml") {
 		t.Errorf("k3d-up.sh did not apply the nvidia device plugin despite a GPU on the node; log:\n%s", log)
 	}
-	if !strings.Contains(log, "rollout status") || !strings.Contains(log, "daemonset/nvidia-device-plugin") {
-		t.Errorf("k3d-up.sh did not wait for the device plugin daemonset's rollout; log:\n%s", log)
+	// The exact invocation, not "rollout status" and "daemonset/nvidia-device-
+	// plugin" checked independently: two SEPARATE kubectl calls (one carrying
+	// "-n kube-system" for something else entirely, another doing "rollout
+	// status daemonset/nvidia-device-plugin" with no namespace flag at all)
+	// would satisfy two bare Contains checks while never actually running
+	// `kubectl -n kube-system rollout status daemonset/nvidia-device-plugin`
+	// -- the exact command that hangs 180s and fails on a real cluster if the
+	// namespace or the DaemonSet's own name ever drifts from what this script
+	// assumes (see gpu_manifest_test.go's own identity assertions for the
+	// manifest side of this pairing).
+	wantRollout := "KUBECTL_CALL: --context k3d-portainer-mcp-e2e -n kube-system rollout status daemonset/nvidia-device-plugin --timeout=180s"
+	if !strings.Contains(log, wantRollout) {
+		t.Errorf("k3d-up.sh did not wait for the device plugin daemonset's rollout with the expected invocation; want %q in log:\n%s", wantRollout, log)
 	}
 	if !strings.Contains(output, "gpu advertised to the kubernetes leg") {
 		t.Errorf("k3d-up.sh did not report the gpu-advertised message despite a GPU on the node; output:\n%s", output)
+	}
+}
+
+// TestUnit_K3DUpScript_InstallsTheNvidiaCtkShimOnEveryNode is I6's own
+// regression test. The DaemonSet tolerates everything (`operator: Exists`,
+// see test/e2e/k8s/nvidia-device-plugin.yaml) and is scheduled onto every
+// node of the --agents 1 cluster this script creates: server-0 AND agent-0.
+// An earlier version of this script wrote the nvidia-ctk shim only onto
+// server-0. kubectl's own node listing is not guaranteed to sort the server
+// node first — test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts
+// to agent-0 in practice — so a plugin pod scheduled on agent-0 would try to
+// invoke a hook that was never installed there.
+func TestUnit_K3DUpScript_InstallsTheNvidiaCtkShimOnEveryNode(t *testing.T) {
+	repo := newK3DFakeRepo(t)
+	port := reserveFreeTCPPort(t)
+	startListenerAfterForwardRequested(t, repo.logFile+".forward-requested", port)
+
+	_, log, code := repo.run(t, "k3d-up.sh",
+		"PORTAINER_E2E_REMOTE=1",
+		"STUB_GPU_PRESENT=1",
+		"STUB_TOOLKIT_PRESENT=1",
+		fmt.Sprintf("STUB_NODEPORT=%d", port),
+		"STUB_SERVER_IP=172.30.5.7",
+	)
+	if code != 0 {
+		t.Fatalf("k3d-up.sh (remote, GPU present) exited %d; log:\n%s", code, log)
+	}
+	for _, node := range []string{"k3d-portainer-mcp-e2e-server-0", "k3d-portainer-mcp-e2e-agent-0"} {
+		want := "DOCKER_CALL: exec " + node + " sh -c printf"
+		if !strings.Contains(log, want) {
+			t.Errorf("k3d-up.sh did not write the nvidia-ctk shim on %s; log:\n%s", node, log)
+		}
 	}
 }
 

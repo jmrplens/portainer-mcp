@@ -68,6 +68,13 @@ const (
 	gpuNameEnv      = "PORTAINER_E2E_GPU_NAME"
 	gpuCDIDeviceEnv = "PORTAINER_E2E_GPU_CDI_DEVICE"
 
+	// k8sGPUEnv carries the Kubernetes leg's OWN GPU capability, set by
+	// k3d-up.sh ("1" once its device plugin DaemonSet rollout has succeeded,
+	// empty otherwise) — never derived from gpuNameEnv/gpuCDIDeviceEnv above,
+	// which describe a different Docker host entirely on a split-host
+	// estate. See harness.Estate.KubernetesGPU's own doc.
+	k8sGPUEnv = "PORTAINER_E2E_K8S_GPU"
+
 	k8sEndpointName    = harness.EnvironmentK3D
 	k8sEndpointEdition = "Kubernetes"
 
@@ -402,6 +409,14 @@ func runKubernetes(estatePath string) error {
 	// LoadEstate above already read it from disk, and MergeKubernetes below
 	// only ever replaces the Kubernetes field, so it survives both saves
 	// below untouched.
+	//
+	// estate.KubernetesGPU, by contrast, IS set here, unconditionally: unlike
+	// GPU it is this leg's OWN field, k3d-up.sh is the only script that ever
+	// populates k8sGPUEnv, and a run that provisions the Kubernetes leg is
+	// the one place that could possibly know its current value. A rerun that
+	// lost the card (or a card that only just appeared) must be reflected
+	// here rather than sticking to whatever an earlier run recorded.
+	estate.KubernetesGPU = os.Getenv(k8sGPUEnv) == "1"
 
 	client, err := kubernetesClient()
 	if err != nil {

@@ -129,11 +129,14 @@ fi
 # GPU support for the Kubernetes leg, when the node has a card. Absent means
 # the GPU suites skip, exactly as they do without a Business Edition licence.
 #
-# This checks the NODE itself (docker exec ... ls /dev/nvidia0), not merely
-# whether --gpus all was passed to `k3d cluster create` above: the node
-# container is where the device actually has to show up for the device
+# This checks the SERVER node itself (docker exec ... ls /dev/nvidia0), not
+# merely whether --gpus all was passed to `k3d cluster create` above: the
+# node container is where the device actually has to show up for the device
 # plugin below to find anything, and it is the same signal the device plugin
-# itself depends on.
+# itself depends on. --gpus all is a whole-cluster flag applied identically to
+# every node k3d creates, so checking the server node alone is enough to
+# decide whether to install the plugin at all.
+k8s_gpu=""
 if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.name}' >/dev/null 2>&1 \
    && docker exec "k3d-${cluster}-server-0" sh -c 'ls /dev/nvidia0' >/dev/null 2>&1; then
     # The device plugin generates its own CDI specification, and that
@@ -145,13 +148,32 @@ if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.n
     #
     # The hook only has to exist and exit zero: the device nodes and the
     # library mounts come from the specification itself, not from the hook.
-    # Measured: with this two-line shim in place, a pod requesting
-    # nvidia.com/gpu:1 runs and reports the real card.
-    docker exec "k3d-${cluster}-server-0" sh -c \
-        'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
+    # On the single-node cluster an earlier reconnaissance used, this alone
+    # was enough for a pod requesting nvidia.com/gpu:1 to run and report the
+    # real card. That result did NOT reproduce on the two-node (--agents 1)
+    # cluster this script actually creates: see docs/api-divergences.md
+    # §10.3, an open item this shim does not resolve by itself. Node capacity
+    # (what the DaemonSet below advertises, and what GetKubernetesGPUInfo
+    # will read) is reliable; a scheduled GPU workload is not, yet.
+    #
+    # Installed on EVERY node of the cluster, not just the server. The
+    # DaemonSet's own tolerations (`operator: Exists`, see
+    # test/e2e/k8s/nvidia-device-plugin.yaml) schedule it onto both nodes of
+    # this --agents 1 cluster, and a plugin pod on a node with no shim fails
+    # exactly like §10.3's open item the moment it tries to create a
+    # container. An earlier version of this script wrote the shim only onto
+    # server-0; kubectl's own node listing is not guaranteed to sort the
+    # server node first, and in practice
+    # test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts to
+    # agent-0 — the node that version left without a shim.
+    for node in "k3d-${cluster}-server-0" "k3d-${cluster}-agent-0"; do
+        docker exec "$node" sh -c \
+            'printf "#!/bin/sh\nexit 0\n" > /usr/bin/nvidia-ctk && chmod 0755 /usr/bin/nvidia-ctk'
+    done
     kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
     kubectl --context "k3d-$cluster" -n kube-system rollout status \
         daemonset/nvidia-device-plugin --timeout=180s
+    k8s_gpu="1"
     echo "gpu advertised to the kubernetes leg" >&2
 else
     echo "no GPU on the kubernetes node: GPU suites will skip" >&2
@@ -264,11 +286,21 @@ if ! fetch_k8s_ca "k3d-$cluster" "$namespace" > "$ca_file" || ! grep -q "BEGIN C
     exit 1
 fi
 
+# PORTAINER_E2E_K8S_GPU records THIS leg's own GPU capability -- distinct
+# from PORTAINER_E2E_GPU_NAME/PORTAINER_E2E_GPU_CDI_DEVICE, which only up.sh
+# ever sets and which describe the compose leg's dind. estate.HasGPU() reads
+# those two, and the Kubernetes leg deliberately does not touch them (see
+# runKubernetes's own comment in cmd/provision/main.go); a split-host estate
+# (a different Docker host for each leg, which README.md calls a legitimate
+# combination) can have a GPU on one leg and not the other, and a test
+# gating on the wrong leg's field would skip a passing run or fail a
+# GPU-less one. See harness.Estate.HasKubernetesGPU.
 PORTAINER_E2E_ESTATE="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}" \
 PORTAINER_E2E_K8S_URL="$k8s_url" \
 PORTAINER_E2E_K8S_SETUP_TOKEN="$token" \
 PORTAINER_E2E_K8S_CA_FILE="$ca_file" \
 PORTAINER_E2E_LICENCE="$licence" \
+PORTAINER_E2E_K8S_GPU="$k8s_gpu" \
     go run ./harness/cmd/provision -kubernetes
 
 echo "kubernetes leg ready: k3d-$cluster" >&2

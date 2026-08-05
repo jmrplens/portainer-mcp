@@ -12,7 +12,8 @@ import (
 // gpuAdvertisementProblem is TestE2E_GPU_KubernetesNodeAdvertisesTheCard's
 // own assertion against a node's capacity map, factored out as a pure
 // function (no *testing.T, no live cluster) so both of its branches can be
-// pinned by TestGPUAdvertisementProblem without a running estate.
+// pinned by TestUnit_GPUAdvertisementProblem_DistinguishesMissingCapacityFromZero
+// without a running estate.
 //
 // The two branches are deliberately not the same severity: a capacity map
 // that carries no "nvidia.com/gpu" key at all means the device plugin never
@@ -34,11 +35,11 @@ func gpuAdvertisementProblem(capacity map[string]string) (msg string, fatal bool
 	return "", false
 }
 
-// TestGPUAdvertisementProblem pins both branches of gpuAdvertisementProblem
+// TestUnit_GPUAdvertisementProblem_DistinguishesMissingCapacityFromZero pins both branches of gpuAdvertisementProblem
 // without a cluster: the missing-key case (fatal) and the present-but-zero
 // case (not fatal) — the latter is the one the live review found nothing
 // exercised, since a real GPU host with a healthy plugin never produces it.
-func TestGPUAdvertisementProblem(t *testing.T) {
+func TestUnit_GPUAdvertisementProblem_DistinguishesMissingCapacityFromZero(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
@@ -85,12 +86,22 @@ func TestGPUAdvertisementProblem(t *testing.T) {
 // It reads the node through Kubernetes rather than through Portainer because
 // the kubernetes domain is not in the catalog yet; when it lands, the
 // assertion moves to kubernetes.gpu_info and this test becomes its fixture.
+//
+// Gated on estate.HasKubernetesGPU(), NOT estate.HasGPU(): HasGPU records the
+// COMPOSE leg's Docker host, which k3d-up.sh never touches (see
+// harness.Estate.GPU's own doc), while k3d-up.sh records this leg's own
+// capability separately once its device plugin DaemonSet rollout succeeds.
+// The two can legitimately disagree — README.md calls a different Docker
+// host per leg a supported combination — and gating on the wrong one either
+// skips a run that could have passed (compose host has no card, Kubernetes
+// leg's host does) or fails a legitimately GPU-less Kubernetes leg (compose
+// host has a card, Kubernetes leg's host does not).
 func TestE2E_GPU_KubernetesNodeAdvertisesTheCard(t *testing.T) {
 	if !estate.HasKubernetes() {
 		t.Skip("no Kubernetes leg provisioned in this estate: run `make e2e-k8s-up` first")
 	}
-	if !estate.HasGPU() {
-		t.Skip("no GPU on this estate's docker host: bring the estate up with `make e2e-up-remote` against a host with an NVIDIA card")
+	if !estate.HasKubernetesGPU() {
+		t.Skip("no GPU on this estate's kubernetes node: bring the kubernetes leg up with `make e2e-k8s-up-remote` against a host with an NVIDIA card")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

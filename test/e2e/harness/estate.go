@@ -142,7 +142,30 @@ type Estate struct {
 	// GPU is the graphics card the estate's Docker daemon can offer, empty on
 	// a host without one. Suites skip rather than fail in that case, exactly
 	// as they do without a Business Edition licence.
+	//
+	// This describes the COMPOSE leg's Docker host only — up.sh is the only
+	// script that ever populates it (see cmd/provision/main.go's run). It is
+	// deliberately not touched by the Kubernetes leg's own provisioning
+	// (runKubernetes): the two legs can run on different Docker hosts (the
+	// split-host combination README.md calls legitimate), so a GPU on one
+	// says nothing about the other. KubernetesGPU below is that leg's own,
+	// independent field.
 	GPU GPU `json:"gpu,omitzero"`
+
+	// KubernetesGPU reports whether the k3d node advertises nvidia.com/gpu —
+	// the Kubernetes leg's own GPU capability, set by k3d-up.sh
+	// (PORTAINER_E2E_K8S_GPU) once the device plugin's DaemonSet rollout has
+	// succeeded. It is a bare bool, unlike GPU's Name/CDIDevice pair: the
+	// Kubernetes leg has no CDI device string of its own to record — a pod
+	// simply requests the nvidia.com/gpu resource — so there is nothing here
+	// for a second struct field to add.
+	//
+	// A test asserting on the Kubernetes leg's own GPU (see
+	// TestE2E_GPU_KubernetesNodeAdvertisesTheCard) must gate on this, not on
+	// HasGPU(): gating on the compose leg's field skips a passing run when
+	// only the Kubernetes leg's host has a card, and fails a legitimately
+	// GPU-less Kubernetes leg when only the compose leg's host does.
+	KubernetesGPU bool `json:"kubernetes_gpu,omitempty"`
 
 	// EdgeEndpointID, EdgeAgentID and EdgeKey identify the edge environment
 	// registered against EE, present only when a licence was available: edge
@@ -175,11 +198,21 @@ func (e Estate) HasKubernetes() bool {
 	return e.Kubernetes.BaseURL != "" && e.Kubernetes.Creds.APIKey != ""
 }
 
-// HasGPU reports whether the estate's Docker daemon can hand a real GPU to a
-// container. Both fields are required: a name without a device string names
-// hardware no container can request.
+// HasGPU reports whether the COMPOSE leg's Docker daemon can hand a real GPU
+// to a container. Both fields are required: a name without a device string
+// names hardware no container can request. See GPU's own doc for why this is
+// scoped to the compose leg specifically, and HasKubernetesGPU for the
+// Kubernetes leg's own, independent field.
 func (e Estate) HasGPU() bool {
 	return e.GPU.Name != "" && e.GPU.CDIDevice != ""
+}
+
+// HasKubernetesGPU reports whether the k3d node advertises nvidia.com/gpu.
+// See KubernetesGPU's own doc for why this is a separate field from GPU/
+// HasGPU rather than the same one reused: the two legs can run on different
+// Docker hosts.
+func (e Estate) HasKubernetesGPU() bool {
+	return e.KubernetesGPU
 }
 
 // Leg is one provisioned server in an Estate, named the way this harness's

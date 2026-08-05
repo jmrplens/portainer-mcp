@@ -274,12 +274,16 @@ make e2e-k8s-down && make e2e-down
 
 Ports are forwarded back over SSH, so `http://localhost:19000`, `http://localhost:19001` and the
 `k3d-portainer-mcp-e2e` kube context mean the same thing they do locally. The Kubernetes leg needs
-*two* forwards, not one: the k3s API port (pinned with `--api-port` so teardown knows what to stop
-forwarding) for `kubectl`, and Portainer's own NodePort, added once Helm creates the Service. The
-second forward exists because the in-cluster server registers itself at `server_ip:nodeport`, an
-address only the Docker host itself can reach — and the tunnel is not an optimisation here, it is
-the only route: the k3s serving certificate covers `127.0.0.1` and not the host's LAN address, so
-nothing else presents a certificate that verifies.
+*two* forwards, not one. The k3s API port is pinned with `--api-port` (rather than left for k3d to
+choose at random) because the tunnel has to be told which port to forward before the cluster even
+exists — and once it is forwarded, `kubectl` is pointed at `https://127.0.0.1:<api_port>` rather than
+whatever host k3d would otherwise write into the kubeconfig, because the k3s serving certificate
+covers `127.0.0.1` and not the SSH alias or the host's LAN address. Portainer's own NodePort is a
+second, separate forward, added once Helm creates the Service: the in-cluster server registers itself
+at `server_ip:nodeport`, an address only the Docker host itself can reach, and the tunnel is the only
+route this process — which may not be the Docker host — has to it. That forward carries no
+certificate concern of its own; the in-cluster Portainer's self-signed certificate is read out of the
+running pod and pinned separately (see `fetch_k8s_ca` in `test/e2e/scripts/lib.sh`).
 
 **This needs TCP forwarding enabled on the remote sshd** — check with
 `ssh <dest> 'sshd -T | grep -i allowtcpforwarding'`. It is off by default on some appliance
@@ -292,15 +296,20 @@ Nothing on the remote host outside the `portainer-mcp-e2e` compose project and t
 `portainer-mcp-e2e` k3d cluster is touched, and the one file written outside them — the CDI
 specification under `/tmp` — is removed by teardown.
 
-**GPUs.** If the remote host has an NVIDIA card, the estate finds it and hands it to both legs: the
-containers Portainer manages, through a hookless CDI specification bind-mounted into the estate's
-own dind (nested `--gpus` cannot work there — see `docs/api-divergences.md`), and pods on the
-Kubernetes node, which then advertises `nvidia.com/gpu`. No extra key is needed — pointing the
-estate at a machine with a card is the whole opt-in. `--gpus all` is only ever passed to
-`k3d cluster create` when a card was actually detected: on a host with no NVIDIA Container Toolkit
-installed at all, passing it unconditionally fails the whole cluster with `failed to discover GPU
-vendor from CDI: no known GPU vendor found`. Suites that need a GPU skip with a named reason
-everywhere else, so running locally stays exactly as fast as it was.
+**GPUs.** If the remote host has an NVIDIA card, the estate finds it and offers it to both legs, with
+different levels of confidence. The Docker leg is confirmed end to end: the containers Portainer
+manages get the card through a hookless CDI specification bind-mounted into the estate's own dind
+(nested `--gpus` cannot work there — see `docs/api-divergences.md`), and a container that requests it
+reports the real device. The Kubernetes leg is confirmed only as far as **node capacity** — the k3s
+node advertises `nvidia.com/gpu`, which is the fact `GetKubernetesGPUInfo` reads — not as far as
+running a workload through it: a pod that *claims* the GPU still fails at container creation with
+`unresolvable CDI devices …`, an open item recorded in `docs/api-divergences.md` §10.3. No extra key
+is needed for either leg — pointing the estate at a machine with a card is the whole opt-in. `--gpus
+all` is only ever passed to `k3d cluster create` when a card AND a working NVIDIA Container Toolkit
+were both actually detected: on a host with the driver but no toolkit at all, passing it unconditionally
+fails the whole cluster with `failed to discover GPU vendor from CDI: no known GPU vendor found`.
+Suites that need a GPU skip with a named reason everywhere else, so running locally stays exactly as
+fast as it was.
 
 **Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
 gitignored `.env` at the repository root (see `.env.example`):

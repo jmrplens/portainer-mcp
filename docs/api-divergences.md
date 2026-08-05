@@ -963,12 +963,22 @@ same, and using the dind's fix here does nothing.
   `/lib64/ld-linux-x86-64.so.2`), and even the `nvidia-smi` that `--gpus all`
   injects is not executable in it. A two-line `#!/bin/sh` / `exit 0` shim at
   that path is enough: the hook only has to exist and exit zero, because the
-  devices and mounts come from the specification. Measured: a pod requesting
-  `nvidia.com/gpu: 1` then reports `NVIDIA GeForce RTX 4060, 8188 MiB`.
-- **The hand-written hookless specification is not needed on the k3s node.**
-  Measured by removing it and re-running the pod, which still succeeded: the
-  device plugin generates the specification this leg uses. Keeping both would
-  be two sources of truth for the same devices.
+  devices and mounts come from the specification, not the hook. On the
+  **single-node** cluster this reconnaissance used, this was enough: a pod
+  requesting `nvidia.com/gpu: 1` reported `NVIDIA GeForce RTX 4060, 8188 MiB`.
+  That result did **not** reproduce once the shipped harness's two-node
+  (`--agents 1`) cluster was exercised for real — see §10.3, which is the
+  authoritative, current account of running a GPU workload through
+  Kubernetes. The shim is still installed (it costs nothing on a node that
+  never gets that far), but do not read this bullet as proof a scheduled pod
+  gets the card; it is not.
+- **The hand-written hookless specification is not needed on the k3s node**,
+  as far as this single-node reconnaissance could tell: removing it and
+  re-running the pod still succeeded there, and the device plugin generates
+  the specification this leg uses on its own. This, too, predates the
+  two-node reproduction failure in §10.3 and has not been re-confirmed
+  against it — recorded here as the reasoning that shaped the DaemonSet's
+  design, not as a currently-verified fact about pod scheduling.
 
 The shim's cost is that `update-ldcache` and `create-symlinks` never run, so
 any GPU workload must call `ldconfig` before touching the driver libraries.
