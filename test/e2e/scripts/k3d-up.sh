@@ -181,21 +181,25 @@ if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.n
         # test/e2e/suite/fixtures_test.go's own `.items[0]` read sorts to
         # agent-0 — the node that version left without a shim.
         #
-        # Both this loop and the rollout wait below are guarded the same way
-        # the driver-library probe just above is, and for the identical
-        # reason: under set -euo pipefail, `docker exec` failing on either
-        # node, or `rollout status` never converging within its 180s budget,
-        # would otherwise abort the whole script with the cluster (and, if
-        # remote, its SSH tunnel) still running — `k3d cluster create`
-        # installs no cleanup trap, so recovery would need a manual
+        # This loop, the apply just below, and the rollout wait after that are
+        # all guarded the same way the driver-library probe just above is, and
+        # for the identical reason: under set -euo pipefail, `docker exec`
+        # failing on either node, `kubectl apply` failing outright (a
+        # malformed manifest, an API server hiccup, the context briefly
+        # unreachable), or `rollout status` never converging within its 180s
+        # budget, would otherwise abort the whole script with the cluster
+        # (and, if remote, its SSH tunnel) still running — `k3d cluster
+        # create` installs no cleanup trap, so recovery would need a manual
         # `make e2e-k8s-down` against a host the operator may not even be
         # watching. The device plugin cannot do anything useful without the
         # shim on every node it might land on, so a failed write means
         # skipping the plugin entirely rather than applying a manifest that
-        # can only fail later; a rollout that never converges means the
-        # DaemonSet stays applied (removing it now would race whatever kubectl
-        # apply already started) but the leg is still reported GPU-less so the
-        # suites skip instead of trusting an unconfirmed plugin.
+        # can only fail later; a failed apply means there is nothing to wait
+        # on, so the rollout wait is skipped too; a rollout that never
+        # converges means the DaemonSet stays applied (removing it now would
+        # race whatever kubectl apply already started) but the leg is still
+        # reported GPU-less so the suites skip instead of trusting an
+        # unconfirmed plugin.
         shim_ok=1
         for node in "k3d-${cluster}-server-0" "k3d-${cluster}-agent-0"; do
             if ! docker exec "$node" sh -c \
@@ -206,13 +210,16 @@ if kubectl --context "k3d-$cluster" get nodes -o jsonpath='{.items[*].metadata.n
             fi
         done
         if [[ -n "$shim_ok" ]]; then
-            kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml
-            if kubectl --context "k3d-$cluster" -n kube-system rollout status \
-                daemonset/nvidia-device-plugin --timeout=180s; then
-                k8s_gpu="1"
-                echo "gpu advertised to the kubernetes leg" >&2
+            if kubectl --context "k3d-$cluster" apply -f ./k8s/nvidia-device-plugin.yaml; then
+                if kubectl --context "k3d-$cluster" -n kube-system rollout status \
+                    daemonset/nvidia-device-plugin --timeout=180s; then
+                    k8s_gpu="1"
+                    echo "gpu advertised to the kubernetes leg" >&2
+                else
+                    echo "warning: nvidia-device-plugin daemonset did not roll out within 180s; continuing without the kubernetes leg's GPU" >&2
+                fi
             else
-                echo "warning: nvidia-device-plugin daemonset did not roll out within 180s; continuing without the kubernetes leg's GPU" >&2
+                echo "warning: kubectl apply -f ./k8s/nvidia-device-plugin.yaml failed; continuing without the kubernetes leg's GPU" >&2
             fi
         fi
     fi
