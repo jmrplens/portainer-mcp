@@ -237,10 +237,86 @@ make e2e-down        # tear the compose estate down
 `make e2e-k8s-down` additionally need `k3d`, `kubectl` and `helm` on `PATH` — the scripts fail with
 a named message if any is missing rather than doing something partial.
 
+### Running the estate on another machine
+
+The estate normally runs on the Docker daemon of the machine you are on. Set one key in the
+gitignored `.env` at the repository root to run it somewhere else instead:
+
+```dotenv
+PORTAINER_E2E_DOCKER_SSH=truenas
+```
+
+The value is an SSH destination — a `Host` from your `~/.ssh/config`, or `user@host`. Key-based,
+passphrase-free authentication is required: the scripts pass `BatchMode=yes` and will fail rather
+than prompt.
+
+**Setting the key changes nothing on its own.** `make e2e-up` and `make e2e-k8s-up` always use the
+local Docker daemon, whatever `.env` says — this is a direct requirement from the repository
+owner: a distracted `make e2e-up` must never reach their production NAS. Remote runs need their
+own targets, and each fails loudly and creates nothing if `PORTAINER_E2E_DOCKER_SSH` is unset,
+rather than silently falling back to local:
+
+```bash
+make e2e-up-remote        # the compose legs, on the remote host
+make e2e-k8s-up-remote    # the Kubernetes leg — can legitimately be a different host
+```
+
+Teardown takes no flag. `up` records where it went — `test/e2e/.docker-host` for the compose legs,
+`test/e2e/.docker-host-kubernetes` for the Kubernetes leg, kept separate because the two legs can
+end up on different machines — and `make e2e-down` / `make e2e-k8s-down` read that marker back, so
+the ordinary sequence works unchanged regardless of where anything actually ran:
+
+```bash
+make e2e-up-remote && make e2e-k8s-up-remote
+go test -tags e2e -timeout 15m -count=1 ./test/e2e/suite/...
+make e2e-k8s-down && make e2e-down
+```
+
+Ports are forwarded back over SSH, so `http://localhost:19000`, `http://localhost:19001` and the
+`k3d-portainer-mcp-e2e` kube context mean the same thing they do locally. The Kubernetes leg needs
+*two* forwards, not one. The k3s API port is pinned with `--api-port` (rather than left for k3d to
+choose at random) because the tunnel has to be told which port to forward before the cluster even
+exists — and once it is forwarded, `kubectl` is pointed at `https://127.0.0.1:<api_port>` rather than
+whatever host k3d would otherwise write into the kubeconfig, because the k3s serving certificate
+covers `127.0.0.1` and not the SSH alias or the host's LAN address. Portainer's own NodePort is a
+second, separate forward, added once Helm creates the Service: the in-cluster server registers itself
+at `server_ip:nodeport`, an address only the Docker host itself can reach, and the tunnel is the only
+route this process — which may not be the Docker host — has to it. That forward carries no
+certificate concern of its own; the in-cluster Portainer's self-signed certificate is read out of the
+running pod and pinned separately (see `fetch_k8s_ca` in `test/e2e/scripts/lib.sh`).
+
+**This needs TCP forwarding enabled on the remote sshd** — check with
+`ssh <dest> 'sshd -T | grep -i allowtcpforwarding'`. It is off by default on some appliance
+operating systems, TrueNAS among them, where every tunnel died with `connection reset by peer`
+while the same port answered fine from the remote's own loopback. The persistent fix there is
+`midclt call ssh.update '{"tcpfwd": true}'` — editing `/etc/ssh/sshd_config` directly does not
+survive, because the middleware regenerates that file on its own.
+
+Nothing on the remote host outside the `portainer-mcp-e2e` compose project and the
+`portainer-mcp-e2e` k3d cluster is touched, and the one file written outside them — the CDI
+specification under `/tmp` — is removed by teardown.
+
+**GPUs.** If the remote host has an NVIDIA card, the estate finds it and offers it to both legs, with
+different levels of confidence. The Docker leg is confirmed end to end: the containers Portainer
+manages get the card through a hookless CDI specification bind-mounted into the estate's own dind
+(nested `--gpus` cannot work there — see `docs/api-divergences.md`), and a container that requests it
+reports the real device. That leg's override (`test/e2e/docker-compose.gpu.yml`, applying the `gpus:`
+key) needs Docker Compose v2.30 or newer on the Docker host — an older Compose does not understand
+the key. The Kubernetes leg is confirmed only as far as **node capacity** — the k3s
+node advertises `nvidia.com/gpu`, which is the fact `GetKubernetesGPUInfo` reads — not as far as
+running a workload through it: a pod that *claims* the GPU still fails at container creation with
+`unresolvable CDI devices …`, an open item recorded in `docs/api-divergences.md` §10.3. No extra key
+is needed for either leg — pointing the estate at a machine with a card is the whole opt-in. `--gpus
+all` is only ever passed to `k3d cluster create` when a card AND a working NVIDIA Container Toolkit
+were both actually detected: on a host with the driver but no toolkit at all, passing it unconditionally
+fails the whole cluster with `failed to discover GPU vendor from CDI: no known GPU vendor found`.
+Suites that need a GPU skip with a named reason everywhere else, so running locally stays exactly as
+fast as it was.
+
 **Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
 gitignored `.env` at the repository root (see `.env.example`):
 
-```
+```dotenv
 PORTAINER_LICENSE=your-business-edition-key
 ```
 

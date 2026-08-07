@@ -1,0 +1,32 @@
+# Applied by up.sh only when the Docker host was found to have an NVIDIA GPU.
+# Without it the estate is exactly what it has always been, so a machine
+# without a GPU sees no change at all.
+#
+# The `gpus:` key below needs Docker Compose v2.30 or newer; an older Compose
+# on the Docker host silently ignores or rejects it rather than granting the
+# device.
+#
+# Two edits to the dind, and nothing else:
+#
+#   gpus: all       gives the dind container the device nodes and the driver
+#                   libraries, through the Docker host's own nvidia runtime.
+#                   Measured: /dev/nvidia0, nvidiactl, nvidia-uvm,
+#                   nvidia-uvm-tools and nvidia-caps all appear inside it.
+#
+#   the CDI mount   is what lets the daemon *inside* the dind hand that GPU on
+#                   to a nested container. Passing --gpus a second level down
+#                   cannot work: it needs the NVIDIA container toolkit inside
+#                   the dind, the image is Alpine, and the toolkit is
+#                   glibc-only. A CDI specification needs no binary at all —
+#                   once the hooks are stripped, which lib.sh's
+#                   strip_cdi_hooks does. Measured: the inner daemon then
+#                   discovers nvidia.com/gpu=all, and a nested container
+#                   requesting it reports the real card from nvidia-smi.
+#
+# PORTAINER_E2E_CDI_SPEC is a path on the *Docker host*, written by up.sh, and
+# removed by down.sh.
+services:
+  docker:
+    gpus: all
+    volumes:
+      - ${PORTAINER_E2E_CDI_SPEC:?the GPU override needs PORTAINER_E2E_CDI_SPEC}:/etc/cdi/nvidia.yaml:ro

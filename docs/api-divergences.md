@@ -630,6 +630,9 @@ question for a settled fact.
    The reasoning for skipping it is sound for route existence only; if a
    wave ever finds a route that exists only under a Helm deployment, that
    reasoning is what to revisit first.
+8. **A Kubernetes pod that claims `nvidia.com/gpu` still cannot start one**
+   (§10.3). Node capacity is reliable; a scheduled GPU workload through
+   Kubernetes is not yet, and the root cause is not confirmed.
 
 ---
 
@@ -848,3 +851,183 @@ declared parameter type against the operation's real response type before
 accepting it as satisfying `checkCredentialRedaction`. Either is a
 generator/toolchain change large enough to deserve its own review, not a
 line-item inside this one.
+
+---
+
+## 10. GPU passthrough through nested virtualisation (not an API divergence, but a permanent finding)
+
+Two more findings from the remote-GPU-estate work (P6), in the same spirit as
+§9: neither is a defect in the Portainer API, but each cost real debugging
+time and belongs in one place rather than being rediscovered by the next
+person who touches the estate's GPU support. Measured 2026-08-05 against a
+remote Docker host with an NVIDIA GeForce RTX 4060 and driver 570.172.08 (see
+`test/e2e/scripts/lib.sh`, `test/e2e/docker-compose.gpu.yml` and
+`test/e2e/k8s/nvidia-device-plugin.yaml` for the code these findings shaped).
+
+### 10.1 The estate's dind cannot host the NVIDIA container toolkit
+
+Nested GPU containers — Portainer, inside the estate, creating a container
+that reaches a real card — cannot use `--gpus`.
+
+- `--gpus all` on the **dind container itself** works: `/dev/nvidia0`,
+  `nvidiactl`, `nvidia-uvm`, `nvidia-uvm-tools` and `nvidia-caps` appear
+  inside it, along with `/usr/bin/nvidia-smi` and the driver libraries under
+  `/usr/lib/x86_64-linux-gnu`.
+- `--gpus all` **one level deeper**, from the daemon inside the dind, fails
+  with `could not select device driver "" with capabilities: [[gpu]]`. That
+  daemon has only `runc`; the `nvidia` runtime lives on the outer host.
+- Installing the toolkit inside the dind is not available. `docker:28-dind` is
+  Alpine; `apk` has no `nvidia-container*` package; and the binaries cannot be
+  copied in, because `nvidia-container-cli` and `nvidia-cdi-hook` are linked
+  against glibc. With `gcompat` the loader resolves but NVML does not:
+  `Error relocating /usr/bin/nvidia-cdi-hook: nvmlDeviceGetRowRemapperHistogram: symbol not found`.
+
+CDI is the way through, with one modification. A specification from
+`nvidia-ctk cdi generate`, copied into the dind's `/etc/cdi` (`gpu_cdi_spec`
+in `test/e2e/scripts/lib.sh`), makes the inner daemon discover
+`nvidia.com/gpu=0`, `nvidia.com/gpu=GPU-…` and `nvidia.com/gpu=all` — but a
+container requesting one still fails, at `error running createContainer hook
+#0: fork/exec /usr/bin/nvidia-cdi-hook: no such file or directory`, because
+every hook the generator emits invokes that same glibc binary. Stripping the
+`hooks:` blocks (`strip_cdi_hooks`, same file) leaves a specification that
+needs no binary at all, and the nested container then gets the device nodes.
+
+Two consequences worth knowing before reading a confusing failure:
+
+1. **`ldconfig` first.** The stripped hooks are what create the SONAME
+   symlinks and refresh the ldcache, so `nvidia-smi` in a nested container
+   fails with `couldn't find libnvidia-ml.so` even though the library is
+   mounted. A plain `ldconfig` before the workload fixes it — measured:
+   `NVIDIA GeForce RTX 4060, 570.172.08, 8188 MiB, 0 %`.
+2. **Nothing is lost on Portainer's side.** A CDI request still populates the
+   field Portainer reads:
+   `HostConfig.DeviceRequests = [{"Driver":"cdi","Count":0,"DeviceIDs":["nvidia.com/gpu=all"],"Capabilities":null,"Options":null}]`.
+   So `dockerContainerGpusInspect` sees a real request, and the estate's GPU
+   coverage is not weakened by taking the CDI route. Verified end to end,
+   through Portainer's own Docker proxy API on the real remote estate: a
+   container created via `POST /docker/{env}/containers/create` reports
+   `NVIDIA GeForce RTX 4060, 8188 MiB`, and its inspect response's
+   `HostConfig.DeviceRequests` carries exactly that `Driver: "cdi"` entry
+   (`test/e2e/suite/gpu_test.go`,
+   `TestE2E_GPU_PortainerRunsAContainerOnTheRealCard`).
+
+Separately, and useful for GPU-less machines: creating (not starting) a
+container with `--gpus all` succeeds with no runtime at all, recording
+`{"Driver":"","Capabilities":[["gpu"]]}`. Any assertion that only needs the
+*metadata* path — which is most of Portainer's GPU surface — can therefore run
+anywhere.
+
+### 10.2 The Kubernetes leg fails the same way, and needs the opposite fix
+
+The k3s node in a k3d cluster has the same shape as the dind — devices and
+driver libraries injected by `--gpus all`, no toolkit — but the fix is not the
+same, and using the dind's fix here does nothing.
+
+- **CDI pod annotations do not work.** A pod annotated
+  `cdi.k8s.io/gpu: "nvidia.com/gpu=all"`, on a node with a hookless CDI
+  specification installed at `/etc/cdi/nvidia.yaml`, started with no GPU at
+  all: no `nvidia-smi`, no device nodes, exit 1. containerd 2.x (k3s v1.35's
+  config is `version = 3`) takes CDI devices through the CRI field the kubelet
+  fills from a device plugin, not from annotations.
+- **`nvidia.com/gpu` capacity needs the device plugin, and the published
+  manifest does not work here.** It assumes the NVIDIA runtime is the node
+  default. `test/e2e/k8s/nvidia-device-plugin.yaml` sets four environment
+  variables, each found by watching the previous attempt fail:
+  - `DEVICE_LIST_STRATEGY=cdi-cri` — CDI devices only, through the CRI field
+    the kubelet fills from the plugin.
+  - `NVIDIA_DRIVER_ROOT=/` — the driver root as the **node** sees it, since
+    the CDI specification the plugin generates writes host paths relative to
+    this value.
+  - `CONTAINER_DRIVER_ROOT=/driver-root` — where that same root is mounted
+    inside the plugin's own pod (a `/` hostPath). With only a lib directory
+    the plugin dies on `failed to locate libcuda.so.570.172.08`; with the
+    driver root set to the in-pod path instead of the node path, containers
+    fail on `failed to stat CDI host device "/driver-root/dev/nvidia-uvm"`.
+  - `LD_LIBRARY_PATH=/host-libs`, paired with a fourth hostPath
+    (`/usr/lib/x86_64-linux-gnu`, mounted read-only at `/host-libs`) —
+    **added after the first real-hardware run, and load-bearing.** Without
+    it both plugin pods crash-loop with `error starting plugins: unable to
+    validate flags: CDI --device-list-strategy options are only supported on
+    NVML-based systems` — a message that names the CDI flag, not the missing
+    library path, so nothing about it points here. `CONTAINER_DRIVER_ROOT`
+    alone is not enough: the plugin still resolves its shared libraries
+    through the dynamic linker's own search path, which a bind-mounted root
+    at a non-standard mount point (`/driver-root`, not `/`) does not
+    populate. Measured directly, live: both pods this DaemonSet creates
+    (`k3d-up.sh` runs `--agents 1`, so a two-node cluster) went `Ready` and
+    advertised `nvidia.com/gpu: 1` only once this variable and the
+    `host-libs` volume/mount were both added.
+- **The plugin's own CDI specification has hooks**, and they invoke
+  `/usr/bin/nvidia-ctk`, which the k3s node cannot provide — that image has no
+  standard libc layout (neither `/lib/ld-musl*` nor
+  `/lib64/ld-linux-x86-64.so.2`), and even the `nvidia-smi` that `--gpus all`
+  injects is not executable in it. A two-line `#!/bin/sh` / `exit 0` shim at
+  that path is enough: the hook only has to exist and exit zero, because the
+  devices and mounts come from the specification, not the hook. On the
+  **single-node** cluster this reconnaissance used, this was enough: a pod
+  requesting `nvidia.com/gpu: 1` reported `NVIDIA GeForce RTX 4060, 8188 MiB`.
+  That result did **not** reproduce once the shipped harness's two-node
+  (`--agents 1`) cluster was exercised for real — see §10.3, which is the
+  authoritative, current account of running a GPU workload through
+  Kubernetes. The shim is still installed (it costs nothing on a node that
+  never gets that far), but do not read this bullet as proof a scheduled pod
+  gets the card; it is not.
+- **The hand-written hookless specification is not needed on the k3s node**,
+  as far as this single-node reconnaissance could tell: removing it and
+  re-running the pod still succeeded there, and the device plugin generates
+  the specification this leg uses on its own. This, too, predates the
+  two-node reproduction failure in §10.3 and has not been re-confirmed
+  against it — recorded here as the reasoning that shaped the DaemonSet's
+  design, not as a currently-verified fact about pod scheduling.
+
+The shim's cost is that `update-ldcache` and `create-symlinks` never run, so
+any GPU workload must call `ldconfig` before touching the driver libraries.
+A manifest copied from NVIDIA's documentation will fail with
+`couldn't find libnvidia-ml.so` and the reason will not be visible in the
+error.
+
+### 10.3 Open item: a pod that claims the GPU still cannot start one
+
+**Node capacity works. Running a GPU workload through Kubernetes does not,
+yet.** With the device plugin healthy and both nodes advertising
+`nvidia.com/gpu: 1` — the fact `GetKubernetesGPUInfo` will read, once that
+domain exists; `test/e2e/suite/gpu_kubernetes_test.go`'s
+`TestE2E_GPU_KubernetesNodeAdvertisesTheCard` asserts exactly this and
+passes — a pod that *requests* `nvidia.com/gpu: 1` still fails at container
+creation:
+
+```
+unresolvable CDI devices k8s.device-plugin.nvidia.com/gpu=<uuid>
+```
+
+Measured on the real remote host, on both nodes: `/etc/cdi` is empty and
+`/var/run/cdi` does not exist, so the device plugin's own generated CDI
+specification is not landing where containerd reads it. This did not
+reproduce during the reconnaissance that produced §10.2's DaemonSet, where a
+CDI specification had already been hand-installed into `/etc/cdi` before the
+plugin ever ran — the working hypothesis is that the plugin's write only
+succeeds, or is only picked up, once that directory already has content, but
+this has not been confirmed by reproducing the reconnaissance's starting
+state and watching the plugin's own write succeed or fail.
+
+Whoever picks this up next should start there: does the plugin actually
+write `/etc/cdi/k8s.device-plugin.nvidia.com-gpu.json` at all (permissions?
+does the hostPath mount even allow it to?), and does containerd's own
+configuration point at the same directory the plugin writes to.
+
+**A second, unverified candidate cause**, not yet ruled out and not
+mutually exclusive with the one above: until this branch's own review, the
+`nvidia-ctk` shim (§10.2's two-line `#!/bin/sh` / `exit 0` file) was
+installed on `k3d-<cluster>-server-0` only, never on the cluster's agent
+node — a gap fixed alongside this write-up. If the pod whose failure is
+quoted above happened to schedule on the node without the shim, the
+`unresolvable CDI devices` error could be this gap surfacing under a
+different name, rather than (or in addition to) the empty-`/etc/cdi`
+hypothesis. This has not been tested either way: the fix landed without a
+hardware run to confirm or rule it out, so it is recorded here as a second
+hypothesis, not a second finding. Whoever reproduces this next should check
+which node the failing pod actually landed on before assuming the first
+hypothesis is the whole story.
+
+Until this is resolved, treat `nvidia.com/gpu` capacity on the Kubernetes leg as
+reliable, and a scheduled GPU workload there as unverified.

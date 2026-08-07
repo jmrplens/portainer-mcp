@@ -55,6 +55,26 @@ const (
 	// provisioner verify that certificate instead of skipping verification.
 	k8sCAFileEnv = "PORTAINER_E2E_K8S_CA_FILE"
 
+	// gpuNameEnv and gpuCDIDeviceEnv carry what up.sh discovered on the Docker
+	// host running the compose legs' dind: the GPU's model name and the CDI
+	// device string a container has to request to use it (see
+	// docker-compose.gpu.yml). Both are empty on a machine without a GPU,
+	// which is the ordinary case, not an error.
+	//
+	// up.sh is the only script that exports either variable. k3d-up.sh does
+	// not: the GPU belongs to the Docker host the compose legs' dind runs on,
+	// never to the k3d leg, so runKubernetes has no business reading these —
+	// see its own comment for what it does instead.
+	gpuNameEnv      = "PORTAINER_E2E_GPU_NAME"
+	gpuCDIDeviceEnv = "PORTAINER_E2E_GPU_CDI_DEVICE"
+
+	// k8sGPUEnv carries the Kubernetes leg's OWN GPU capability, set by
+	// k3d-up.sh ("1" once its device plugin DaemonSet rollout has succeeded,
+	// empty otherwise) — never derived from gpuNameEnv/gpuCDIDeviceEnv above,
+	// which describe a different Docker host entirely on a split-host
+	// estate. See harness.Estate.KubernetesGPU's own doc.
+	k8sGPUEnv = "PORTAINER_E2E_K8S_GPU"
+
 	k8sEndpointName    = harness.EnvironmentK3D
 	k8sEndpointEdition = "Kubernetes"
 
@@ -176,6 +196,14 @@ func run(kubernetes, releaseLicence, recoverLicence bool) error {
 		estate.EdgeEndpointID = edgeCreds.EndpointID
 		estate.EdgeAgentID = edgeCreds.EdgeID
 		estate.EdgeKey = edgeCreds.Key
+	}
+
+	// up.sh discovered these on the Docker host; the provisioner cannot, since
+	// it talks to Portainer's API and never to the daemon directly. Empty is
+	// the ordinary case on a machine without a GPU.
+	estate.GPU = harness.GPU{
+		Name:      os.Getenv(gpuNameEnv),
+		CDIDevice: os.Getenv(gpuCDIDeviceEnv),
 	}
 
 	if err := estate.SaveTo(estatePath); err != nil {
@@ -372,6 +400,23 @@ func runKubernetes(estatePath string) error {
 	if err != nil {
 		return fmt.Errorf("load estate: %w", err)
 	}
+	// estate.GPU is deliberately left untouched here. k3d-up.sh does not
+	// export gpuNameEnv or gpuCDIDeviceEnv — the GPU belongs to the Docker
+	// host the compose legs' dind runs on, not to this leg — so reading them
+	// here would read two empty strings and, assigned unconditionally, would
+	// silently overwrite whatever the compose leg already recorded with a
+	// zero GPU on every Kubernetes-leg run. Estate carries GPU forward as-is:
+	// LoadEstate above already read it from disk, and MergeKubernetes below
+	// only ever replaces the Kubernetes field, so it survives both saves
+	// below untouched.
+	//
+	// estate.KubernetesGPU, by contrast, IS set here, unconditionally: unlike
+	// GPU it is this leg's OWN field, k3d-up.sh is the only script that ever
+	// populates k8sGPUEnv, and a run that provisions the Kubernetes leg is
+	// the one place that could possibly know its current value. A rerun that
+	// lost the card (or a card that only just appeared) must be reflected
+	// here rather than sticking to whatever an earlier run recorded.
+	estate.KubernetesGPU = os.Getenv(k8sGPUEnv) == "1"
 
 	client, err := kubernetesClient()
 	if err != nil {

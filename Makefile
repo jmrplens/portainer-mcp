@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.Commit=$(COMMIT) \
 	-X $(PKG)/internal/version.BuildDate=$(DATE)
 
-.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-down e2e-k8s-up e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
+.PHONY: build test test-race cover lint vulncheck fmt check clean gen-client update-spec fetch-history gen-applicability scaffold-domain check-spec validate-spec e2e-up e2e-up-remote e2e-down e2e-k8s-up e2e-k8s-up-remote e2e-k8s-down test-e2e audit-e2e-gaps audit-1to1 audit-1to1-ratchet audit-discovery audit-spec-reality audit-spec-drift audit-spec-delta e2e-licence-release
 
 SPEC_VERSION ?= 2.44.0
 
@@ -43,11 +43,25 @@ clean:
 e2e-up:
 	./test/e2e/scripts/up.sh
 
+# e2e-up-remote brings the estate up on the machine named by
+# PORTAINER_E2E_DOCKER_SSH in the gitignored .env, over DOCKER_HOST=ssh://.
+# It is a separate target, rather than something .env alone switches on,
+# because a plain `make e2e-up` must never reach a remote machine by accident:
+# the address and the intent are two independent things and both are required.
+# There is no e2e-down-remote — `make e2e-down` reads where `up` went.
+e2e-up-remote:
+	PORTAINER_E2E_REMOTE=1 ./test/e2e/scripts/up.sh
+
 e2e-down:
 	./test/e2e/scripts/down.sh
 
 e2e-k8s-up:
 	./test/e2e/scripts/k3d-up.sh
+
+# Same rule as e2e-up-remote: the address lives in .env, but only this target
+# supplies the intent.
+e2e-k8s-up-remote:
+	PORTAINER_E2E_REMOTE=1 ./test/e2e/scripts/k3d-up.sh
 
 e2e-k8s-down:
 	./test/e2e/scripts/k3d-down.sh

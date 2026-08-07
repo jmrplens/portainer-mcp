@@ -12,6 +12,24 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo_root=$(cd ../.. && pwd)
 source ./scripts/lib.sh
+source ./scripts/remote.sh
+
+api_port="${E2E_K3D_API_PORT:-16443}"
+
+# Same fixed control socket k3d-up.sh's tunnel bound (see its own comment on
+# .k8s-tunnel.sock). tunnel_down has to name the exact socket tunnel_up used,
+# or -O exit addresses a stale default: at best it finds nothing and leaks
+# this leg's forward silently (tunnel_down suppresses ssh's own errors so a
+# legitimate no-op never fails a run), at worst — if the compose leg happens
+# to share that default path — it closes the COMPOSE leg's tunnel instead.
+export PORTAINER_E2E_TUNNEL_SOCK="$PWD/.k8s-tunnel.sock"
+
+ssh_dest=$(recorded_docker_host kubernetes)
+if [[ -n "$ssh_dest" ]]; then
+    export DOCKER_HOST="ssh://$ssh_dest"
+    echo "tearing down the kubernetes leg on $ssh_dest (api port $api_port)" >&2
+fi
+
 cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
 namespace=portainer
 estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
@@ -37,3 +55,13 @@ if [[ -n "$licence" && -f "$estate_file" ]]; then
 fi
 
 k3d cluster delete "$cluster" 2>/dev/null || true
+
+# Last, mirroring down.sh: everything above ran against the recorded
+# destination and the tunnel it needed to reach the API server through.
+# Clearing the Kubernetes marker here is correct because it is this leg's OWN
+# marker — down.sh (the compose leg's teardown) calls this script when it
+# finds a live cluster and deliberately leaves the compose marker for itself
+# to clear afterwards; touching that one here would misdirect the compose
+# teardown that follows.
+tunnel_down "$ssh_dest"
+record_docker_host "" kubernetes
