@@ -6,7 +6,7 @@ import "strings"
 // task-4's freeze must not lose (see credential.go's package doc comment for
 // the first, credential redaction). cmd/gen_action_inputs stamps a JSON
 // Schema "minimum": 1 onto every integer path parameter shaped like a
-// Portainer resource identifier (isIdentifierPathParam below, minus the four
+// Portainer resource identifier (isIdentifierPathParam below, minus the five
 // carve-outs in pathParamMinimumExceptions) — its own addition, never the
 // vendored specification's, which never declares "minimum" on a single one
 // of the 366 path parameters in the Business Edition document today (checked
@@ -33,8 +33,11 @@ import "strings"
 // # Why the exceptions table is reimplemented, not imported
 //
 // cmd/gen_action_inputs is `package main`; nothing outside it can import its
-// pathParamMinimumExceptions. The table is small (four entries, unchanged
-// since it was introduced) and each entry's own reasoning is specific to one
+// pathParamMinimumExceptions. The table is small (five entries: four carried
+// unchanged since it was introduced, plus {ServiceImageStatus, serviceId},
+// which the generator's table gained later and this one did not, until
+// TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable caught
+// the gap) and each entry's own reasoning is specific to one
 // (operationId, parameter) pair — see cmd/gen_action_inputs/fields.go's
 // identical table for the full justification of each. A future entry added
 // there without a matching entry here would make this audit gate on a
@@ -60,7 +63,7 @@ type pathParamKey struct {
 // pathParamMinimumExceptions mirrors cmd/gen_action_inputs's identical table:
 // the (operationId, path parameter) pairs where isIdentifierPathParam's name
 // rule matches but a positive lower bound would refuse a value the real
-// server accepts. None of the four names a domain this catalog declares
+// server accepts. None of the five names a domain this catalog declares
 // today (system, tags, registries) — see cmd/gen_action_inputs/fields.go's
 // own doc comment for each entry's reasoning. It stops being inert with the
 // docker domain, which declares three of the operations it excuses.
