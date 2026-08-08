@@ -672,14 +672,6 @@ func TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery(t *te
 	}
 }
 
-// TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails guards the
-// last path in either GPU function that could still kill a caller.
-// strip_cdi_hooks's only dependency is awk; an earlier version of
-// gpu_cdi_spec ran "printf ... | strip_cdi_hooks" bare, so a broken awk's
-// exit status escaped as gpu_cdi_spec's own, and under a caller's
-// set -euo pipefail that terminates the whole script. Verified directly:
-// shadowing awk with a stub that exits 127, with nvidia-ctk otherwise
-// succeeding, made a statement placed right after the call never run.
 // TestUnit_SwarmFixtureServiceName_ReturnsAFixedPortainerMcpE2EPrefixedName
 // pins the literal value: up.sh's swarm_init/swarm_fixture_service_id and any
 // future orphan sweep must all agree on the same name, and a typo here would
@@ -857,6 +849,14 @@ func TestUnit_SwarmFixtureServiceID_CreatedButUnconfirmed_WarnsAndDegrades(t *te
 	}
 }
 
+// TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails guards the
+// last path in either GPU function that could still kill a caller.
+// strip_cdi_hooks's only dependency is awk; an earlier version of
+// gpu_cdi_spec ran "printf ... | strip_cdi_hooks" bare, so a broken awk's
+// exit status escaped as gpu_cdi_spec's own, and under a caller's
+// set -euo pipefail that terminates the whole script. Verified directly:
+// shadowing awk with a stub that exits 127, with nvidia-ctk otherwise
+// succeeding, made a statement placed right after the call never run.
 func TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
