@@ -20,6 +20,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/internal/tools"
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
+	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
 	"github.com/jmrplens/portainer-mcp/internal/tools/dynamic"
 	"github.com/jmrplens/portainer-mcp/internal/tools/individual"
 	"github.com/jmrplens/portainer-mcp/internal/tools/meta"
@@ -50,6 +51,7 @@ func AllSpecs() []toolutil.ActionSpec {
 	specs = append(specs, system.Specs()...)
 	specs = append(specs, tags.Specs()...)
 	specs = append(specs, registries.Specs()...)
+	specs = append(specs, docker.Specs()...)
 	return toolutil.FillScopeParameterGuidance(specs)
 }
 
