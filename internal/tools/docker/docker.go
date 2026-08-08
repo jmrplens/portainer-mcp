@@ -20,22 +20,56 @@
 // docs/api-divergences.md. There is deliberately no JWT code path here.
 package docker
 
-import "github.com/jmrplens/portainer-mcp/internal/toolutil"
+import (
+	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
+)
 
 // Specs returns every action this domain contributes to the catalog.
 func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(), handWrittenSpecs()...)
 }
 
-// handWrittenSpecs returns the actions this generator refuses to produce:
-// dockerContainerGpusInspect, containerImageStatus and ServiceImageStatus,
-// whose path parameter the vendored specification types as an integer when
-// it is really a string (a Docker hex container ID or a Docker Swarm service
-// ID). Task 3 of the docker wave writes these by hand; until then this
-// returns nothing so that Specs() stays correct for this task's five
-// mechanical operations.
+// handWrittenSpecs returns the three actions this generator refuses to
+// produce: DockerContainerGpusInspect, ContainerImageStatus and
+// ServiceImageStatus. Each names a path parameter (containerId or serviceId)
+// the vendored specification types "integer" when Portainer actually reads
+// it as a string — Docker's own 64-character hex container ID, or Docker
+// Swarm's own alphanumeric service ID — so the generated client's typed
+// method, which bakes in the wrong Go type, can never be called with a real
+// value. See handlers.go's package doc comment and docs/api-divergences.md
+// §6.3.
+//
+// DockerContainerGpusInspect is declared in both vendored specifications
+// (edition.CE); ContainerImageStatus and ServiceImageStatus are declared in
+// the Business Edition specification only (edition.EE).
 func handWrittenSpecs() []toolutil.ActionSpec {
-	return nil
+	return []toolutil.ActionSpec{
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "docker.container_gpus_inspect", Domain: "docker", OperationID: "DockerContainerGpusInspect",
+			Title:       "Fetch container gpus data",
+			Description: "Fetch container gpus data",
+			Edition:     edition.CE,
+			Handler:     dockerContainerGpusInspect,
+			Input:       dockerContainerGpusInspectInput{},
+		}, narrative("DockerContainerGpusInspect")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "docker.container_image_status", Domain: "docker", OperationID: "ContainerImageStatus",
+			Title:       "Fetch image status for container",
+			Description: "Fetch image status for container",
+			Edition:     edition.EE,
+			Handler:     containerImageStatus,
+			Input:       containerImageStatusInput{},
+		}, narrative("ContainerImageStatus")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "docker.service_image_status", Domain: "docker", OperationID: "ServiceImageStatus",
+			Title:       "Fetch image status for service",
+			Description: "Fetch image status for service",
+			Edition:     edition.EE,
+			Handler:     serviceImageStatus,
+			Input:       serviceImageStatusInput{},
+		}, narrative("ServiceImageStatus")),
+	}
 }
 
 // narrative supplies the Title and Description overrides for operations
@@ -54,10 +88,15 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // situation as a candidate a wave must review before accepting). Both
 // descriptions below are written from the generated response type each
 // handler actually returns (DockerDashboardData, []ImagesImageResponse),
-// not from the spec's stripped text. DockerContainerGpusInspect,
-// ContainerImageStatus and ServiceImageStatus trigger the identical warning
-// but are Task 3's hand-written operations, not this task's — narrative
-// entries for them belong there, not here.
+// not from the spec's stripped text.
+//
+// DockerContainerGpusInspect, ContainerImageStatus and ServiceImageStatus
+// trigger the identical boilerplate-description warning, but their override
+// exists for a second, more important reason than the boilerplate itself:
+// the vendored specification's own summary never mentions that containerId/
+// serviceId is a string despite the schema declaring it an integer, and that
+// is exactly what a model calling one of these three needs to know before it
+// tries to pass a number.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "DockerDashboard":
@@ -67,6 +106,18 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "DockerImagesList":
 		return toolutil.ActionNarrative{
 			Description: "Lists every Docker image present on one environment, with each image's id, tags, creation time and size. Pass withUsage to also report whether each image is used by at least one container.",
+		}
+	case "DockerContainerGpusInspect":
+		return toolutil.ActionNarrative{
+			Description: "Returns the GPU device requests attached to one container, as recorded in its HostConfig.DeviceRequests. containerId is Docker's own 64-character hexadecimal container ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
+		}
+	case "ContainerImageStatus":
+		return toolutil.ActionNarrative{
+			Description: "Reports whether a newer version of one container's image is available, optionally forcing a refresh of the cached status first. containerId is Docker's own 64-character hexadecimal container ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
+		}
+	case "ServiceImageStatus":
+		return toolutil.ActionNarrative{
+			Description: "Reports whether a newer version of one Swarm service's image is available, optionally forcing a refresh of the cached status first. serviceId is Docker Swarm's own alphanumeric service ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
 		}
 	default:
 		return toolutil.ActionNarrative{}

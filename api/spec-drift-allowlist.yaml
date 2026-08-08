@@ -54,3 +54,50 @@
 # and if one is ever needed, prefer extending TitleOverridden/
 # DescriptionOverridden's approach (a fact recorded once, at the point of the
 # override) over reviving a parallel allow-list entry for it.
+#
+# The three entries below are the first back into this file since it emptied:
+# a real "type" divergence each, not a title/description improvement, so
+# TitleOverridden/DescriptionOverridden's mechanism above does not apply to
+# them at all. See docs/api-divergences.md §6.3 for the full measurement.
+
+- operation_id: DockerContainerGpusInspect
+  field: containerId
+  reason: >-
+    containerId is Docker's own 64-character hexadecimal container ID,
+    assigned by the Docker engine itself and never a number in any Docker
+    installation. The vendored specification's "type": "integer" is simply
+    wrong about what Portainer reads off the wire here — not a looser type
+    this catalog chose for convenience, but a correction of a documentation
+    defect. The generated client bakes the same wrong type into its method
+    signature (DockerContainerGpusInspect(ctx, environmentId int,
+    containerId int, ...)), which is why this operation is hand-written
+    rather than generated: publishing "integer" would make the action
+    look well-formed while being uncallable with any container ID Docker
+    has ever actually assigned.
+  added: 2026-08-08
+
+- operation_id: ContainerImageStatus
+  field: containerId
+  reason: >-
+    Identical defect to DockerContainerGpusInspect's containerId above, on a
+    different route: this is Docker's 64-character hexadecimal container ID,
+    never a number, and the vendored specification's "type": "integer" is
+    wrong about it, not merely narrower than what this catalog chose.
+  added: 2026-08-08
+
+- operation_id: ServiceImageStatus
+  field: serviceId
+  reason: >-
+    serviceId is Docker Swarm's own alphanumeric service ID (for example
+    "9mnpnzenvg8p8tdbtq4wvbkcz"), assigned by Swarm and never a number in any
+    real deployment. The vendored specification's "type": "integer" is wrong
+    about what Portainer reads off the wire, the same class of defect as
+    containerId above. A small integer such as "1" can be made to resolve
+    against a hand-labelled probe container in a test estate, which is
+    exactly why this is not treated as a looser convenience type: no real
+    Swarm deployment ever assigns a numeric service ID, so "string" is what
+    real callers need, not a relaxation chosen for this catalog's benefit.
+    See docs/api-divergences.md's "The cheat this is written down to
+    forbid" for why a test that only proves a realistic string resolves is
+    not sufficient evidence this field is actually string-typed.
+  added: 2026-08-08

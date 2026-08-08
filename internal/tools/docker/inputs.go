@@ -62,3 +62,64 @@ type stacksImageStatusClearInput struct {
 	// SwarmID Identifier of the swarm cluster that will be used to filter the stacks to clear the image status cache for
 	SwarmID *string `json:"swarmId,omitempty" jsonschema:"Identifier of the swarm cluster that will be used to filter the stacks to clear the image status cache for"`
 }
+
+// The three types below are hand-written, not scaffolded: cmd/gen_action_inputs
+// refuses DockerContainerGpusInspect, ContainerImageStatus and
+// ServiceImageStatus because the vendored specification types their
+// containerId/serviceId path parameter "integer" while the generated
+// client's own method signature bakes in a Go int that can never carry a
+// real Docker hex container ID or Docker Swarm service ID. See handlers.go's
+// package doc comment and docs/api-divergences.md §6.3. ContainerID and
+// ServiceID are string here, which is the whole point.
+//
+// Unexported, like every other Input struct in this file, and with the
+// domain's ordinary "ID" capitalisation (commonInitialisms,
+// cmd/gen_action_inputs/naming.go) rather than the raw operationId's own
+// "Id" spelling: golangci-lint's revive var-naming rule enforces this for
+// every struct field regardless of whether the struct itself is exported.
+
+// dockerContainerGpusInspectInput is the parameter shape for operation DockerContainerGpusInspect (GET /docker/{environmentId}/containers/{containerId}/gpus).
+type dockerContainerGpusInspectInput struct {
+	// EnvironmentID Environment identifier
+	EnvironmentID int `json:"environmentId" jsonschema:"Environment identifier"`
+	// ContainerID Container identifier
+	ContainerID string `json:"containerId" jsonschema:"Container identifier"`
+}
+
+func (dockerContainerGpusInspectInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"environmentId": 1,
+	}
+}
+
+// containerImageStatusInput is the parameter shape for operation ContainerImageStatus (GET /docker/{environmentId}/containers/{containerId}/image_status).
+type containerImageStatusInput struct {
+	// EnvironmentID Environment identifier
+	EnvironmentID int `json:"environmentId" jsonschema:"Environment identifier"`
+	// ContainerID Container identifier
+	ContainerID string `json:"containerId" jsonschema:"Container identifier"`
+	// Refresh Refresh will force a refresh of the image status cache
+	Refresh *bool `json:"refresh,omitempty" jsonschema:"Refresh will force a refresh of the image status cache"`
+}
+
+func (containerImageStatusInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"environmentId": 1,
+	}
+}
+
+// serviceImageStatusInput is the parameter shape for operation ServiceImageStatus (GET /docker/{environmentId}/services/{serviceId}/image_status).
+type serviceImageStatusInput struct {
+	// EnvironmentID Environment identifier
+	EnvironmentID int `json:"environmentId" jsonschema:"Environment identifier"`
+	// ServiceID Service identifier
+	ServiceID string `json:"serviceId" jsonschema:"Service identifier"`
+	// Refresh Refresh will force a refresh of the image status cache
+	Refresh *bool `json:"refresh,omitempty" jsonschema:"Refresh will force a refresh of the image status cache"`
+}
+
+func (serviceImageStatusInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"environmentId": 1,
+	}
+}
