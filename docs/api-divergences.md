@@ -365,6 +365,30 @@ flags it as unverified, not measured. Whoever next has a live container to
 delete out from under a running Portainer should confirm or refute it
 directly rather than assume this section already covers it.
 
+**A related but distinct finding, measured while building this domain's e2e
+coverage of `ContainerImageStatus` itself (2026-08-08).** Unlike
+`DockerContainerGpusInspect` — which answers 404
+(`{"message":"Unable to find the container","details":"...No such
+container: <id>"}`) for a container id Docker never assigned —
+`ContainerImageStatus` does not fail for one at all, even with
+`refresh=true`:
+
+```text
+$ curl .../docker/1/containers/<fabricated-64-hex>/image_status?refresh=true
+{"Status":"skipped","Message":""}     # 200, container never existed
+```
+
+So `Status: "skipped"` is not proof a container's image check was
+genuinely skipped for some policy reason; it is also indistinguishable from
+"this container id does not exist". A caller that wants to tell the two
+apart needs to confirm the container exists separately (for instance via
+`DockerContainerGpusInspect` or the Docker proxy's own inspect route, both
+of which do 404 on an unknown id) rather than trust `ContainerImageStatus`
+alone. See `test/e2e/suite/docker_test.go`
+(`TestDocker_ContainerImageStatus_AgainstARealContainer`) for the test that
+asserts this directly, and `internal/tools/docker/docker.go`'s `narrative`
+function for the model-facing description of it.
+
 ---
 
 ## 3. Requirements the documents understate or omit
