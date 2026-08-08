@@ -82,6 +82,29 @@ fi
 # indistinguishable "unhealthy" timeout.
 docker compose "${compose_files[@]}" up -d --wait --wait-timeout 300
 
+# Docker Swarm on the estate's own dind, so Swarm-dependent catalog actions
+# (docker.service_image_status today; nodes/tasks/services in later waves)
+# have something real to exercise instead of the CE dind's ordinary
+# standalone-engine failure it returns when Swarm is off. Optional exactly
+# like the GPU leg above: a host where Swarm cannot be enabled must still
+# bring the rest of the estate up, with the Swarm-dependent suites skipping
+# instead of the whole run aborting over this one leg. Both steps are
+# idempotent (see their own doc in lib.sh), so a second `make e2e-up` with no
+# intervening `make e2e-down` neither fails on "already part of a swarm" nor
+# tries to recreate a fixture service that already exists.
+dind_id=$(docker compose "${compose_files[@]}" ps -q docker)
+swarm_service_id=""
+if swarm_init "$dind_id"; then
+    swarm_service_id=$(swarm_fixture_service_id "$dind_id") || swarm_service_id=""
+    if [[ -n "$swarm_service_id" ]]; then
+        echo "swarm ready on the estate's docker daemon: fixture service $(swarm_fixture_service_name) ($swarm_service_id)" >&2
+    else
+        echo "warning: swarm is up but the fixture service could not be confirmed: swarm-dependent suites will skip" >&2
+    fi
+else
+    echo "no swarm on the estate's docker daemon: swarm-dependent suites will skip" >&2
+fi
+
 # Portainer is published on the *daemon host's* loopback (see
 # docker-compose.yml's 127.0.0.1 bindings). When that host is remote, forward
 # both ports here so the suite's URLs stay http://localhost:19000 and
@@ -93,6 +116,7 @@ PORTAINER_E2E_EDGE_ENV="$edge_env" \
 PORTAINER_E2E_LICENCE="$licence" \
 PORTAINER_E2E_GPU_NAME="$gpu_name" \
 PORTAINER_E2E_GPU_CDI_DEVICE="$gpu_cdi_device" \
+PORTAINER_E2E_SWARM_SERVICE_ID="$swarm_service_id" \
     go run ./harness/cmd/provision
 
 # The edge agent (profile "edge", so the plain `up` above skipped it) needs

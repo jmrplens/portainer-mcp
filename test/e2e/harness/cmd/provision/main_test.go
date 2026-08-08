@@ -462,3 +462,52 @@ func TestUnit_Run_RecordsGPUFromEnvironment(t *testing.T) {
 		})
 	}
 }
+
+// TestUnit_Run_RecordsSwarmServiceIDFromEnvironment is
+// TestUnit_Run_RecordsGPUFromEnvironment's sibling for the Swarm fixture:
+// estate_test.go's own new tests prove HasSwarm and the JSON round trip in
+// isolation, but neither exercises run() actually reading
+// swarmServiceIDEnv and attaching it to the estate before the final save.
+// Without this, a future edit that deleted that assignment, moved it above
+// where estate is declared, or typo'd the env var name would pass every
+// other test in this package and still ship a compose leg that never
+// records a Swarm fixture, silently turning every future
+// docker.service_image_status e2e test into a permanent skip.
+func TestUnit_Run_RecordsSwarmServiceIDFromEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		swarmServiceID string
+		wantHasSwarm   bool
+	}{
+		{name: "swarm fixture present", swarmServiceID: "wxyhlanc3nqz", wantHasSwarm: true},
+		{name: "no swarm on the docker host", swarmServiceID: "", wantHasSwarm: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := fakeComposeServer(t)
+
+			estatePath := filepath.Join(t.TempDir(), "estate.json")
+			edgeEnvPath := filepath.Join(t.TempDir(), ".edge.env")
+
+			t.Setenv(harness.EstateFileEnv, estatePath)
+			t.Setenv(harness.EdgeEnvFileEnv, edgeEnvPath)
+			t.Setenv(ceBaseURLEnv, server.URL)
+			t.Setenv(licenceEnv, "")
+			t.Setenv(swarmServiceIDEnv, tc.swarmServiceID)
+
+			if err := run(false, false, false); err != nil {
+				t.Fatalf("run() error = %v, want nil", err)
+			}
+
+			got, err := harness.LoadEstate(estatePath)
+			if err != nil {
+				t.Fatalf("LoadEstate() error = %v", err)
+			}
+			if got.SwarmServiceID != tc.swarmServiceID {
+				t.Errorf("SwarmServiceID = %q, want %q", got.SwarmServiceID, tc.swarmServiceID)
+			}
+			if got.HasSwarm() != tc.wantHasSwarm {
+				t.Errorf("HasSwarm() = %v, want %v", got.HasSwarm(), tc.wantHasSwarm)
+			}
+		})
+	}
+}

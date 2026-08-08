@@ -167,6 +167,27 @@ type Estate struct {
 	// GPU-less Kubernetes leg when only the compose leg's host does.
 	KubernetesGPU bool `json:"kubernetes_gpu,omitempty"`
 
+	// SwarmServiceID is the id of the long-lived fixture Swarm service
+	// (busybox sleep, named swarm_fixture_service_name in
+	// test/e2e/scripts/lib.sh) that up.sh creates on the compose leg's own
+	// dind once it has put that daemon into Swarm mode. Empty means either
+	// Swarm could not be enabled on this host or the fixture service could
+	// not be confirmed -- both optional, exactly like GPU, and a
+	// Swarm-dependent suite (docker.service_image_status today) must skip
+	// with a named reason rather than fail when this is empty.
+	//
+	// It is the service's real, Swarm-assigned alphanumeric id, read back
+	// from `docker service inspect` rather than assigned by the script --
+	// see docs/api-divergences.md's "The cheat this is written down to
+	// forbid" for why a hand-labelled small integer would not actually prove
+	// anything about ServiceImageStatus's string-typed serviceId.
+	//
+	// Like GPU, this describes the COMPOSE leg's dind only: both CE and EE
+	// register their own "docker" environment against the SAME dind daemon
+	// (dindDaemonURL in cmd/provision/main.go), so this one fixture service
+	// is reachable through either server's own environment id.
+	SwarmServiceID string `json:"swarm_service_id,omitempty"`
+
 	// EdgeEndpointID, EdgeAgentID and EdgeKey identify the edge environment
 	// registered against EE, present only when a licence was available: edge
 	// domains are Business Edition only. up.sh reads them back to start the
@@ -205,6 +226,17 @@ func (e Estate) HasKubernetes() bool {
 // Kubernetes leg's own, independent field.
 func (e Estate) HasGPU() bool {
 	return e.GPU.Name != "" && e.GPU.CDIDevice != ""
+}
+
+// HasSwarm reports whether the compose leg's Docker daemon has Swarm mode
+// enabled with a confirmed fixture service running on it, as set up by
+// up.sh's swarm_init/swarm_fixture_service_id (test/e2e/scripts/lib.sh). It
+// is false whenever that setup could not be completed -- Swarm mode refused,
+// or the fixture service could not be created or confirmed -- and a
+// Swarm-dependent suite must skip with a named reason in that case rather
+// than fail, exactly as HasGPU's callers do without a card.
+func (e Estate) HasSwarm() bool {
+	return e.SwarmServiceID != ""
 }
 
 // HasKubernetesGPU reports whether the k3d node advertises nvidia.com/gpu.

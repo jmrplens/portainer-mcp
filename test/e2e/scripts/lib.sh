@@ -331,3 +331,105 @@ gpu_cdi_spec() {
     fi
     printf '%s\n' "$stripped"
 }
+
+# swarm_fixture_service_name is the fixed name of the Swarm service up.sh
+# creates as a fixture, so Swarm-dependent catalog actions
+# (docker.service_image_status today; nodes/tasks/services in later waves)
+# have something real to exercise instead of the CE dind's ordinary
+# standalone-engine failure. Prefixed like the estate's own compose project
+# (docker-compose.yml's "name: portainer-mcp-e2e"), so a human scanning
+# `docker service ls` inside the dind, or a future orphan sweep, can
+# recognise it as belonging to this estate rather than to whatever a test
+# created on top of it.
+swarm_fixture_service_name() {
+    echo "portainer-mcp-e2e-swarm-probe"
+}
+
+# swarm_init makes dind_id -- the container id of the estate's own
+# Docker-in-Docker daemon -- a one-node Swarm. Unlike the GPU functions above
+# this never needs on_docker_host/ssh: `docker exec` is a Docker Engine API
+# call against a container the compose project already started, and the
+# `docker` CLI already routes it to the right daemon through whatever
+# DOCKER_HOST up.sh has exported (empty for local, ssh://... for remote) --
+# there is no separate physical-host shell command to reach the way
+# nvidia-smi/nvidia-ctk need.
+#
+# Idempotent: a node that already belongs to a swarm is treated as success,
+# matched on Docker's own fixed error text ("already part of a swarm")
+# rather than probed for first with a second command that could itself fail.
+# This matters because the dind keeps its Swarm state across compose's own
+# idempotent `up -d --wait` -- nothing about that state lives outside the
+# dind container's own writable layer, so it survives a second `make e2e-up`
+# run with no intervening `make e2e-down` -- and without this check that
+# second run would abort the whole estate on "this node is already part of a
+# swarm", exactly the failure mode the brief calls out by name.
+#
+# --advertise-addr 127.0.0.1 is safe specifically because this Swarm has,
+# and will only ever have, this one node: the dind is reachable solely on
+# the compose network (docker-compose.yml publishes no port for it), so
+# there is no second node that could ever dial that address to join.
+#
+# Any OTHER failure -- Swarm mode unsupported on this daemon, or refused for
+# a reason this script cannot anticipate -- is reported to stderr and
+# returned as a plain (non-fatal) failure, the same degrade-and-continue
+# shape detect_gpu_name already uses: a host where Swarm cannot be enabled
+# must still let the rest of the estate come up, with the Swarm-dependent
+# suites simply skipping instead of the whole `make e2e-up` aborting over
+# one optional leg.
+swarm_init() {
+    local dind_id="$1" out
+    if out=$(docker exec "$dind_id" docker swarm init --advertise-addr 127.0.0.1 2>&1); then
+        return 0
+    fi
+    if [[ "$out" == *"already part of a swarm"* ]]; then
+        return 0
+    fi
+    echo "warning: could not initialise docker swarm on the estate's docker daemon; continuing without it: $out" >&2
+    return 1
+}
+
+# swarm_fixture_service_id ensures swarm_fixture_service_name exists as a
+# service on dind_id (already made a Swarm manager by swarm_init) and echoes
+# its id -- Swarm's own alphanumeric service id, read back from Docker
+# itself rather than assigned by this script (see docs/api-divergences.md's
+# "The cheat this is written down to forbid": a hand-labelled small integer
+# would make docker.service_image_status look correct without actually being
+# correct). Echoes nothing and returns non-zero if the service could not be
+# created or its id could not be confirmed.
+#
+# Idempotent like swarm_init: a service that already exists (a second
+# `make e2e-up` run with no intervening `make e2e-down`) has its existing id
+# read back and reused, rather than `docker service create` failing outright
+# on Docker's own "name conflicts with an existing object".
+#
+# `busybox sleep 3600` is deliberately long-lived and does nothing: a
+# Swarm-dependent action needs a service that is still there, with its one
+# task still running, whenever a test calls it later -- not one whose task
+# ran to completion and left the service converged at zero running
+# replicas.
+#
+# --detach skips waiting for the new service to converge, which this
+# function does not need: docker.service_image_status only needs the
+# service to EXIST (see docs/api-divergences.md's ServiceImageStatus entry),
+# and waiting here would only slow every `make e2e-up` down for a property
+# nothing checks.
+swarm_fixture_service_id() {
+    local dind_id="$1" name id out
+    name=$(swarm_fixture_service_name)
+
+    if id=$(docker exec "$dind_id" docker service inspect "$name" --format '{{.ID}}' 2>/dev/null) && [[ -n "$id" ]]; then
+        echo "$id"
+        return 0
+    fi
+
+    if ! out=$(docker exec "$dind_id" docker service create --detach --name "$name" --replicas 1 busybox sleep 3600 2>&1); then
+        echo "warning: could not create the swarm fixture service $name; continuing without it: $out" >&2
+        return 1
+    fi
+
+    if ! id=$(docker exec "$dind_id" docker service inspect "$name" --format '{{.ID}}' 2>/dev/null) || [[ -z "$id" ]]; then
+        echo "warning: swarm fixture service $name was created but its id could not be read back" >&2
+        return 1
+    fi
+    echo "$id"
+}

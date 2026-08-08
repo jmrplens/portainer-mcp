@@ -313,6 +313,18 @@ fails the whole cluster with `failed to discover GPU vendor from CDI: no known G
 Suites that need a GPU skip with a named reason everywhere else, so running locally stays exactly as
 fast as it was.
 
+**Docker Swarm.** `make e2e-up` also puts the estate's own dind into Swarm mode and creates one
+long-lived fixture service (`portainer-mcp-e2e-swarm-probe`, `busybox sleep`), so Swarm-dependent
+catalog actions — `docker.service_image_status` today — have something real to exercise instead of
+the plain-engine 500 they get without it. Both steps are idempotent: a second `make e2e-up` with no
+intervening `make e2e-down` reuses the existing swarm and service rather than failing on Docker's own
+"already part of a swarm"/"name conflicts with an existing object". Like the GPU leg, this needs no
+extra key — it is attempted unconditionally — and degrades the same way: a host where `docker swarm
+init` is refused for any reason gets a warning, not an aborted `make e2e-up`, and Swarm-dependent
+suites skip via `harness.Estate.HasSwarm()` instead of failing. `make e2e-down` destroys the dind
+container wholesale, taking the swarm and the fixture service with it — nothing survives outside that
+container's own writable layer, so there is nothing extra to release or clean up at teardown.
+
 **Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
 gitignored `.env` at the repository root (see `.env.example`):
 
