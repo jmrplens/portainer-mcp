@@ -145,12 +145,19 @@ func TestUnit_Specs_EditionsMatchVendoredSpec(t *testing.T) {
 	}
 }
 
-// TestUnit_Specs_MutatingAndDestructiveFlags_MatchHTTPSemantics pins each
-// action's Mutating/Destructive flags by name: the three POST cache-clear
-// operations must be Mutating (they change server-side cache state) but not
-// Destructive (clearing a status cache loses no resource — Docker/Swarm
-// simply repopulates it on the next read), and the two GET operations must
-// be neither.
+// TestUnit_Specs_MutatingAndDestructiveFlags_MatchHTTPSemantics pins every
+// one of this domain's eight actions' Mutating/Destructive flags by name —
+// generatedSpecs()'s five AND handWrittenSpecs()'s three, via Specs()
+// itself, not generatedSpecs() alone: the three POST cache-clear operations
+// must be Mutating (they change server-side cache state) but not Destructive
+// (clearing a status cache loses no resource — Docker/Swarm simply
+// repopulates it on the next read), and every GET operation — the two
+// generated ones and all three hand-written ones alike — must be neither.
+// Iterating generatedSpecs() alone, as an earlier version of this test did,
+// left the three hand-written GET operations' flags completely unasserted:
+// nothing would have caught one of them wrongly marked Mutating, which
+// PORTAINER_READ_ONLY would then block for no reason, or Destructive, which
+// PORTAINER_SAFE_MODE would then needlessly intercept.
 func TestUnit_Specs_MutatingAndDestructiveFlags_MatchHTTPSemantics(t *testing.T) {
 	t.Parallel()
 	mutating := map[string]bool{
@@ -159,8 +166,11 @@ func TestUnit_Specs_MutatingAndDestructiveFlags_MatchHTTPSemantics(t *testing.T)
 		"docker.images_list":                   false,
 		"docker.service_image_status_clear":    true,
 		"docker.stacks_image_status_clear":     true,
+		"docker.container_gpus_inspect":        false,
+		"docker.container_image_status":        false,
+		"docker.service_image_status":          false,
 	}
-	for _, s := range generatedSpecs() {
+	for _, s := range Specs() {
 		want, ok := mutating[s.Name]
 		if !ok {
 			t.Fatalf("%s: no expectation recorded in this test's table", s.Name)
@@ -569,5 +579,67 @@ func TestUnit_DockerDashboard_Unauthorized_ReturnsClassifiedError(t *testing.T) 
 	_, err := find(t, "docker.dashboard")(context.Background(), c, json.RawMessage(`{"environmentId":1}`))
 	if err == nil {
 		t.Fatal("handler error = nil, want the 401 classified")
+	}
+}
+
+// TestUnit_Narrative_OverridesDescriptionAwayFromTheSpecSummary pins the
+// narrative hook itself (narrative in docker.go), not merely the mechanical
+// wiring that carries its result: `go test ./...`, `make audit-spec-drift`
+// and `make audit-1to1`'s ratchet all stayed green when a live review
+// deleted narrative's whole switch statement outright — none of them reads
+// Description's actual content, only that a Description field exists and,
+// for audit-spec-drift, that it does not match a stale allow-list entry.
+// Without this test nothing notices the five operations named below
+// silently losing their hand-written explanation and reverting to the
+// vendored specification's own bare summary — for ServiceImageStatus, that
+// is the sentence recorded in docs/api-divergences.md section 2.4 explaining
+// that a cached success can describe a service that no longer exists.
+//
+// Checked per operation, individually, against a table naming exactly the
+// five OperationIDs narrative() carries a case for — not as a single
+// aggregate assertion — so that deleting one operation's case, rather than
+// the whole hook, still fails with that operation's own name attached
+// rather than a generic "something changed".
+//
+// Asserted as "Description differs from spec.Title", not as literal
+// override text, and that is a deliberate choice, not an oversight:
+// spec.Title is always the vendored specification's own "summary" field,
+// verbatim — narrative() never sets Title for any operation in this domain
+// (every case below sets only Description), and handWrittenSpecs'/
+// generatedSpecs' own doc comments confirm Title is where that raw summary
+// text lives. A Description equal to Title is therefore exactly the
+// generator's own boilerplate-fallback shape (see those same doc comments)
+// and is what every one of these five looks like with its override gone.
+// Asserting the literal override text instead would be strictly stronger —
+// it would also catch an override replaced with different-but-still-wrong
+// text — but toolutil.WithNarrative's own doc comment is explicit that
+// improving one of these sentences' wording is expected, ordinary,
+// continuing work ("every one of the 19 catalogued actions with a narrative
+// override still says something different from the specification's own
+// wording, on purpose"). A literal-text assertion would turn every such
+// improvement into a required test edit, for no gain against the actual
+// failure mode this test exists to catch — the override disappearing
+// entirely, not its prose changing. Difference-from-spec is the right
+// weight for that.
+func TestUnit_Narrative_OverridesDescriptionAwayFromTheSpecSummary(t *testing.T) {
+	t.Parallel()
+	overridden := []string{
+		"DockerDashboard",
+		"DockerImagesList",
+		"DockerContainerGpusInspect",
+		"ContainerImageStatus",
+		"ServiceImageStatus",
+	}
+	for _, id := range overridden {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			spec := specByOperationID(t, id)
+			if spec.Description == "" {
+				t.Fatalf("%s: Description is empty", id)
+			}
+			if spec.Description == spec.Title {
+				t.Errorf("%s: Description == Title (%q); this operation's narrative override is missing, so its Description silently reverted to the vendored specification's own bare summary", id, spec.Title)
+			}
+		})
 	}
 }
