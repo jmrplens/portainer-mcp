@@ -44,8 +44,30 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // action in this domain, generated or hand-written, so that no action can
 // acquire a literal Title/Description assignment that drifts from the spec
 // unnoticed — see docs/domain-wave-checklist.md.
+//
+// DockerDashboard and DockerImagesList are here because
+// cmd/gen_action_inputs's scaffold run warns about both: the vendored
+// specification's own "description" for each is nothing but
+// "**Access policy**: ..." boilerplate, which the generator strips, so
+// without an override Description falls back to repeating Title verbatim
+// (see docs/domain-wave-checklist.md's Step 2, which names exactly this
+// situation as a candidate a wave must review before accepting). Both
+// descriptions below are written from the generated response type each
+// handler actually returns (DockerDashboardData, []ImagesImageResponse),
+// not from the spec's stripped text. DockerContainerGpusInspect,
+// ContainerImageStatus and ServiceImageStatus trigger the identical warning
+// but are Task 3's hand-written operations, not this task's — narrative
+// entries for them belong there, not here.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
+	case "DockerDashboard":
+		return toolutil.ActionNarrative{
+			Description: "Returns dashboard counters for one Docker environment: the number of stacks, services, networks and volumes, plus a summary of container states (running/stopped/etc.) and image counts and total size.",
+		}
+	case "DockerImagesList":
+		return toolutil.ActionNarrative{
+			Description: "Lists every Docker image present on one environment, with each image's id, tags, creation time and size. Pass withUsage to also report whether each image is used by at least one container.",
+		}
 	default:
 		return toolutil.ActionNarrative{}
 	}
