@@ -62,15 +62,21 @@ type pathParamKey struct {
 // rule matches but a positive lower bound would refuse a value the real
 // server accepts. None of the four names a domain this catalog declares
 // today (system, tags, registries) — see cmd/gen_action_inputs/fields.go's
-// own doc comment for each entry's reasoning — so this table is inert in
-// practice until a future wave adds the endpoints/docker domains, and is
-// carried here now so that wave's audit is already correct on day one rather
-// than needing its own fix once the first false-positive finding appears.
+// own doc comment for each entry's reasoning. It stops being inert with the
+// docker domain, which declares three of the operations it excuses.
+//
+// It is a mirror, and mirrors drift: this table carried four of the
+// generator's five entries until the docker wave was about to land, and the
+// missing one ({ServiceImageStatus, serviceId}) would have failed CI with a
+// finding that cannot be allow-listed. TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable
+// now compares the two key sets in both directions, so neither table can
+// gain an entry the other lacks.
 var pathParamMinimumExceptions = map[pathParamKey]bool{
 	{OperationID: "EndpointDockerhubStatus", ParamName: "registryId"}:     true,
 	{OperationID: "DockerContainerGpusInspect", ParamName: "containerId"}: true,
 	{OperationID: "ContainerImageStatus", ParamName: "containerId"}:       true,
 	{OperationID: "SnapshotContainerInspect", ParamName: "containerId"}:   true,
+	{OperationID: "ServiceImageStatus", ParamName: "serviceId"}:           true,
 }
 
 // pathParamRequiresMinimum decides whether the catalog action generated (or

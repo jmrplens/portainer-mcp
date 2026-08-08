@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -178,4 +180,60 @@ func TestUnit_RealCatalog_EveryIdentifierPathParam_HasMinimum(t *testing.T) {
 			t.Errorf("auditIdentifierMinimum() found %d real, unresolved finding(s): %+v", len(result.Findings), result.Findings)
 		}
 	})
+}
+
+// TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable pins the
+// relationship the two tables have, rather than their contents. They are
+// deliberately separate — the generator's carries a reason string it stamps
+// into the emitted code, the audit's only needs to know a key is excused —
+// but a key present in one and absent from the other is always a defect, in
+// whichever direction it points.
+//
+// It points one way today: the generator excuses
+// {ServiceImageStatus, serviceId} and the audit does not. A minimum finding
+// cannot be allow-listed, so that gap turns into a CI failure with no legal
+// remedy the moment docker.service_image_status is declared — which is the
+// very next commit. The audit's own doc comment predicted this ("inert ...
+// until a future wave adds the endpoints/docker domains") and then did not
+// carry the entry that would have made it true.
+func TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable(t *testing.T) {
+	t.Parallel()
+
+	// The generator's table is in package main of another command, so it
+	// cannot be imported. Read the source and extract the keys, which also
+	// means this test sees a new entry the moment someone adds one there.
+	src, err := os.ReadFile("../gen_action_inputs/fields.go")
+	if err != nil {
+		t.Fatalf("reading the generator's own table: %v", err)
+	}
+	generator := parsePathParamKeys(t, string(src))
+	if len(generator) == 0 {
+		t.Fatal("extracted 0 keys from the generator's table; the parser below no longer matches its source")
+	}
+
+	for key := range generator {
+		if !pathParamMinimumExceptions[key] {
+			t.Errorf("the generator excuses %+v but this audit does not; a minimum finding cannot be allow-listed, so the first action using it fails CI with no legal remedy", key)
+		}
+	}
+	for key := range pathParamMinimumExceptions {
+		if !generator[key] {
+			t.Errorf("this audit excuses %+v but the generator does not; the audit would stay silent about a missing minimum the generator intends to stamp", key)
+		}
+	}
+}
+
+// parsePathParamKeys extracts every {OperationID: "...", ParamName: "..."}
+// key from a Go source file's map literal. Deliberately a regexp over the
+// source rather than a Go parse: the two tables have different value types
+// (string reason vs bool), so nothing but the keys can be compared, and the
+// keys are written identically in both files.
+func parsePathParamKeys(t *testing.T, src string) map[pathParamKey]bool {
+	t.Helper()
+	re := regexp.MustCompile(`\{OperationID:\s*"([^"]+)",\s*ParamName:\s*"([^"]+)"\}`)
+	out := map[pathParamKey]bool{}
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		out[pathParamKey{OperationID: m[1], ParamName: m[2]}] = true
+	}
+	return out
 }
