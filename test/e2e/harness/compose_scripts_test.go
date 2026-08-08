@@ -406,6 +406,47 @@ func TestUnit_DownScript_NoMarkerTearsDownLocally(t *testing.T) {
 	}
 }
 
+// TestUnit_DownScript_ComposeDownPassesDashV pins down.sh:104's `-v` flag on
+// its own `docker compose ... down` call. README.md documents that nothing
+// survives the estate's teardown outside a container's own writable layer,
+// but that is not actually why: `docker:28-dind` (the estate's own Docker
+// daemon image) declares `/var/lib/docker` as a VOLUME, so Swarm's on-disk
+// state lives in an anonymous volume, not the container's writable layer,
+// and would survive the container's own removal. `-v` is what makes compose
+// remove that volume too -- drop it and a second `make e2e-up` would find
+// the previous run's Swarm state (and, with it, the previous run's fixture
+// service) still there despite an intervening `make e2e-down`, exactly the
+// guarantee the README section on Docker Swarm depends on.
+func TestUnit_DownScript_ComposeDownPassesDashV(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+
+	_, log, code := repo.run(t, "down.sh")
+	if code != 0 {
+		t.Fatalf("down.sh exited %d; log:\n%s", code, log)
+	}
+
+	var downLine string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "DOCKER_CALL:") && strings.Contains(line, "--remove-orphans") {
+			downLine = line
+			break
+		}
+	}
+	if downLine == "" {
+		t.Fatalf("down.sh never issued its compose teardown (down --remove-orphans) call; log:\n%s", log)
+	}
+	hasDashV := false
+	for _, field := range strings.Fields(downLine) {
+		if field == "-v" {
+			hasDashV = true
+			break
+		}
+	}
+	if !hasDashV {
+		t.Errorf("down.sh's compose teardown call carried no -v flag: %q -- without it, docker:28-dind's own VOLUME /var/lib/docker survives the container's removal, and the estate's Swarm state and fixture service would leak across a down/up cycle", downLine)
+	}
+}
+
 // singleQuoted extracts the content of the first '...'-quoted substring in s,
 // failing the test if there is none. Both up.sh's spec-writing call and
 // down.sh's teardown rm -f pass the CDI specification's path to a remote
