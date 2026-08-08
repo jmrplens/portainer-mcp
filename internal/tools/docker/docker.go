@@ -97,6 +97,17 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // serviceId is a string despite the schema declaring it an integer, and that
 // is exactly what a model calling one of these three needs to know before it
 // tries to pass a number.
+//
+// ContainerImageStatus and ServiceImageStatus carry a third reason, found
+// while building this domain's e2e coverage (docs/api-divergences.md §2.4):
+// ServiceImageStatus was measured answering a stale cached success for a
+// Swarm service that had already been deleted, and kept doing so after the
+// node left Swarm entirely. Only the spec's own optional refresh parameter,
+// which forces a live docker service inspect, made it tell the truth. The
+// vendored specification declares the identical refresh parameter on
+// ContainerImageStatus, but that endpoint was not itself probed for the same
+// caching, so its narrative below flags the risk as unverified rather than
+// asserting it.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "DockerDashboard":
@@ -113,11 +124,11 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		}
 	case "ContainerImageStatus":
 		return toolutil.ActionNarrative{
-			Description: "Reports whether a newer version of one container's image is available, optionally forcing a refresh of the cached status first. containerId is Docker's own 64-character hexadecimal container ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
+			Description: "Reports whether a newer version of one container's image is available. The sibling docker.service_image_status action has been measured returning a stale cached answer for a resource that had already stopped existing unless refresh is passed; this action declares the identical refresh parameter and may cache the same way, but that has not itself been verified — pass refresh if the answer needs to reflect the container's current state. containerId is Docker's own 64-character hexadecimal container ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
 		}
 	case "ServiceImageStatus":
 		return toolutil.ActionNarrative{
-			Description: "Reports whether a newer version of one Swarm service's image is available, optionally forcing a refresh of the cached status first. serviceId is Docker Swarm's own alphanumeric service ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
+			Description: "Reports whether a newer version of one Swarm service's image is available. Without refresh, Portainer can answer from a stale cache describing a service that no longer exists — measured surviving both the service's own deletion and its node leaving Swarm entirely; pass refresh to force a live check and get the service's current state. serviceId is Docker Swarm's own alphanumeric service ID — published here as a string even though the vendored specification incorrectly declares it an integer; see docs/api-divergences.md.",
 		}
 	default:
 		return toolutil.ActionNarrative{}

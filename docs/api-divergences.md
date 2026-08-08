@@ -305,6 +305,66 @@ Only `system.version` and `system.status` carry `ServerVersion`.
 `ServerVersion` over a `system.info` result compiles and fails forever with
 `<nil>`. See `test/e2e/suite/system_test.go`.
 
+### 2.4 `ServiceImageStatus` answers from a stale cache that outlives the service, and outlives Swarm itself
+
+**Evidence: probed live**, 2026-08-08, against the `wave1-stage-a-docker` e2e
+estate's Business Edition Compose leg, using the fixture Swarm service
+(`portainer-mcp-e2e-swarm-probe`, service id
+`szhjqsafzx4ksaihnrx9ul9g3` in the run quoted below) that `make e2e-up`
+creates for this domain's coverage.
+
+`GET /docker/{environmentId}/services/{serviceId}/image_status`
+(`docker.service_image_status`) without the optional `refresh` query
+parameter answers a cached `200 {"Status":"updated","Message":""}` for a
+service id it once resolved successfully — and keeps answering it after the
+service is gone. The first version of this domain's e2e test asserted only
+"no error, `Status` non-empty, not `\"error\"`"; after deleting the fixture
+service (`docker service rm portainer-mcp-e2e-swarm-probe`) and re-running
+it, **the test still passed**, against a service that no longer existed.
+Pushing further — leaving Swarm on that node entirely
+(`docker swarm leave --force`), with the service already deleted — and
+querying the same endpoint directly with `curl` got the identical stale
+answer, while adding `refresh=true` forced a live `docker service inspect`
+and got the honest failure:
+
+```text
+$ docker exec portainer-mcp-e2e-docker-1 docker swarm leave --force
+$ curl .../docker/1/services/szhjqsafzx4ksaihnrx9ul9g3/image_status
+{"Status":"updated","Message":""}     # 200, swarm INACTIVE, service already deleted, cached answer
+$ curl .../docker/1/services/szhjqsafzx4ksaihnrx9ul9g3/image_status?refresh=true
+{"message":"Unable to get the status of this image","details":"...This node is not a swarm manager..."}   # 500, refresh forces a live check and it fails honestly
+```
+
+`refresh: true` is the remedy, confirmed by two further breaks made
+*after* adding it to the test: with the fixture service torn down but Swarm
+still active, the call now fails with the real
+`Error response from daemon: service ... not found`; with Swarm left
+entirely (service recreated first), the precondition call
+(`docker.service_image_status_clear`) now fails with the real
+`This node is not a swarm manager` error. All three states — healthy
+(pass), broken (fail, with the live server's own error text), stale-without-
+refresh (silent pass on dead data) — were observed directly. See
+`test/e2e/suite/docker_test.go`
+(`TestDocker_ServiceImageStatus_AgainstARealSwarmService`) for the test that
+now passes `refresh: true` for exactly this reason, and
+`internal/tools/docker/docker.go`'s `narrative` function for the
+model-facing description of it.
+
+**What this does not establish.** Only `ServiceImageStatus` was probed. How
+long the cache lives, whether it is keyed per-service or is a single global
+cache, and whether any other `docker`-tagged endpoint shares it, were not
+measured — treat all three as unknown, not as "probably the same".
+`ContainerImageStatus` (`GET
+/docker/{environmentId}/containers/{containerId}/image_status`) was **not**
+probed for this behaviour. It does declare the identical optional `refresh`
+boolean query parameter in the vendored specification, with the identical
+parameter description ("Refresh will force a refresh of the image status
+cache" — checked against `api/specs/ee-2.44.0.json`, both operations,
+2026-08-08), which is why its own narrative flags the same risk — but
+flags it as unverified, not measured. Whoever next has a live container to
+delete out from under a running Portainer should confirm or refute it
+directly rather than assume this section already covers it.
+
 ---
 
 ## 3. Requirements the documents understate or omit
