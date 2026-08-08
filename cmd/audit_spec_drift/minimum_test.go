@@ -1,8 +1,11 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
-	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
@@ -198,42 +201,144 @@ func TestUnit_RealCatalog_EveryIdentifierPathParam_HasMinimum(t *testing.T) {
 // carry the entry that would have made it true.
 func TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable(t *testing.T) {
 	t.Parallel()
-
-	// The generator's table is in package main of another command, so it
-	// cannot be imported. Read the source and extract the keys, which also
-	// means this test sees a new entry the moment someone adds one there.
-	src, err := os.ReadFile("../gen_action_inputs/fields.go")
-	if err != nil {
-		t.Fatalf("reading the generator's own table: %v", err)
-	}
-	generator := parsePathParamKeys(t, string(src))
-	if len(generator) == 0 {
-		t.Fatal("extracted 0 keys from the generator's table; the parser below no longer matches its source")
-	}
-
-	for key := range generator {
-		if !pathParamMinimumExceptions[key] {
-			t.Errorf("the generator excuses %+v but this audit does not; a minimum finding cannot be allow-listed, so the first action using it fails CI with no legal remedy", key)
+	t.Run("PathParamMinimumExceptions MirrorsTheGeneratorsOwnTable", func(t *testing.T) {
+		// The generator's table is in package main of another command, so it
+		// cannot be imported. Parse the source and extract the keys, which
+		// also means this test sees a new entry the moment someone adds one
+		// there.
+		src, err := os.ReadFile("../gen_action_inputs/fields.go")
+		if err != nil {
+			t.Fatalf("reading the generator's own table: %v", err)
 		}
-	}
-	for key := range pathParamMinimumExceptions {
-		if !generator[key] {
-			t.Errorf("this audit excuses %+v but the generator does not; the audit would stay silent about a missing minimum the generator intends to stamp", key)
+		generator := parsePathParamMinimumExceptionsKeys(t, string(src))
+		if len(generator) == 0 {
+			t.Fatal("extracted 0 keys from pathParamMinimumExceptions in the generator's source; the declaration was not found, or no longer has this shape")
 		}
-	}
+
+		for key := range generator {
+			if !pathParamMinimumExceptions[key] {
+				t.Errorf("the generator excuses %+v but this audit does not; a minimum finding cannot be allow-listed, so the first action using it fails CI with no legal remedy", key)
+			}
+		}
+		for key := range pathParamMinimumExceptions {
+			if !generator[key] {
+				t.Errorf("this audit excuses %+v but the generator does not; the audit would stay silent about a missing minimum the generator intends to stamp", key)
+			}
+		}
+	})
 }
 
-// parsePathParamKeys extracts every {OperationID: "...", ParamName: "..."}
-// key from a Go source file's map literal. Deliberately a regexp over the
-// source rather than a Go parse: the two tables have different value types
-// (string reason vs bool), so nothing but the keys can be compared, and the
-// keys are written identically in both files.
-func parsePathParamKeys(t *testing.T, src string) map[pathParamKey]bool {
+// parsePathParamMinimumExceptionsKeys extracts every pathParamKey out of the
+// pathParamMinimumExceptions declaration in a Go source file, found by
+// identifier name via go/ast rather than by pattern-matching the
+// {OperationID: "...", ParamName: "..."} literal shape across the whole
+// file. That shape is not unique to this table: fields.go also declares
+// pathParamTypeOverrides using the identical shape, with a
+// ServiceImageStatus/serviceId entry of its own, so a scan blind to which
+// map it is inside would silently read a key out of the wrong table. The
+// shape is also not the only valid spelling: a positional literal
+// ({"OperationID value", "ParamName value"}, with no field names at all) is
+// ordinary, go-vet-clean Go for a value inside its own declaring package,
+// and a regexp anchored to the keyed spelling would simply not see it —
+// which would make this test blind to an entry rewritten that way in either
+// table. Walking the declaration's own *ast.CompositeLit and accepting both
+// a *ast.KeyValueExpr and a bare positional element avoids both failure
+// modes: it can only ever look inside pathParamMinimumExceptions, and it
+// does not care which of the two equivalent forms an entry is written in.
+func parsePathParamMinimumExceptionsKeys(t *testing.T, src string) map[pathParamKey]bool {
 	t.Helper()
-	re := regexp.MustCompile(`\{OperationID:\s*"([^"]+)",\s*ParamName:\s*"([^"]+)"\}`)
-	out := map[pathParamKey]bool{}
-	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		out[pathParamKey{OperationID: m[1], ParamName: m[2]}] = true
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fields.go", src, 0)
+	if err != nil {
+		t.Fatalf("parsing generator source as Go: %v", err)
 	}
+
+	out := map[pathParamKey]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		valueSpec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, name := range valueSpec.Names {
+			if name.Name != "pathParamMinimumExceptions" || i >= len(valueSpec.Values) {
+				continue
+			}
+			mapLit, ok := valueSpec.Values[i].(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			for _, elt := range mapLit.Elts {
+				entry, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				keyLit, ok := entry.Key.(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				if key, ok := pathParamKeyFromCompositeLit(keyLit); ok {
+					out[key] = true
+				}
+			}
+		}
+		return true
+	})
 	return out
+}
+
+// pathParamKeyFromCompositeLit reads a single map-key composite literal —
+// either {OperationID: "...", ParamName: "..."} or the equivalent
+// positional {"...", "..."} — into a pathParamKey.
+func pathParamKeyFromCompositeLit(lit *ast.CompositeLit) (pathParamKey, bool) {
+	var operationID, paramName string
+	positionalIndex := 0
+	for _, elt := range lit.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			ident, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			value, ok := stringLiteralValue(kv.Value)
+			if !ok {
+				continue
+			}
+			switch ident.Name {
+			case "OperationID":
+				operationID = value
+			case "ParamName":
+				paramName = value
+			}
+			continue
+		}
+
+		value, ok := stringLiteralValue(elt)
+		if !ok {
+			continue
+		}
+		switch positionalIndex {
+		case 0:
+			operationID = value
+		case 1:
+			paramName = value
+		}
+		positionalIndex++
+	}
+	if operationID == "" || paramName == "" {
+		return pathParamKey{}, false
+	}
+	return pathParamKey{OperationID: operationID, ParamName: paramName}, true
+}
+
+// stringLiteralValue unquotes e if it is a string literal, and reports
+// whether it was one.
+func stringLiteralValue(e ast.Expr) (string, bool) {
+	basicLit, ok := e.(*ast.BasicLit)
+	if !ok || basicLit.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(basicLit.Value)
+	if err != nil {
+		return "", false
+	}
+	return value, true
 }
