@@ -409,10 +409,13 @@ swarm_init() {
 # replicas.
 #
 # --detach skips waiting for the new service to converge, which this
-# function does not need: docker.service_image_status only needs the
-# service to EXIST (see docs/api-divergences.md's ServiceImageStatus entry),
-# and waiting here would only slow every `make e2e-up` down for a property
-# nothing checks.
+# function does not need: the e2e suite calls docker.service_image_status
+# with refresh:true, which forces a live `docker service inspect` and
+# succeeds once the service is registered with Swarm, whether or not its
+# replica has finished converging (see docs/api-divergences.md section 2.4:
+# the live check fails with "service ... not found" only once the service
+# record itself is gone, never on an unconverged replica) -- so waiting here
+# would only slow every `make e2e-up` down for a property nothing checks.
 swarm_fixture_service_id() {
     local dind_id="$1" name id out
     name=$(swarm_fixture_service_name)
