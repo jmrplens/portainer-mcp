@@ -241,10 +241,26 @@ func TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable(t *testing
 // ordinary, go-vet-clean Go for a value inside its own declaring package,
 // and a regexp anchored to the keyed spelling would simply not see it —
 // which would make this test blind to an entry rewritten that way in either
-// table. Walking the declaration's own *ast.CompositeLit and accepting both
-// a *ast.KeyValueExpr and a bare positional element avoids both failure
-// modes: it can only ever look inside pathParamMinimumExceptions, and it
-// does not care which of the two equivalent forms an entry is written in.
+// table.
+//
+// Two things this function deliberately does NOT do broadly:
+//
+//  1. It walks only file.Decls — top-level declarations — rather than
+//     ast.Inspect-ing the whole file. A same-named var inside a function
+//     body (impossible for this exact case today, since nothing shadows
+//     pathParamMinimumExceptions, but not a shape this parser should trust
+//     merely because nothing does it yet) is invisible to it, the same way
+//     it is invisible to Go code outside that function.
+//  2. It does not evaluate arbitrary expressions. An entry field that is
+//     not a string literal — most plausibly a named constant, the obvious
+//     next step if someone DRYs the operation-ID strings this table and
+//     pathParamTypeOverrides already duplicate — is not silently skipped.
+//     pathParamKeyFromCompositeLit reports which elements it could not
+//     read, and the caller turns that into a named test failure rather
+//     than a quietly smaller key set: a key this test cannot see is
+//     exactly the defect this whole test exists to catch, one layer in,
+//     and "the count came out non-zero" must never be mistaken for "the
+//     count came out complete."
 func parsePathParamMinimumExceptionsKeys(t *testing.T, src string) map[pathParamKey]bool {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -252,37 +268,51 @@ func parsePathParamMinimumExceptionsKeys(t *testing.T, src string) map[pathParam
 	if err != nil {
 		t.Fatalf("parsing generator source as Go: %v", err)
 	}
+	sourceOf := func(n ast.Node) string {
+		return src[fset.Position(n.Pos()).Offset:fset.Position(n.End()).Offset]
+	}
 
 	out := map[pathParamKey]bool{}
-	ast.Inspect(file, func(n ast.Node) bool {
-		valueSpec, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.VAR {
+			continue
 		}
-		for i, name := range valueSpec.Names {
-			if name.Name != "pathParamMinimumExceptions" || i >= len(valueSpec.Values) {
-				continue
-			}
-			mapLit, ok := valueSpec.Values[i].(*ast.CompositeLit)
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
 			if !ok {
 				continue
 			}
-			for _, elt := range mapLit.Elts {
-				entry, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
+			for i, name := range valueSpec.Names {
+				if name.Name != "pathParamMinimumExceptions" || i >= len(valueSpec.Values) {
 					continue
 				}
-				keyLit, ok := entry.Key.(*ast.CompositeLit)
+				mapLit, ok := valueSpec.Values[i].(*ast.CompositeLit)
 				if !ok {
+					t.Errorf("pathParamMinimumExceptions is not a composite literal this parser can read (%s)", sourceOf(valueSpec.Values[i]))
 					continue
 				}
-				if key, ok := pathParamKeyFromCompositeLit(keyLit); ok {
+				for _, elt := range mapLit.Elts {
+					entry, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						t.Errorf("pathParamMinimumExceptions has a map entry this parser cannot read as key: value (%s); a key it cannot read must not be silently dropped", sourceOf(elt))
+						continue
+					}
+					keyLit, ok := entry.Key.(*ast.CompositeLit)
+					if !ok {
+						t.Errorf("pathParamMinimumExceptions has a key this parser cannot read as a pathParamKey literal (%s); a key it cannot read must not be silently dropped", sourceOf(entry.Key))
+						continue
+					}
+					key, ok := pathParamKeyFromCompositeLit(keyLit)
+					if !ok {
+						t.Errorf("pathParamMinimumExceptions has an entry this parser cannot fully decode into a pathParamKey (%s) — likely a named constant or other non-string-literal field; resolving arbitrary expressions is out of scope, but silently dropping the entry would let this table drift from the generator's exactly the way this test exists to prevent", sourceOf(keyLit))
+						continue
+					}
 					out[key] = true
 				}
 			}
 		}
-		return true
-	})
+	}
 	return out
 }
 
