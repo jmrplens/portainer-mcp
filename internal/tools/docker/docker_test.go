@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -99,15 +100,30 @@ func TestUnit_Specs_CoversEveryMechanicalOperation(t *testing.T) {
 	for _, s := range generatedSpecs() {
 		got[s.OperationID] = true
 	}
+
+	// One subtest per operation ID in either set, so a ratchet entry with no
+	// matching generatedSpecs() operation — or a generated operation with no
+	// matching ratchet entry — fails a subtest named after that exact ID,
+	// not a shared test whose failure text could belong to any operation it
+	// iterated.
+	union := map[string]bool{}
 	for id := range want {
-		if !got[id] {
-			t.Errorf("generatedSpecs() is missing %s", id)
-		}
+		union[id] = true
 	}
 	for id := range got {
-		if !want[id] {
-			t.Errorf("generatedSpecs() contains unexpected %s; if this is deliberate the ratchet and this table both need updating", id)
-		}
+		union[id] = true
+	}
+
+	for id := range union {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			switch {
+			case want[id] && !got[id]:
+				t.Errorf("generatedSpecs() is missing %s", id)
+			case got[id] && !want[id]:
+				t.Errorf("generatedSpecs() contains unexpected %s; if this is deliberate the ratchet and this table both need updating", id)
+			}
+		})
 	}
 }
 
@@ -117,9 +133,12 @@ func TestUnit_Specs_CoversEveryMechanicalOperation(t *testing.T) {
 func TestUnit_Specs_AreAllValid(t *testing.T) {
 	t.Parallel()
 	for _, s := range Specs() {
-		if err := s.Validate(); err != nil {
-			t.Errorf("%s: %v", s.Name, err)
-		}
+		t.Run(s.Name, func(t *testing.T) {
+			t.Parallel()
+			if err := s.Validate(); err != nil {
+				t.Errorf("%v", err)
+			}
+		})
 	}
 }
 
@@ -139,9 +158,12 @@ func TestUnit_Specs_EditionsMatchVendoredSpec(t *testing.T) {
 		"StacksImageStatusClear":     edition.EE,
 	}
 	for _, s := range generatedSpecs() {
-		if s.Edition != want[s.OperationID] {
-			t.Errorf("%s (%s): Edition = %v, want %v", s.Name, s.OperationID, s.Edition, want[s.OperationID])
-		}
+		t.Run(s.OperationID, func(t *testing.T) {
+			t.Parallel()
+			if s.Edition != want[s.OperationID] {
+				t.Errorf("%s (%s): Edition = %v, want %v", s.Name, s.OperationID, s.Edition, want[s.OperationID])
+			}
+		})
 	}
 }
 
@@ -171,16 +193,19 @@ func TestUnit_Specs_MutatingAndDestructiveFlags_MatchHTTPSemantics(t *testing.T)
 		"docker.service_image_status":          false,
 	}
 	for _, s := range Specs() {
-		want, ok := mutating[s.Name]
-		if !ok {
-			t.Fatalf("%s: no expectation recorded in this test's table", s.Name)
-		}
-		if s.Mutating != want {
-			t.Errorf("%s: Mutating = %v, want %v", s.Name, s.Mutating, want)
-		}
-		if s.Destructive {
-			t.Errorf("%s: Destructive = true, want false — a cache clear loses no resource", s.Name)
-		}
+		t.Run(s.Name, func(t *testing.T) {
+			t.Parallel()
+			want, ok := mutating[s.Name]
+			if !ok {
+				t.Fatalf("no expectation recorded in this test's table")
+			}
+			if s.Mutating != want {
+				t.Errorf("Mutating = %v, want %v", s.Mutating, want)
+			}
+			if s.Destructive {
+				t.Errorf("Destructive = true, want false — a cache clear loses no resource")
+			}
+		})
 	}
 }
 
@@ -202,18 +227,28 @@ func TestUnit_HandWrittenSpecs_CoversTheThreeStringIdentifierOperations(t *testi
 	for _, s := range handWrittenSpecs() {
 		got[s.OperationID] = true
 	}
+
+	union := map[string]bool{}
 	for id := range want {
-		if !got[id] {
-			t.Errorf("handWrittenSpecs() is missing %s", id)
-		}
+		union[id] = true
 	}
 	for id := range got {
-		if !want[id] {
-			t.Errorf("handWrittenSpecs() contains unexpected %s; if this is deliberate the ratchet and this table both need updating", id)
-		}
+		union[id] = true
 	}
-	if got, want := len(Specs()), len(generatedSpecs())+len(handWrittenSpecs()); got != want {
-		t.Errorf("len(Specs()) = %d, want %d (generatedSpecs() + handWrittenSpecs())", got, want)
+	for id := range union {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			switch {
+			case want[id] && !got[id]:
+				t.Errorf("handWrittenSpecs() is missing %s", id)
+			case got[id] && !want[id]:
+				t.Errorf("handWrittenSpecs() contains unexpected %s; if this is deliberate the ratchet and this table both need updating", id)
+			}
+		})
+	}
+
+	if gotLen, wantLen := len(Specs()), len(generatedSpecs())+len(handWrittenSpecs()); gotLen != wantLen {
+		t.Errorf("len(Specs()) = %d, want %d (generatedSpecs() + handWrittenSpecs())", gotLen, wantLen)
 	}
 }
 
@@ -231,9 +266,12 @@ func TestUnit_HandWrittenSpecs_EditionsMatchVendoredSpec(t *testing.T) {
 		"ServiceImageStatus":         edition.EE,
 	}
 	for _, s := range handWrittenSpecs() {
-		if s.Edition != want[s.OperationID] {
-			t.Errorf("%s (%s): Edition = %v, want %v", s.Name, s.OperationID, s.Edition, want[s.OperationID])
-		}
+		t.Run(s.OperationID, func(t *testing.T) {
+			t.Parallel()
+			if s.Edition != want[s.OperationID] {
+				t.Errorf("%s (%s): Edition = %v, want %v", s.Name, s.OperationID, s.Edition, want[s.OperationID])
+			}
+		})
 	}
 }
 
@@ -449,20 +487,23 @@ func TestUnit_DockerDashboard_InvalidEnvironmentID_ReturnsErrorWithoutCallingAPI
 	t.Parallel()
 	spec := findSpec(t, "docker.dashboard")
 	for _, id := range []int{0, -1} {
-		var called atomic.Bool
-		c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
+		t.Run(fmt.Sprintf("environmentId=%d", id), func(t *testing.T) {
+			t.Parallel()
+			var called atomic.Bool
+			c := clientFor(t, func(http.ResponseWriter, *http.Request) { called.Store(true) })
 
-		input, _ := json.Marshal(map[string]any{"environmentId": id})
-		result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
-		if err != nil {
-			t.Fatalf("environmentId=%d: Execute error = %v", id, err)
-		}
-		if !result.IsError {
-			t.Errorf("environmentId=%d: result.IsError = false, want true for a non-positive environmentId", id)
-		}
-		if called.Load() {
-			t.Errorf("environmentId=%d: the API was called despite an invalid environmentId", id)
-		}
+			input, _ := json.Marshal(map[string]any{"environmentId": id})
+			result, err := tools.Execute(context.Background(), spec, tools.Deps{Client: c}, input)
+			if err != nil {
+				t.Fatalf("Execute error = %v", err)
+			}
+			if !result.IsError {
+				t.Error("result.IsError = false, want true for a non-positive environmentId")
+			}
+			if called.Load() {
+				t.Error("the API was called despite an invalid environmentId")
+			}
+		})
 	}
 }
 
