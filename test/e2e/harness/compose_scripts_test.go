@@ -578,7 +578,7 @@ func swarmAwareDockerStub(t *testing.T, dir, swarmInitBehaviour, createBehaviour
 	body := "#!/usr/bin/env bash\n" +
 		"echo \"DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>}\" >> \"$LOGFILE\"\n" +
 		"case \"$*\" in\n" +
-		"    *'compose -f docker-compose.yml ps -q docker'*)\n" +
+		"    *'compose '*' ps -q docker'*)\n" +
 		"        echo fake-dind-container-id\n" +
 		"        exit 0\n" +
 		"        ;;\n" +
