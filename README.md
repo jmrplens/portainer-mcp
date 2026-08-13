@@ -313,6 +313,24 @@ fails the whole cluster with `failed to discover GPU vendor from CDI: no known G
 Suites that need a GPU skip with a named reason everywhere else, so running locally stays exactly as
 fast as it was.
 
+**Docker Swarm.** `make e2e-up` also puts the estate's own dind into Swarm mode and creates one
+long-lived fixture service (`portainer-mcp-e2e-swarm-probe`, `busybox sleep`), so Swarm-dependent
+catalog actions — `docker.service_image_status` today — have something real to exercise instead of
+the plain-engine 500 they get without it. The Swarm init and fixture-service steps are themselves
+idempotent: running either again against a daemon that already has them reuses what exists rather than
+failing on Docker's own "already part of a swarm"/"name conflicts with an existing object". That does
+not extend to `make e2e-up` as a whole — the provisioner it runs afterwards unconditionally calls
+`POST /users/admin/init`, which an already-initialized Portainer refuses, so a second `make e2e-up`
+with no intervening `make e2e-down` still fails at that step regardless of the Swarm leg's own
+idempotency. Like the GPU leg, Swarm needs no extra key — it is attempted unconditionally — and
+degrades the same way: a host where `docker swarm init` is refused for any reason gets a warning, not
+an aborted `make e2e-up`, and Swarm-dependent suites skip via `harness.Estate.HasSwarm()` instead of
+failing. `make e2e-down` destroys the dind container wholesale and passes compose's own `-v` when it
+does (`test/e2e/scripts/down.sh`), taking the swarm and the fixture service with it: `docker:28-dind`
+declares `/var/lib/docker` as a volume, so without `-v` that state would survive in an anonymous volume
+across the container's removal — `-v` is what actually makes there nothing extra to release or clean
+up at teardown, not the container's writable layer alone.
+
 **Business Edition licence.** Business Edition and the edge-only domains need a licence key in a
 gitignored `.env` at the repository root (see `.env.example`):
 

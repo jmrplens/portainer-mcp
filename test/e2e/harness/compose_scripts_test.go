@@ -88,8 +88,12 @@ exit 0
 	// estate file or edge environment — these tests do not need either, only
 	// that the provisioner was invoked, and up.sh's own "no edge endpoint
 	// provisioned" branch handles a missing edge.env file gracefully.
+	// PORTAINER_E2E_SWARM_SERVICE_ID is surfaced in the log the same way
+	// k3d_scripts_test.go's own go stub surfaces PORTAINER_E2E_K8S_URL, so a
+	// test can observe what up.sh actually passed through without needing a
+	// real estate file.
 	writeStub("go", `#!/usr/bin/env bash
-echo "GO_CALL: $*" >> "$LOGFILE"
+echo "GO_CALL: $* | PORTAINER_E2E_SWARM_SERVICE_ID=${PORTAINER_E2E_SWARM_SERVICE_ID:-<unset>}" >> "$LOGFILE"
 exit 0
 `)
 	// ssh: answers the GPU/CDI probes (nvidia-smi, nvidia-ctk) and the
@@ -402,6 +406,47 @@ func TestUnit_DownScript_NoMarkerTearsDownLocally(t *testing.T) {
 	}
 }
 
+// TestUnit_DownScript_ComposeDownPassesDashV pins down.sh:104's `-v` flag on
+// its own `docker compose ... down` call. README.md documents that nothing
+// survives the estate's teardown outside a container's own writable layer,
+// but that is not actually why: `docker:28-dind` (the estate's own Docker
+// daemon image) declares `/var/lib/docker` as a VOLUME, so Swarm's on-disk
+// state lives in an anonymous volume, not the container's writable layer,
+// and would survive the container's own removal. `-v` is what makes compose
+// remove that volume too -- drop it and a second `make e2e-up` would find
+// the previous run's Swarm state (and, with it, the previous run's fixture
+// service) still there despite an intervening `make e2e-down`, exactly the
+// guarantee the README section on Docker Swarm depends on.
+func TestUnit_DownScript_ComposeDownPassesDashV(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+
+	_, log, code := repo.run(t, "down.sh")
+	if code != 0 {
+		t.Fatalf("down.sh exited %d; log:\n%s", code, log)
+	}
+
+	var downLine string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "DOCKER_CALL:") && strings.Contains(line, "--remove-orphans") {
+			downLine = line
+			break
+		}
+	}
+	if downLine == "" {
+		t.Fatalf("down.sh never issued its compose teardown (down --remove-orphans) call; log:\n%s", log)
+	}
+	hasDashV := false
+	for _, field := range strings.Fields(downLine) {
+		if field == "-v" {
+			hasDashV = true
+			break
+		}
+	}
+	if !hasDashV {
+		t.Errorf("down.sh's compose teardown call carried no -v flag: %q -- without it, docker:28-dind's own VOLUME /var/lib/docker survives the container's removal, and the estate's Swarm state and fixture service would leak across a down/up cycle", downLine)
+	}
+}
+
 // singleQuoted extracts the content of the first '...'-quoted substring in s,
 // failing the test if there is none. Both up.sh's spec-writing call and
 // down.sh's teardown rm -f pass the CDI specification's path to a remote
@@ -514,5 +559,99 @@ exit 0
 
 	if !strings.Contains(downLog, "-f docker-compose.gpu.yml") {
 		t.Errorf("down.sh's compose invocation did not include -f docker-compose.gpu.yml; log:\n%s", downLog)
+	}
+}
+
+// swarmAwareDockerStub writes a `docker` stub that, on top of the shared
+// stub's own logging, answers the three swarm-specific invocations up.sh's
+// new block makes: `compose ... ps -q docker` (the dind's container id),
+// `exec <id> docker swarm init ...`, and `exec <id> docker service inspect/
+// create ...` for the fixture service. swarmInitBehaviour and
+// createBehaviour select a canned response so a test can force either the
+// happy path or a degradation. Inspect is handled internally: the FIRST call
+// (before create) always reports "not found" and the SECOND (after create)
+// reports serviceID, mirroring the real idempotent-lookup shape
+// swarm_fixture_service_id implements — a single shared stub cannot tell the
+// two calls apart by arguments alone, since they are identical.
+func swarmAwareDockerStub(t *testing.T, dir, swarmInitBehaviour, createBehaviour, serviceID string) {
+	t.Helper()
+	body := "#!/usr/bin/env bash\n" +
+		"echo \"DOCKER_CALL: $* | DOCKER_HOST=${DOCKER_HOST:-<unset>}\" >> \"$LOGFILE\"\n" +
+		"case \"$*\" in\n" +
+		"    *'compose '*' ps -q docker'*)\n" +
+		"        echo fake-dind-container-id\n" +
+		"        exit 0\n" +
+		"        ;;\n" +
+		"    *'swarm init --advertise-addr 127.0.0.1'*)\n" +
+		"        " + swarmInitBehaviour + "\n" +
+		"        ;;\n" +
+		"    *'service inspect '*'--format {{.ID}}'*)\n" +
+		"        if [[ -f \"$LOGFILE.inspected\" ]]; then echo '" + serviceID + "'; exit 0; fi\n" +
+		"        touch \"$LOGFILE.inspected\"\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"    *'service create --detach --name '*'--replicas 1 busybox sleep 3600'*)\n" +
+		"        " + createBehaviour + "\n" +
+		"        ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o755); err != nil {
+		t.Fatalf("writing swarm-aware docker stub: %v", err)
+	}
+}
+
+// TestUnit_SwarmBranch_UpScriptInitialisesSwarmAndForwardsTheFixtureServiceID
+// is the up.sh-level proof that the pieces lib.sh's own unit tests cover in
+// isolation (swarm_init, swarm_fixture_service_id) are actually wired
+// together and reach the provisioner: without this, a version of up.sh that
+// called the right functions but never exported
+// PORTAINER_E2E_SWARM_SERVICE_ID, or exported the wrong variable, would pass
+// every lib.sh unit test and still leave the estate with no recorded Swarm
+// fixture.
+func TestUnit_SwarmBranch_UpScriptInitialisesSwarmAndForwardsTheFixtureServiceID(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+	swarmAwareDockerStub(t, repo.binDir, "exit 0", "exit 0", "wxyhlanc3nqz")
+
+	output, log, code := repo.run(t, "up.sh")
+	if code != 0 {
+		t.Fatalf("up.sh (swarm available) exited %d; output:\n%s\nlog:\n%s", code, output, log)
+	}
+
+	if !strings.Contains(log, "DOCKER_CALL: exec fake-dind-container-id docker swarm init --advertise-addr 127.0.0.1") {
+		t.Errorf("up.sh did not initialise swarm on the estate's dind; log:\n%s", log)
+	}
+	if !strings.Contains(log, "DOCKER_CALL: exec fake-dind-container-id docker service create --detach --name portainer-mcp-e2e-swarm-probe --replicas 1 busybox sleep 3600") {
+		t.Errorf("up.sh did not create the fixture service; log:\n%s", log)
+	}
+	if !strings.Contains(log, "GO_CALL:") || !strings.Contains(log, "PORTAINER_E2E_SWARM_SERVICE_ID=wxyhlanc3nqz") {
+		t.Errorf("up.sh did not forward the fixture service id to the provisioner; log:\n%s", log)
+	}
+	if !strings.Contains(output, "swarm ready on the estate's docker daemon") {
+		t.Errorf("up.sh did not report swarm readiness; output:\n%s", output)
+	}
+}
+
+// TestUnit_SwarmBranch_UpScriptDegradesWithoutAbortingWhenSwarmCannotBeEnabled
+// is the negative direction the brief calls out by name: a host where Swarm
+// mode itself is refused must still bring up the rest of the estate, with a
+// warning rather than a non-zero exit, and must forward no service id to the
+// provisioner at all.
+func TestUnit_SwarmBranch_UpScriptDegradesWithoutAbortingWhenSwarmCannotBeEnabled(t *testing.T) {
+	repo := newComposeFakeRepo(t, "")
+	swarmAwareDockerStub(t, repo.binDir, "echo 'Error response from daemon: swarm mode is not supported' >&2; exit 1", "exit 0", "wxyhlanc3nqz")
+
+	output, log, code := repo.run(t, "up.sh")
+	if code != 0 {
+		t.Fatalf("up.sh (swarm unavailable) exited %d, want 0 (degrade, don't abort); output:\n%s\nlog:\n%s", code, output, log)
+	}
+
+	if !strings.Contains(output, "no swarm on the estate's docker daemon: swarm-dependent suites will skip") {
+		t.Errorf("up.sh did not report the swarm degradation; output:\n%s", output)
+	}
+	if strings.Contains(log, "service create") {
+		t.Errorf("up.sh attempted to create the fixture service despite swarm init failing; log:\n%s", log)
+	}
+	if !strings.Contains(log, "PORTAINER_E2E_SWARM_SERVICE_ID=<unset>") {
+		t.Errorf("up.sh forwarded a swarm service id despite swarm being unavailable; log:\n%s", log)
 	}
 }

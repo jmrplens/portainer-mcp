@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
@@ -217,6 +218,7 @@ func allCatalogSpecs() []toolutil.ActionSpec {
 	specs = append(specs, system.Specs()...)
 	specs = append(specs, tags.Specs()...)
 	specs = append(specs, registries.Specs()...)
+	specs = append(specs, docker.Specs()...)
 	return specs
 }
 

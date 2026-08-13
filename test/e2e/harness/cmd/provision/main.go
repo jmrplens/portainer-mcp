@@ -68,6 +68,15 @@ const (
 	gpuNameEnv      = "PORTAINER_E2E_GPU_NAME"
 	gpuCDIDeviceEnv = "PORTAINER_E2E_GPU_CDI_DEVICE"
 
+	// swarmServiceIDEnv carries the fixture Swarm service's id that up.sh
+	// created on the estate's own dind (see test/e2e/scripts/lib.sh's
+	// swarm_init/swarm_fixture_service_id). Empty is the ordinary outcome on
+	// a host where Swarm could not be enabled or the fixture service could
+	// not be confirmed -- the same optional-leg shape as gpuNameEnv/
+	// gpuCDIDeviceEnv above: a degraded leg must not fail the whole estate,
+	// it just leaves the Swarm-dependent suites skipping.
+	swarmServiceIDEnv = "PORTAINER_E2E_SWARM_SERVICE_ID"
+
 	// k8sGPUEnv carries the Kubernetes leg's OWN GPU capability, set by
 	// k3d-up.sh ("1" once its device plugin DaemonSet rollout has succeeded,
 	// empty otherwise) — never derived from gpuNameEnv/gpuCDIDeviceEnv above,
@@ -205,6 +214,16 @@ func run(kubernetes, releaseLicence, recoverLicence bool) error {
 		Name:      os.Getenv(gpuNameEnv),
 		CDIDevice: os.Getenv(gpuCDIDeviceEnv),
 	}
+
+	// Like GPU above, up.sh discovered/created this on the Docker host
+	// (inside its own dind, via docker exec) before this provisioner ever
+	// ran; empty is the ordinary case on a host where Swarm could not be
+	// enabled. It is not tied to either CE's or EE's own Environments map
+	// because the underlying Swarm and its fixture service live on the one
+	// dind daemon both servers register the SAME dindDaemonURL against (see
+	// provisionServer) -- the fixture is reachable through whichever
+	// server's own "docker" environment id a caller uses.
+	estate.SwarmServiceID = os.Getenv(swarmServiceIDEnv)
 
 	if err := estate.SaveTo(estatePath); err != nil {
 		return fmt.Errorf("save estate: %w", err)

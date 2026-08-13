@@ -672,6 +672,183 @@ func TestUnit_DetectGPUName_DiscardsAPartialNameWhenNvidiaSmiFailsMidQuery(t *te
 	}
 }
 
+// TestUnit_SwarmFixtureServiceName_ReturnsAFixedPortainerMcpE2EPrefixedName
+// pins the literal value: up.sh's swarm_init/swarm_fixture_service_id and any
+// future orphan sweep must all agree on the same name, and a typo here would
+// silently make a second `make e2e-up` create a duplicate service instead of
+// finding the existing one.
+func TestUnit_SwarmFixtureServiceName_ReturnsAFixedPortainerMcpE2EPrefixedName(t *testing.T) {
+	t.Parallel()
+	got := strings.TrimRight(sourceLib(t, `swarm_fixture_service_name`), "\n")
+	if !strings.HasPrefix(got, "portainer-mcp-e2e-") {
+		t.Errorf("swarm_fixture_service_name() = %q, want it prefixed like the estate's own compose project", got)
+	}
+}
+
+// dockerSwarmStub writes a fake `docker` binary that only understands the
+// handful of `exec <id> docker ...` invocations swarm_init and
+// swarm_fixture_service_id make, so these tests never touch a real Docker
+// daemon. swarmInitBehaviour and inspectBehaviour each select one of a small
+// set of canned responses; createBehaviour does the same for `service
+// create`. Any invocation these tests do not expect exits 1 with a message
+// naming the unexpected arguments, so a function calling docker with the
+// wrong arguments fails loudly here rather than silently getting a
+// convenient default answer.
+func dockerSwarmStub(t *testing.T, dir, swarmInitBehaviour, inspectBehaviour, createBehaviour string) {
+	t.Helper()
+	body := "#!/usr/bin/env bash\n" +
+		"case \"$*\" in\n" +
+		"    *'swarm init --advertise-addr 127.0.0.1'*)\n" +
+		"        " + swarmInitBehaviour + "\n" +
+		"        ;;\n" +
+		"    *'service inspect '*'--format {{.ID}}'*)\n" +
+		"        " + inspectBehaviour + "\n" +
+		"        ;;\n" +
+		"    *'service create --detach --name '*'--replicas 1 busybox sleep 3600'*)\n" +
+		"        " + createBehaviour + "\n" +
+		"        ;;\n" +
+		"    *)\n" +
+		"        echo \"unexpected docker invocation: $*\" >&2\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+}
+
+// TestUnit_SwarmInit_SucceedsOnAFreshDaemon is swarm_init's ordinary path: the
+// underlying `docker swarm init` succeeds outright.
+func TestUnit_SwarmInit_SucceedsOnAFreshDaemon(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dockerSwarmStub(t, dir, "exit 0", "exit 1", "exit 1")
+	if _, err := runLib(t, `PATH=`+dir+`:$PATH swarm_init fake-dind-id`); err != nil {
+		t.Errorf("swarm_init() on a fresh daemon failed: %v", err)
+	}
+}
+
+// TestUnit_SwarmInit_AlreadyInASwarm_IsIdempotent is the mutation-proof for
+// the exact failure mode the brief calls out by name: a second `make e2e-up`
+// run, with no intervening `make e2e-down`, must not abort the whole estate
+// because the dind kept its Swarm state from the first run.
+func TestUnit_SwarmInit_AlreadyInASwarm_IsIdempotent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dockerSwarmStub(t, dir,
+		`echo 'Error response from daemon: This node is already part of a swarm. Use "docker swarm leave" to leave this swarm and join another one.' >&2; exit 1`,
+		"exit 1", "exit 1")
+	if _, err := runLib(t, `PATH=`+dir+`:$PATH swarm_init fake-dind-id`); err != nil {
+		t.Errorf("swarm_init() against an already-initialised daemon failed, want idempotent success: %v", err)
+	}
+}
+
+// TestUnit_SwarmInit_OtherFailure_WarnsAndDegrades proves the third path:
+// anything other than "already part of a swarm" is a plain, reported
+// failure -- never fatal -- so a host where Swarm mode itself is unavailable
+// still lets the rest of the estate come up.
+func TestUnit_SwarmInit_OtherFailure_WarnsAndDegrades(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dockerSwarmStub(t, dir, `echo 'Error response from daemon: swarm mode is not supported' >&2; exit 1`, "exit 1", "exit 1")
+	out, err := runLib(t, `PATH=`+dir+`:$PATH swarm_init fake-dind-id`)
+	if err == nil {
+		t.Fatal("swarm_init() with an unrecognised failure succeeded, want a non-zero exit")
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "swarm mode is not supported") {
+		t.Errorf("swarm_init() did not report the underlying failure; output:\n%s", out)
+	}
+}
+
+// TestUnit_SwarmFixtureServiceID_CreatesTheServiceWhenAbsent is the fresh
+// path: no existing service (both inspect calls fail-then-succeed around a
+// create), so the function creates it and reads its id back.
+func TestUnit_SwarmFixtureServiceID_CreatesTheServiceWhenAbsent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const wantID = "wxyhlanc3nqz9mnpnzenvg8p8"
+	// The FIRST inspect (before create) must fail -- nothing exists yet --
+	// and the SECOND (after create) must succeed. A single shared stub
+	// cannot distinguish the two calls by arguments alone (they are
+	// identical), so this stub counts invocations through a marker file.
+	marker := filepath.Join(dir, "inspect-called")
+	body := "#!/usr/bin/env bash\n" +
+		"case \"$*\" in\n" +
+		"    *'service inspect '*'--format {{.ID}}'*)\n" +
+		"        if [[ -f '" + marker + "' ]]; then echo '" + wantID + "'; exit 0; fi\n" +
+		"        touch '" + marker + "'\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"    *'service create --detach --name '*'--replicas 1 busybox sleep 3600'*)\n" +
+		"        echo '" + wantID + "'\n" +
+		"        exit 0\n" +
+		"        ;;\n" +
+		"    *)\n" +
+		"        echo \"unexpected docker invocation: $*\" >&2\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH swarm_fixture_service_id fake-dind-id`), "\n")
+	if got != wantID {
+		t.Errorf("swarm_fixture_service_id() = %q, want %q", got, wantID)
+	}
+}
+
+// TestUnit_SwarmFixtureServiceID_ReusesAnExistingService is the idempotency
+// proof: a service the FIRST inspect already finds must be reused, and
+// `docker service create` must never be invoked at all -- calling it would
+// fail on Docker's own "name conflicts with an existing object" against a
+// real daemon.
+func TestUnit_SwarmFixtureServiceID_ReusesAnExistingService(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const wantID = "existing-service-id-12345"
+	dockerSwarmStub(t, dir, "exit 1", "echo '"+wantID+"'; exit 0", "exit 1")
+	got := strings.TrimRight(sourceLib(t, `PATH=`+dir+`:$PATH swarm_fixture_service_id fake-dind-id`), "\n")
+	if got != wantID {
+		t.Errorf("swarm_fixture_service_id() with an already-existing service = %q, want %q", got, wantID)
+	}
+}
+
+// TestUnit_SwarmFixtureServiceID_CreateFailure_WarnsAndDegrades proves the
+// service, like Swarm itself, is optional: a create failure (image pull
+// refused, no manager available, anything else) must be reported and
+// returned as a plain failure, not a fatal one.
+func TestUnit_SwarmFixtureServiceID_CreateFailure_WarnsAndDegrades(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dockerSwarmStub(t, dir, "exit 1", "exit 1", `echo 'Error response from daemon: no suitable node' >&2; exit 1`)
+	out, err := runLib(t, `PATH=`+dir+`:$PATH swarm_fixture_service_id fake-dind-id`)
+	if err == nil {
+		t.Fatal("swarm_fixture_service_id() with a failing create succeeded, want a non-zero exit")
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "no suitable node") {
+		t.Errorf("swarm_fixture_service_id() did not report the underlying failure; output:\n%s", out)
+	}
+}
+
+// TestUnit_SwarmFixtureServiceID_CreatedButUnconfirmed_WarnsAndDegrades
+// covers the one path the other tests cannot reach: create reports success
+// but the follow-up inspect still cannot find it (a race, or a Docker
+// version that names the service differently). This must degrade exactly
+// like an outright create failure, not propagate an empty id as if it were
+// a real one.
+func TestUnit_SwarmFixtureServiceID_CreatedButUnconfirmed_WarnsAndDegrades(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dockerSwarmStub(t, dir, "exit 1", "exit 1", "exit 0")
+	out, err := runLib(t, `PATH=`+dir+`:$PATH swarm_fixture_service_id fake-dind-id`)
+	if err == nil {
+		t.Fatal("swarm_fixture_service_id() with an unconfirmable service succeeded, want a non-zero exit")
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "could not be read back") {
+		t.Errorf("swarm_fixture_service_id() did not report the confirmation failure; output:\n%s", out)
+	}
+}
+
 // TestUnit_GPUCDISpec_ReturnsEmptyWhenStripCDIHooksItselfFails guards the
 // last path in either GPU function that could still kill a caller.
 // strip_cdi_hooks's only dependency is awk; an earlier version of

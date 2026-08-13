@@ -431,6 +431,56 @@ func TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
 	}
 }
 
+// TestUnit_HasSwarm_RequiresANonEmptyServiceID mirrors TestUnit_HasGPU_
+// RequiresBothTheNameAndTheDevice for the Swarm leg's own single field: a
+// zero-value Estate (Swarm never enabled, or the fixture service never
+// confirmed) must report false, not the zero value's own accidental
+// emptiness being mistaken for "checked and absent".
+func TestUnit_HasSwarm_RequiresANonEmptyServiceID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"service id recorded", "wxyhlanc3nqz", true},
+		{"no service id", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := (Estate{SwarmServiceID: tc.id}).HasSwarm(); got != tc.want {
+				t.Errorf("HasSwarm() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUnit_Estate_SwarmServiceIDSurvivesTheRoundTripThroughDisk mirrors
+// TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk: the estate is written
+// by up.sh's provisioner and read back by an entirely separate `go test`
+// process, so a field that is set in memory but absent from the JSON would
+// make every Swarm-dependent suite skip on an estate that actually has one,
+// silently, indistinguishable from a host where Swarm was never available.
+func TestUnit_Estate_SwarmServiceIDSurvivesTheRoundTripThroughDisk(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "estate.json")
+	const want = "wxyhlanc3nqz"
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, SwarmServiceID: want}
+	if err := seed.SaveTo(path); err != nil {
+		t.Fatalf("SaveTo() error = %v", err)
+	}
+	got, err := LoadEstate(path)
+	if err != nil {
+		t.Fatalf("LoadEstate() error = %v", err)
+	}
+	if got.SwarmServiceID != want {
+		t.Errorf("SwarmServiceID after round trip = %q, want %q", got.SwarmServiceID, want)
+	}
+	if !got.HasSwarm() {
+		t.Error("HasSwarm() = false after a round trip that carried a service id")
+	}
+}
+
 // TestUnit_HasKubernetesGPU_IsIndependentOfTheComposeLegsGPU is I5's own
 // regression test: KubernetesGPU and GPU/HasGPU must be able to disagree,
 // covering the split-host combination README.md calls legitimate (a
