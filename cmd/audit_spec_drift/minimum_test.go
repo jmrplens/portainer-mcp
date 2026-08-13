@@ -201,31 +201,56 @@ func TestUnit_RealCatalog_EveryIdentifierPathParam_HasMinimum(t *testing.T) {
 // carry the entry that would have made it true.
 func TestUnit_PathParamMinimumExceptions_MirrorsTheGeneratorsOwnTable(t *testing.T) {
 	t.Parallel()
-	t.Run("PathParamMinimumExceptions MirrorsTheGeneratorsOwnTable", func(t *testing.T) {
-		// The generator's table is in package main of another command, so it
-		// cannot be imported. Parse the source and extract the keys, which
-		// also means this test sees a new entry the moment someone adds one
-		// there.
-		src, err := os.ReadFile("../gen_action_inputs/fields.go")
-		if err != nil {
-			t.Fatalf("reading the generator's own table: %v", err)
-		}
-		generator := parsePathParamMinimumExceptionsKeys(t, string(src))
-		if len(generator) == 0 {
-			t.Fatal("extracted 0 keys from pathParamMinimumExceptions in the generator's source; the declaration was not found, or no longer has this shape")
-		}
 
-		for key := range generator {
-			if !pathParamMinimumExceptions[key] {
-				t.Errorf("the generator excuses %+v but this audit does not; a minimum finding cannot be allow-listed, so the first action using it fails CI with no legal remedy", key)
+	// The generator's table is in package main of another command, so it
+	// cannot be imported. Parse the source and extract the keys, which also
+	// means this test sees a new entry the moment someone adds one there.
+	src, err := os.ReadFile("../gen_action_inputs/fields.go")
+	if err != nil {
+		t.Fatalf("reading the generator's own table: %v", err)
+	}
+	generator := parsePathParamMinimumExceptionsKeys(t, string(src))
+	if len(generator) == 0 {
+		t.Fatal("extracted 0 keys from pathParamMinimumExceptions in the generator's source; the declaration was not found, or no longer has this shape")
+	}
+
+	// Each row checks one key's presence on the OTHER side of the mirror, so
+	// a table gaining an entry the other lacks fails one subtest named after
+	// that exact key — not a shared subtest whose failure could belong to
+	// any of the keys it iterated.
+	type minimumExceptionMirrorCase struct {
+		scenario string
+		key      pathParamKey
+		mirrored bool // whether key is present on the side being checked
+		errFmt   string
+	}
+
+	var cases []minimumExceptionMirrorCase
+	for key := range generator {
+		cases = append(cases, minimumExceptionMirrorCase{
+			scenario: "GeneratorKey_" + key.OperationID + "_" + key.ParamName,
+			key:      key,
+			mirrored: pathParamMinimumExceptions[key],
+			errFmt:   "the generator excuses %+v but this audit does not; a minimum finding cannot be allow-listed, so the first action using it fails CI with no legal remedy",
+		})
+	}
+	for key := range pathParamMinimumExceptions {
+		cases = append(cases, minimumExceptionMirrorCase{
+			scenario: "AuditKey_" + key.OperationID + "_" + key.ParamName,
+			key:      key,
+			mirrored: generator[key],
+			errFmt:   "this audit excuses %+v but the generator does not; the audit would stay silent about a missing minimum the generator intends to stamp",
+		})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.scenario, func(t *testing.T) {
+			t.Parallel()
+			if !tc.mirrored {
+				t.Errorf(tc.errFmt, tc.key)
 			}
-		}
-		for key := range pathParamMinimumExceptions {
-			if !generator[key] {
-				t.Errorf("this audit excuses %+v but the generator does not; the audit would stay silent about a missing minimum the generator intends to stamp", key)
-			}
-		}
-	})
+		})
+	}
 }
 
 // parsePathParamMinimumExceptionsKeys extracts every pathParamKey out of the
