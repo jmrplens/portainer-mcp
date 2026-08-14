@@ -48,23 +48,17 @@
 // PortainereeStack, StacksStackResponse and PortainereeEdgeStack's own
 // domains use, since all four reach the identical RepoConfig type.
 //
-// generatedSpecs and handWrittenSpecs below are temporary stubs: this
-// domain has no generated or hand-written code yet, only the scaffolding a
-// later `make scaffold-domain` run and a hand-written CreateFile handler
-// require to already exist. Because of that, narrative and the six
-// redaction wrappers below have no real caller yet either, so each stub
-// body holds a throwaway reference to the ones it will eventually be
-// responsible for calling for real — see the comments on generatedSpecs
-// and handWrittenSpecs themselves. That reference is what keeps
-// golangci-lint's unused check meaningful in the meantime: without it, the
-// six wrappers and narrative would report as dead code, and a linter that
-// is quieted about this domain's own redaction wrappers is exactly the
-// wrong thing to quiet, since an uncalled wrapper is a silent path for a
-// credential to reach a model unredacted. Task 4's `make scaffold-domain`
-// run and Task 5's hand-written handler each replace their stub's whole
-// body with real code that calls these functions for real, which removes
-// the throwaway reference as a side effect of doing the work rather than
-// leaving anything for a human to remember to clean up afterward.
+// generatedSpecs now lives in actions.go, written by `make scaffold-domain`:
+// eight ActionSpecs, each wrapped in toolutil.WithNarrative(…,
+// narrative(operationID)), and five of them calling one of the redaction
+// wrappers below. handWrittenSpecs is still a stub, and still holds the
+// throwaway reference to redactCustomTemplateCreateFile that keeps
+// golangci-lint's unused check meaningful until the hand-written CreateFile
+// handler calls it for real — a linter quieted about this domain's own
+// redaction wrappers is exactly the wrong thing to quiet, since an uncalled
+// wrapper is a silent path for a credential to reach a model unredacted.
+// Replacing that stub's body with the real handler's ActionSpec removes the
+// reference as a side effect of doing the work.
 package custom_templates
 
 import (
@@ -76,33 +70,6 @@ import (
 // Specs returns every action this domain contributes to the catalog.
 func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(), handWrittenSpecs()...)
-}
-
-// generatedSpecs returns every ActionSpec cmd/gen_action_inputs derives for
-// this domain.
-//
-// filled in by Task 4: today there is nothing to scaffold from, so this
-// stub returns nil purely to let the package compile and let the
-// scaffolder parse this file's declared symbols (the six redaction
-// wrappers and narrative below) before it generates anything. The
-// unnamed-value slice below is a throwaway reference to narrative and the
-// five wrappers this domain's generated operations will actually call
-// (every one but redactCustomTemplateCreateFile, which
-// handWrittenSpecs below is responsible for) — it exists purely so the
-// unused linter cannot treat them as dead code while nothing calls them
-// for real. Task 4 replaces this whole function body with generated
-// ActionSpec literals that call these functions directly, which deletes
-// this line along with the rest of the stub.
-func generatedSpecs() []toolutil.ActionSpec {
-	_ = []any{
-		narrative,
-		redactCustomTemplateList,
-		redactCustomTemplateInspect,
-		redactCustomTemplateUpdate,
-		redactCustomTemplateCreateRepository,
-		redactCustomTemplateCreateString,
-	}
-	return nil
 }
 
 // handWrittenSpecs returns the one action this generator can never produce:
@@ -127,15 +94,128 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // acquire a literal Title/Description assignment that drifts from the spec
 // unnoticed — see docs/domain-wave-checklist.md.
 //
-// Every case below returns the zero value: the generated titles this hook
-// would need to react to are not visible until cmd/gen_action_inputs has
-// actually scaffolded this domain, which is a later task. The hook must
-// exist now regardless — emit.go only wraps a generated spec in
-// toolutil.WithNarrative when the hand file already declares a function
-// named exactly narrative, and that check runs at scaffold time, not
-// afterward.
+// Every shippable operation in this domain gets a case, which is unusual
+// and deliberate. The scaffold run flagged seven of this domain's ten
+// operations under "description merely restates its summary" — this domain
+// and cloud are the joint second-worst in the specification, behind
+// kubernetes and settings — and the collision is worse than that number
+// suggests: CustomTemplateCreateFile, CustomTemplateCreateRepository and
+// CustomTemplateCreateString share the byte-identical summary "Create a
+// custom template", so all three arrive with the identical Title *and* the
+// identical Description. A model asked to create a template from a git
+// repository cannot pick between them from the generated prose, and
+// portainer_find_action ranks them identically. Each Description below
+// therefore names the one thing that distinguishes its action from its
+// siblings — for the three creates, where the stack file body comes from.
+//
+// Three of the sentences below contradict the vendored specification on
+// purpose, because it is wrong and a caller who trusts it gets a 500. All
+// three were measured against a live Portainer 2.44.0, both editions:
+//
+//  1. SourceID is listed in CustomTemplateCreateRepository's "required"
+//     array but the server does not require it: RepositoryURL with
+//     Platform: 1 and no SourceID answers 200 and clones the repository.
+//     It is read when supplied, though — SourceID 99999 answers
+//     500 "Source not found", validated against /gitops/sources.
+//  2. Platform is absent from the "required" array of both JSON create
+//     routes, but the server requires it for Docker stacks: creating a
+//     Type 2 template without Platform answers 500 "Invalid custom
+//     template platform". The field's own description ("Required for
+//     Docker stacks") is right and the required list is wrong.
+//  3. Every inline repository field (RepositoryURL, RepositoryUsername,
+//     RepositoryPassword, RepositoryAuthentication,
+//     RepositoryAuthorizationType, RepositoryProvider) is marked
+//     "Deprecated: use SourceID instead", yet that deprecated path is the
+//     one measured working end to end.
+//
+// No case mentions what the Authentication object in a response contains,
+// and that is deliberate. Portainer already blanks the git password itself
+// — create/repository, GET custom_templates/{id} and GET custom_templates
+// were all measured answering Authentication: {"Username":"…","Password":""}
+// on both editions — while redactCustomTemplate below drops the whole
+// Authentication object, Username included. These actions therefore return
+// strictly less than Portainer does, so no narrative may promise a caller
+// that a username will be there.
+//
+// CustomTemplateCreate (POST /custom_templates) has no case: it is
+// deprecated upstream, cmd/gen_action_inputs skips it, and it never becomes
+// an action. CustomTemplateCreateFile has one even though its ActionSpec is
+// still hand-written elsewhere — the hook is keyed by operationId, so the
+// case is ready for the handler that will call it.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
+	case "CustomTemplateList":
+		return toolutil.ActionNarrative{
+			Title: "List custom templates",
+			Description: "Returns the custom templates visible to the caller: for each one its identifier, title, description, stack type, platform, ownership and — for a git-backed template — its repository configuration. " +
+				"The stack file body is not included; custom_templates.file returns it for one template at a time. " +
+				"type is required and selects which stack types to return (1 swarm, 2 compose, 3 kubernetes); edge returns Edge stack templates instead. " +
+				"Any git credential a template stores is stripped before the list reaches you.",
+		}
+	case "CustomTemplateInspect":
+		return toolutil.ActionNarrative{
+			Title: "Inspect a custom template",
+			Description: "Returns one custom template's definition by identifier — the same shape as one entry of custom_templates.list, and likewise without the stack file body, which custom_templates.file returns. " +
+				"Any git credential the template stores is stripped before the result reaches you.",
+		}
+	case "CustomTemplateFile":
+		return toolutil.ActionNarrative{
+			Title: "Read a custom template's stack file",
+			Description: "Returns the stack file body Portainer has stored for one custom template, as a single FileContent string and nothing else (measured against 2.44.0). " +
+				"This is a read, despite the noun-like action name: it returns the stored copy and changes nothing. " +
+				"Refreshing that copy from a git-backed template's remote is custom_templates.git_fetch, which overwrites it.",
+		}
+	case "CustomTemplateGitFetch":
+		return toolutil.ActionNarrative{
+			Title: "Overwrite a custom template from its git repository",
+			Description: "Pulls the stack file from a git-backed template's repository and REPLACES the template's stored content with what the remote holds now, discarding whatever was stored — including edits made through custom_templates.update. " +
+				"This is a write with no undo: Portainer keeps no previous version, and the request says nothing about what is being discarded. " +
+				"Both the action name and the specification's own description (\"Retrieve details about a template created from git repository method\") read like a query; they are wrong, which is why this action is flagged destructive. " +
+				"It answers with the new content only, as a single FileContent string (measured against 2.44.0). " +
+				"Only meaningful for templates created by custom_templates.create_repository. " +
+				"To read the stored content without replacing it, use custom_templates.file.",
+		}
+	case "CustomTemplateUpdate":
+		return toolutil.ActionNarrative{
+			Title: "Replace a custom template's definition",
+			Description: "Replaces the whole definition of one custom template: every field sent is stored and every optional field omitted is cleared, so send the template's current values plus the change, not the change alone — read them first with custom_templates.inspect and custom_templates.file. " +
+				"title, description, fileContent and type are all required, so an update meaning to change only the title still rewrites the stack file body with whatever fileContent it sends. " +
+				"platform is optional in the schema but carries the specification's own \"Required for Docker stacks\" note; the create routes were measured rejecting a type 2 template without it (500 \"Invalid custom template platform\"), which was not separately measured on this route. " +
+				"The inline repository fields are marked deprecated in favour of sourceId, but are the path measured working. " +
+				"Any git credential in the result is stripped before it reaches you.",
+		}
+	case "CustomTemplateCreateString":
+		return toolutil.ActionNarrative{
+			Title: "Create a custom template from inline content",
+			Description: "Creates a custom template whose stack file body is the fileContent string passed in this call. " +
+				"This is the one of the three create actions that needs no external source: custom_templates.create_repository clones the body from a git repository, and custom_templates.create_file takes it from an uploaded file. " +
+				"title, description, fileContent and type are required. " +
+				"platform is not in the specification's required list but the server enforces it for Docker stacks: a type 2 (compose) template created without platform was measured answering 500 \"Invalid custom template platform\" (1 linux, 2 windows).",
+		}
+	case "CustomTemplateCreateRepository":
+		return toolutil.ActionNarrative{
+			Title: "Create a custom template from a git repository",
+			Description: "Creates a custom template whose stack file body is cloned from a git repository, and re-cloned on demand by custom_templates.git_fetch. " +
+				"The siblings take the body from an inline string (custom_templates.create_string) or an uploaded file (custom_templates.create_file). " +
+				"Two published requirements are wrong here, both measured against 2.44.0. " +
+				"sourceId is listed as required but is not: a repository is cloned from repositoryUrl alone, with sourceId left at 0 (the value the server sees when the field is absent) — pass a real one only if it exists under /gitops/sources, since an unknown id answers 500 \"Source not found\". " +
+				"platform is not listed as required but is enforced for Docker stacks: a type 2 (compose) template created without it answers 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
+				"The inline repository fields (repositoryUrl, repositoryUsername, repositoryPassword, repositoryAuthentication, repositoryAuthorizationType, repositoryProvider) are all marked \"Deprecated: use SourceID instead\", yet that deprecated path is the one measured working end to end. " +
+				"A credential sent here is stored by Portainer but never echoed back: it is stripped from the result.",
+		}
+	case "CustomTemplateCreateFile":
+		return toolutil.ActionNarrative{
+			Title: "Create a custom template from an uploaded file",
+			Description: "Creates a custom template whose stack file body is an uploaded file, sent as multipart/form-data. " +
+				"The siblings take the body from an inline string (custom_templates.create_string) or a git repository (custom_templates.create_repository). " +
+				"title, description, note, platform, type and the file itself are all required — unlike the two JSON create routes, whose required lists omit platform even though the server enforces it for Docker stacks.",
+		}
+	case "CustomTemplateDelete":
+		return toolutil.ActionNarrative{
+			Title: "Delete a custom template",
+			Description: "Permanently removes one custom template and the stack file Portainer stored for it. This cannot be undone. " +
+				"It addresses the template only: anything previously deployed from it is a separate object this route does not reach.",
+		}
 	default:
 		return toolutil.ActionNarrative{}
 	}
