@@ -1,13 +1,11 @@
 <div align="center">
 
-# Portainer MCP Server (Enhanced)
+# Portainer MCP Server
 
-**Enhanced community fork — Manage your entire Portainer infrastructure through AI assistants using the Model Context Protocol**
+**Manage your entire Portainer infrastructure through AI assistants using the Model Context Protocol**
 
-> ⚡ This is an enhanced fork of the [official Portainer MCP Server](https://github.com/portainer/portainer-mcp) with additional features and improvements.
-
-![Go Version](https://img.shields.io/github/go-mod/go-version/jmrplens/portainer-mcp-enhanced)
-![License](https://img.shields.io/github/license/jmrplens/portainer-mcp-enhanced)
+![Go Version](https://img.shields.io/github/go-mod/go-version/jmrplens/portainer-mcp)
+![License](https://img.shields.io/github/license/jmrplens/portainer-mcp)
 ![Portainer](https://img.shields.io/badge/Portainer-2.39.1-blue)
 ![MCP Tools](https://img.shields.io/badge/MCP_Tools-98-green)
 
@@ -360,4 +358,17 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). Please use **private 
 
 ## License
 
-Copyright (c) 2025 Portainer.io — See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 José M. Requena Plens.
+
+This repository began as a fork of the [official Portainer MCP server](https://github.com/portainer/portainer-mcp)
+but is no longer one: the server was rewritten from scratch and none of that project's
+code remains. It is relicensed accordingly.
+
+### Third-party material
+
+`api/specs/*.json` are vendored copies of Portainer's published OpenAPI documents,
+fetched from [api-docs.portainer.io](https://api-docs.portainer.io/). The Community
+Edition document carries its own licence declaration (zlib) inline, and the generated
+client under `internal/portainer/gen/` is produced from those documents — its type and
+field comments are copied from their descriptions. That material remains © Portainer.io
+under its own terms; the MIT licence above covers this project's own code.
