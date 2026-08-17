@@ -512,6 +512,47 @@ The fix in this project's bench is a named volume mounted at `/var/run` in
 both the dind daemon and the agent. Recorded here because the misleading
 symptom, not the fix, is what costs the time.
 
+### 3.7 The custom-template create routes' `required` arrays are wrong in both directions
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-14 (wave 1 stage B, task 4).
+
+`POST /custom_templates/create/repository` and
+`POST /custom_templates/create/string` each publish a `required` array that
+contradicts what the server enforces, once in each direction:
+
+| Field | Vendored `required` | Server | Measurement |
+|---|---|---|---|
+| `Platform` (both routes) | absent | **enforced** for Docker stacks | `Type: 2` with no `Platform` → `500 "Invalid custom template platform"` |
+| `SourceID` (`create/repository`) | present | **not required** | `RepositoryURL` + `Platform: 1`, no `SourceID` → `200`, repository cloned. `SourceID: 0` sent explicitly → `200`, identical. `SourceID: 99999` → `500 "Source not found"` |
+
+`Platform`'s own field description already says "Required for Docker
+stacks", so on that route the field prose is right and the `required` array
+is wrong. `SourceID` is read when a real identifier is supplied and
+validated against `/gitops/sources`, so it is optional rather than ignored;
+zero is genuinely unset.
+
+This matters more than a documentation defect normally would, because
+`toolutil.ActionSpec.ValidateInput` enforces required-ness *locally*, before
+the handler runs (`internal/tools/register.go`). Publishing the vendored
+arrays verbatim would mean a model that fills exactly the required fields —
+which is what a model does — omits `Platform` and takes the 500 every time,
+while a caller cloning from the inline repository fields is refused outright
+for lacking a `SourceID` the server never wanted. The catalog therefore
+publishes `Platform` required and `SourceID` optional on those two routes,
+each with a dated `api/spec-drift-allowlist.yaml` entry.
+
+Deliberately **not** changed on `PUT /custom_templates/{id}`: `Platform`
+carries the same "Required for Docker stacks" note there, but that route was
+never probed, and inferring a requirement onto an unmeasured route is how a
+schema starts lying in the other direction.
+
+Related: the inline repository fields (`RepositoryURL`,
+`RepositoryUsername`, `RepositoryPassword`, `RepositoryAuthentication`,
+`RepositoryAuthorizationType`, `RepositoryProvider`) are all marked
+*"Deprecated: use SourceID instead"* in the vendored document, yet that
+deprecated path is the one measured working end to end.
+
 ---
 
 ## 4. Responses that leak secrets
@@ -671,6 +712,42 @@ not a description. See `internal/tools/registries/registries.go` and
 `internal/tools/registries/inputs.go` for the shape it settled into (renamed
 from `inputs.gen.go` when the pilot domains were converted to owned files —
 see §9.1).
+
+### 6.5 `CustomTemplateCreateRepository.Type` cannot express the value its own description advertises
+
+**Evidence: vendored spec**, verified 2026-08-14 (wave 1 stage B, task 4).
+**Not measured against a server.**
+
+`POST /custom_templates/create/repository` declares `Type` with
+`enum: [1, 2]` while the same field's description reads:
+
+```text
+Type of created stack:
+* 1 - swarm
+* 2 - compose
+* 3 - kubernetes
+```
+
+The two sibling routes disagree with it: `POST /custom_templates/create/string`
+and `PUT /custom_templates/{id}` both declare `enum: [1, 2, 3]` with the
+same prose. So on the git-repository route alone, the enum cannot express
+`3 - kubernetes`, and the catalog's own `ValidateInput` refuses it before
+the request is built.
+
+The enum is published **as the specification declares it**, deliberately.
+Nobody has measured whether the server accepts `Type: 3` on that route, and
+widening a schema on the strength of a neighbouring route's declaration is
+the same mistake as trusting a `required` array (§3.7), just pointed the
+other way: it would let a request through that the server may reject, and
+the resulting failure would be attributed to Portainer rather than to this
+guess. `custom_templates.create_repository`'s narrative names the limit and
+sends a caller wanting a Kubernetes template to
+`custom_templates.create_string` instead.
+
+**To settle it:** create a git-backed custom template with `Type: 3`
+against a live 2.44.0 (both editions). If it answers 200, widen the enum to
+`[1, 2, 3]` with an allow-list entry citing that measurement; if it answers
+4xx/5xx, record the message here and leave the enum alone.
 
 ---
 

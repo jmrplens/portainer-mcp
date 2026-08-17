@@ -195,15 +195,22 @@ func generatedSpecs() []toolutil.ActionSpec {
 		// rule reads PUT as Mutating+Idempotent and stops there, and
 		// suspectDangerMismatch's seven keywords match neither this path nor
 		// this operationId, so the scaffold run raised nothing for this domain
-		// at all. It is destructive all the same, and for a reason the sibling
-		// PUT (CustomTemplateUpdate, deliberately left not destructive) does not
-		// share: this request carries nothing but a template id, so the content
-		// it discards is neither supplied nor seen by the caller, and Portainer
-		// keeps no previous version to restore. Any edit made through
-		// custom_templates.update is gone the moment this runs. That invisible
-		// blast radius is what system.upgrade's own hand override marks, and
-		// what makes the surfaces render this as [destructive] rather than
-		// [mutating] next to an action whose name reads like a query.
+		// at all. It is destructive all the same, and the criterion is sharper
+		// than "the caller cannot see what it loses" — CustomTemplateUpdate
+		// silently clears an omitted optional field too, and is deliberately
+		// not marked destructive. The distinction is what the request is
+		// *capable* of expressing: update's payload has a field for every part
+		// of the template it overwrites, so a caller that reads the template
+		// first (custom_templates.inspect, custom_templates.file) can state the
+		// intended end state in full and lose nothing it did not choose to
+		// drop. This request has no such field and cannot acquire one: its
+		// entire payload is a template id, the replacement content comes from a
+		// third party (the git remote) at a version the caller never named, and
+		// Portainer keeps no previous version to restore. No amount of care by
+		// the caller makes the loss expressible, which is the property
+		// system.upgrade's own hand override marks, and what makes the surfaces
+		// render this as [destructive] rather than [mutating] next to an action
+		// whose name reads like a query.
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "custom_templates.git_fetch", Domain: "custom_templates", OperationID: "CustomTemplateGitFetch",
 			Title:       "Fetch the latest config file content based on custom template's git repository configuration",

@@ -130,13 +130,8 @@ func run(args []string) error {
 		"vendored Community Edition spec, used only to decide which generated actions are CE vs EE-only; "+
 			"defaults to -spec's own filename with its \"ee-\" prefix swapped for \"ce-\"")
 	toolsDir := fs.String("tools-dir", "internal/tools", "directory holding one subdirectory per domain package")
-	// redact is a shared helper package (internal/tools/redact), not a domain
-	// and not a tool surface: it holds the git-credential redactor several
-	// git-backed domains call. It lives under tools-dir all the same, so
-	// without it here the directory walk below treats it as a domain and the
-	// whole run aborts on its missing toolutil.DomainTags entry.
-	skipDirs := fs.String("skip", "actioncatalog,dynamic,individual,meta,redact",
-		"comma-separated subdirectories of tools-dir that are tool surfaces or shared helpers, not domain packages")
+	skipDirs := fs.String("skip", "actioncatalog,dynamic,individual,meta",
+		"comma-separated subdirectories of tools-dir that are tool surfaces, not domain packages")
 	allowOverwrite := fs.Bool("allow-overwrite", false,
 		"regenerate a domain that already has scaffolded files (actions.go/inputs.go, or their pre-freeze "+
 			"*.gen.go names), discarding any hand edit made since it was scaffolded; refused by default (see "+

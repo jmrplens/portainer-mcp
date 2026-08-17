@@ -44,7 +44,7 @@
 // call, the same way a hand-written handler elsewhere in this codebase
 // states that it redacts. The six wrappers below all defer to
 // redactCustomTemplate, which in turn defers to redact.RepoConfig
-// (internal/tools/redact) — the same git-credential redactor
+// (internal/redact) — the same git-credential redactor
 // PortainereeStack, StacksStackResponse and PortainereeEdgeStack's own
 // domains use, since all four reach the identical RepoConfig type.
 //
@@ -63,7 +63,7 @@ package custom_templates
 
 import (
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
-	"github.com/jmrplens/portainer-mcp/internal/tools/redact"
+	"github.com/jmrplens/portainer-mcp/internal/redact"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -108,15 +108,17 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // therefore names the one thing that distinguishes its action from its
 // siblings — for the three creates, where the stack file body comes from.
 //
-// Three of the sentences below contradict the vendored specification on
-// purpose, because it is wrong and a caller who trusts it gets a 500. All
-// three were measured against a live Portainer 2.44.0, both editions:
+// Four of the sentences below contradict the vendored specification on
+// purpose. The first three were measured against a live Portainer 2.44.0,
+// both editions; the fourth is a defect visible in the document itself:
 //
 //  1. SourceID is listed in CustomTemplateCreateRepository's "required"
 //     array but the server does not require it: RepositoryURL with
-//     Platform: 1 and no SourceID answers 200 and clones the repository.
-//     It is read when supplied, though — SourceID 99999 answers
-//     500 "Source not found", validated against /gitops/sources.
+//     Platform: 1 and no SourceID answers 200 and clones the repository,
+//     and SourceID 0 sent explicitly answers 200 identically, so zero is
+//     genuinely unset. It is read when a real one is supplied, though —
+//     SourceID 99999 answers 500 "Source not found", validated against
+//     /gitops/sources.
 //  2. Platform is absent from the "required" array of both JSON create
 //     routes, but the server requires it for Docker stacks: creating a
 //     Type 2 template without Platform answers 500 "Invalid custom
@@ -127,6 +129,23 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 //     RepositoryAuthorizationType, RepositoryProvider) is marked
 //     "Deprecated: use SourceID instead", yet that deprecated path is the
 //     one measured working end to end.
+//  4. CustomTemplateCreateRepository's Type declares enum [1, 2] while its
+//     own description advertises "3 - kubernetes", which the two sibling
+//     routes do declare. See docs/api-divergences.md §6.5: the enum is
+//     published as declared, because nobody has measured whether that
+//     route accepts Type 3, and the narrative sends a caller who needs a
+//     Kubernetes template from git to create_string instead.
+//
+// Items 1 and 2 are not merely described here, they are corrected in
+// inputs.go: toolutil.ActionSpec.ValidateInput enforces required-ness
+// locally, before the handler runs, so publishing the vendored arrays would
+// have let a model that fills exactly the required fields — which is what a
+// model does — omit Platform and take that 500 every time, while refusing
+// outright any caller cloning from the inline repository fields without a
+// SourceID the server never wanted. Prose cannot mitigate a validator. Each
+// correction needs a dated api/spec-drift-allowlist.yaml entry, which lands
+// with this domain's registration — see inputs.go's own comment on Platform
+// for why an entry added before then would itself fail the build.
 //
 // No case mentions what the Authentication object in a response contains,
 // and that is deliberate. Portainer already blanks the git password itself
@@ -180,7 +199,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title: "Replace a custom template's definition",
 			Description: "Replaces the whole definition of one custom template: every field sent is stored and every optional field omitted is cleared, so send the template's current values plus the change, not the change alone — read them first with custom_templates.inspect and custom_templates.file. " +
 				"title, description, fileContent and type are all required, so an update meaning to change only the title still rewrites the stack file body with whatever fileContent it sends. " +
-				"platform is optional in the schema but carries the specification's own \"Required for Docker stacks\" note; the create routes were measured rejecting a type 2 template without it (500 \"Invalid custom template platform\"), which was not separately measured on this route. " +
+				"platform is optional here and required on the two create actions, and that difference is deliberate rather than an oversight: the create routes were measured rejecting a type 2 template without it (500 \"Invalid custom template platform\") and this route was not probed, so send platform for a Docker stack anyway — its \"Required for Docker stacks\" note applies here too. " +
 				"The inline repository fields are marked deprecated in favour of sourceId, but are the path measured working. " +
 				"Any git credential in the result is stripped before it reaches you.",
 		}
@@ -189,26 +208,29 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title: "Create a custom template from inline content",
 			Description: "Creates a custom template whose stack file body is the fileContent string passed in this call. " +
 				"This is the one of the three create actions that needs no external source: custom_templates.create_repository clones the body from a git repository, and custom_templates.create_file takes it from an uploaded file. " +
-				"title, description, fileContent and type are required. " +
-				"platform is not in the specification's required list but the server enforces it for Docker stacks: a type 2 (compose) template created without platform was measured answering 500 \"Invalid custom template platform\" (1 linux, 2 windows).",
+				"title, description, fileContent, type and platform are all required here. " +
+				"platform is required although the vendored specification's own required list omits it: the server enforces it for Docker stacks, and a type 2 (compose) template created without it was measured answering 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
+				"Unlike custom_templates.create_repository, this route accepts type 3 (kubernetes) as well as 1 (swarm) and 2 (compose).",
 		}
 	case "CustomTemplateCreateRepository":
 		return toolutil.ActionNarrative{
 			Title: "Create a custom template from a git repository",
 			Description: "Creates a custom template whose stack file body is cloned from a git repository, and re-cloned on demand by custom_templates.git_fetch. " +
 				"The siblings take the body from an inline string (custom_templates.create_string) or an uploaded file (custom_templates.create_file). " +
-				"Two published requirements are wrong here, both measured against 2.44.0. " +
-				"sourceId is listed as required but is not: a repository is cloned from repositoryUrl alone, with sourceId left at 0 (the value the server sees when the field is absent) — pass a real one only if it exists under /gitops/sources, since an unknown id answers 500 \"Source not found\". " +
-				"platform is not listed as required but is enforced for Docker stacks: a type 2 (compose) template created without it answers 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
+				"The vendored specification's own required list is wrong in both directions here, and this action publishes the corrected one, measured against 2.44.0. " +
+				"sourceId is optional despite being listed required: omit it, or pass 0, and the repository is cloned from repositoryUrl alone — pass a real identifier only if it exists under /gitops/sources, since an unknown one answers 500 \"Source not found\". " +
+				"platform is required despite not being listed: without it a type 2 (compose) template answers 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
 				"The inline repository fields (repositoryUrl, repositoryUsername, repositoryPassword, repositoryAuthentication, repositoryAuthorizationType, repositoryProvider) are all marked \"Deprecated: use SourceID instead\", yet that deprecated path is the one measured working end to end. " +
-				"A credential sent here is stored by Portainer but never echoed back: it is stripped from the result.",
+				"type accepts only 1 (swarm) or 2 (compose) on this route, even though the field's description advertises 3 (kubernetes) and the sibling routes accept it — for a Kubernetes template use custom_templates.create_string. " +
+				"A credential sent here is stored by Portainer and stripped from this action's result before it reaches you.",
 		}
 	case "CustomTemplateCreateFile":
 		return toolutil.ActionNarrative{
 			Title: "Create a custom template from an uploaded file",
 			Description: "Creates a custom template whose stack file body is an uploaded file, sent as multipart/form-data. " +
 				"The siblings take the body from an inline string (custom_templates.create_string) or a git repository (custom_templates.create_repository). " +
-				"title, description, note, platform, type and the file itself are all required — unlike the two JSON create routes, whose required lists omit platform even though the server enforces it for Docker stacks.",
+				"title, description, note, platform, type and the file itself are all required. " +
+				"This is the one create route whose vendored required list already names platform; the two JSON creates omit it although the server enforces it, so this catalog publishes it required on all three.",
 		}
 	case "CustomTemplateDelete":
 		return toolutil.ActionNarrative{

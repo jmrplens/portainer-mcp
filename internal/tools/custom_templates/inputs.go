@@ -23,7 +23,25 @@ type customTemplateCreateRepositoryInput struct {
 	// Platform Platform associated to the template.
 	// Valid values are: 1 - 'linux', 2 - 'windows'
 	// Required for Docker stacks
-	Platform *int `json:"platform,omitempty" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
+	//
+	// Published required, against the vendored specification, which omits it
+	// from this operation's "required" array: the server rejects a Type 2
+	// template created without it with 500 "Invalid custom template
+	// platform", measured against a live 2.44.0 on both editions. The
+	// field's own description ("Required for Docker stacks") is what is
+	// right here and the required array is what is wrong; a caller filling
+	// only the published required fields would otherwise take that 500 every
+	// time, which is exactly what a model does.
+	//
+	// This is a gating divergence from the vendored specification and needs
+	// an api/spec-drift-allowlist.yaml entry — but cmd/audit_spec_drift
+	// audits wiring.AllSpecs(), which does not yet include this domain, so
+	// an entry added before the domain is registered is itself a build error
+	// (a stale entry, excusing nothing a real run finds). The entry lands
+	// with the registration; its text is recorded in this wave's task-4
+	// report, and until then the divergence is invisible to the audit rather
+	// than forgiven by it.
+	Platform int `json:"platform" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
 	// RepositoryAuthentication Deprecated: use SourceID instead. Use basic authentication to clone the Git repository.
 	RepositoryAuthentication *bool `json:"repositoryAuthentication,omitempty" jsonschema:"Deprecated: use SourceID instead. Use basic authentication to clone the Git repository."`
 	// RepositoryAuthorizationType Deprecated: use SourceID instead. RepositoryAuthorizationType is the authorization type to use
@@ -40,7 +58,20 @@ type customTemplateCreateRepositoryInput struct {
 	RepositoryUsername *string `json:"repositoryUsername,omitempty" jsonschema:"Deprecated: use SourceID instead. Username used in basic authentication. Required when RepositoryAuthentication is true."`
 	// SourceID SourceID references an existing Source for git credentials/URL.
 	// When set, the inline URL and authentication fields are ignored.
-	SourceID int `json:"sourceId" jsonschema:"SourceID references an existing Source for git credentials/URL.\nWhen set, the inline URL and authentication fields are ignored."`
+	//
+	// Published optional, against the vendored specification, which lists it
+	// in this operation's "required" array: the server does not require it.
+	// Measured against a live 2.44.0 on both editions — RepositoryURL with
+	// Platform 1 and no SourceID answers 200 and clones the repository, and
+	// SourceID 0 sent explicitly answers 200 identically, so zero is
+	// genuinely unset rather than a value the server looks up. It is read
+	// when a real one is supplied (SourceID 99999 answers 500 "Source not
+	// found", validated against /gitops/sources), so this is optional, not
+	// ignored. Published required, it would have made ValidateInput refuse
+	// every request that legitimately clones from the inline repository
+	// fields. Its api/spec-drift-allowlist.yaml entry lands with this
+	// domain's registration, for the reason given on Platform above.
+	SourceID *int `json:"sourceId,omitempty" jsonschema:"SourceID references an existing Source for git credentials/URL.\nWhen set, the inline URL and authentication fields are ignored."`
 	// Title Title of the template
 	Title string `json:"title" jsonschema:"Title of the template"`
 	// TLSSkipVerify Deprecated: use SourceID instead. TLSSkipVerify skips SSL verification when cloning the Git repository.
@@ -145,7 +176,18 @@ type customTemplateCreateStringInput struct {
 	// Platform Platform associated to the template.
 	// Valid values are: 1 - 'linux', 2 - 'windows'
 	// Required for Docker stacks
-	Platform *int `json:"platform,omitempty" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
+	//
+	// Published required, against the vendored specification, for the same
+	// measured reason as customTemplateCreateRepositoryInput.Platform above:
+	// a Type 2 template created without it answers 500 "Invalid custom
+	// template platform". This route also accepts Type 3 (kubernetes), for
+	// which the server's own requirement was not separately measured;
+	// requiring the field of every caller costs a Kubernetes template one
+	// metadata value it can set to 1, while leaving it optional costs a
+	// Docker one a 500. Its api/spec-drift-allowlist.yaml entry lands with
+	// this domain's registration, for the reason given on
+	// customTemplateCreateRepositoryInput.Platform above.
+	Platform int `json:"platform" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
 	// Title Title of the template
 	Title string `json:"title" jsonschema:"Title of the template"`
 	// Type Type of created stack:
