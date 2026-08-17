@@ -163,9 +163,10 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // model does — omit Platform and take that 500 every time, while refusing
 // outright any caller cloning from the inline repository fields without a
 // SourceID the server never wanted. Prose cannot mitigate a validator. Each
-// correction needs a dated api/spec-drift-allowlist.yaml entry, which lands
-// with this domain's registration — see inputs.go's own comment on Platform
-// for why an entry added before then would itself fail the build.
+// correction carries a dated api/spec-drift-allowlist.yaml entry, added in
+// the same commit that registered this domain — see inputs.go's own comment
+// on Platform for why an entry added before then would itself fail the
+// build.
 //
 // No case mentions what the Authentication object in a response contains,
 // and that is deliberate. Portainer already blanks the git password itself

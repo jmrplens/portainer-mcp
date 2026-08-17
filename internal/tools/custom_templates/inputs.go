@@ -33,14 +33,14 @@ type customTemplateCreateRepositoryInput struct {
 	// only the published required fields would otherwise take that 500 every
 	// time, which is exactly what a model does.
 	//
-	// This is a gating divergence from the vendored specification and needs
-	// an api/spec-drift-allowlist.yaml entry — but cmd/audit_spec_drift
-	// audits wiring.AllSpecs(), which does not yet include this domain, so
-	// an entry added before the domain is registered is itself a build error
-	// (a stale entry, excusing nothing a real run finds). The entry lands
-	// with the registration; its text is recorded in this wave's task-4
-	// report, and until then the divergence is invisible to the audit rather
-	// than forgiven by it.
+	// This is a gating divergence from the vendored specification, reported
+	// by cmd/audit_spec_drift as
+	// CustomTemplateCreateRepository.platform [requiredness] "false" ->
+	// "true", and excused by a dated api/spec-drift-allowlist.yaml entry.
+	// That entry could not be added before this domain was registered: the
+	// audit walks wiring.AllSpecs(), and an entry excusing nothing a real
+	// run finds is reported stale, which is itself a build error. Both
+	// therefore landed in the same commit.
 	Platform int `json:"platform" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
 	// RepositoryAuthentication Deprecated: use SourceID instead. Use basic authentication to clone the Git repository.
 	RepositoryAuthentication *bool `json:"repositoryAuthentication,omitempty" jsonschema:"Deprecated: use SourceID instead. Use basic authentication to clone the Git repository."`
@@ -69,8 +69,9 @@ type customTemplateCreateRepositoryInput struct {
 	// found", validated against /gitops/sources), so this is optional, not
 	// ignored. Published required, it would have made ValidateInput refuse
 	// every request that legitimately clones from the inline repository
-	// fields. Its api/spec-drift-allowlist.yaml entry lands with this
-	// domain's registration, for the reason given on Platform above.
+	// fields. Excused by a dated api/spec-drift-allowlist.yaml entry
+	// (CustomTemplateCreateRepository/sourceId), added in the same commit
+	// that registered this domain, for the reason given on Platform above.
 	SourceID *int `json:"sourceId,omitempty" jsonschema:"SourceID references an existing Source for git credentials/URL.\nWhen set, the inline URL and authentication fields are ignored."`
 	// Title Title of the template
 	Title string `json:"title" jsonschema:"Title of the template"`
@@ -184,8 +185,11 @@ type customTemplateCreateStringInput struct {
 	// which the server's own requirement was not separately measured;
 	// requiring the field of every caller costs a Kubernetes template one
 	// metadata value it can set to 1, while leaving it optional costs a
-	// Docker one a 500. Its api/spec-drift-allowlist.yaml entry lands with
-	// this domain's registration, for the reason given on
+	// Docker one a 500. Excused by its own dated
+	// api/spec-drift-allowlist.yaml entry (CustomTemplateCreateString/
+	// platform — that file keys on (operation_id, field), so the sibling
+	// route's entry does not cover this one), added in the same commit that
+	// registered this domain, for the reason given on
 	// customTemplateCreateRepositoryInput.Platform above.
 	Platform int `json:"platform" jsonschema:"Platform associated to the template.\nValid values are: 1 - 'linux', 2 - 'windows'\nRequired for Docker stacks"`
 	// Title Title of the template
@@ -482,11 +486,19 @@ type customTemplateUpdateInputVariablesItem struct {
 // (which the JSON creates omit although the server enforces it, the
 // divergence recorded in docs/api-divergences.md §3.7) and its Type enum
 // already admits 3 (which CustomTemplateCreateRepository's omits, §6.5). So
-// there is no override here and no spec-drift allowlist entry to add — the
-// two corrections carried by customTemplateCreateRepositoryInput and
-// customTemplateCreateStringInput must not be copied onto this route, since
-// on this one they would be inventing a divergence rather than recording
-// one.
+// there is no required-ness override here — the two corrections carried by
+// customTemplateCreateRepositoryInput and customTemplateCreateStringInput
+// must not be copied onto this route, since on this one they would be
+// inventing a divergence rather than recording one.
+//
+// This route does carry three api/spec-drift-allowlist.yaml entries all the
+// same, of an entirely different kind: EdgeSettings, File and Variables
+// each publish a description that elaborates on the vendored one, because
+// the vendored text is copied from the JSON create routes and is wrong
+// about this route's own types (see each field below). A field-level
+// description is not covered by toolutil.WithNarrative: cmd/audit_spec_drift's
+// isGating fires on any ChangeDescription with a non-empty Before and,
+// unlike the $title/$description kinds, does not consult AfterOverridden.
 //
 // Note is required here and optional on both JSON creates. That too is what
 // the vendored specification says for this route, unmeasured against a live

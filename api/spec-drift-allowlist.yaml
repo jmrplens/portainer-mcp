@@ -59,6 +59,27 @@
 # a real "type" divergence each, not a title/description improvement, so
 # TitleOverridden/DescriptionOverridden's mechanism above does not apply to
 # them at all. See docs/api-divergences.md §6.3 for the full measurement.
+#
+# The six custom_templates entries after those three arrived with wave 1
+# stage B, in the same commit that registered the domain (a divergence
+# entry added before its domain is registered matches nothing and is
+# reported stale, which is itself a build error). They are two kinds:
+#
+#   - three "requiredness" entries, where a live 2.44.0 was measured
+#     enforcing a required array different from the vendored one in both
+#     directions. This matters more than a documentation defect normally
+#     would because toolutil.ActionSpec.ValidateInput enforces
+#     required-ness locally, before the handler runs
+#     (internal/tools/register.go): publishing the vendored arrays verbatim
+#     would make a model that fills exactly the required fields take a 500
+#     on every call. See docs/api-divergences.md §3.7.
+#   - three "description" entries on CustomTemplateCreateFile, where a
+#     field's published description elaborates on the specification's. Note
+#     that these are FIELD-level descriptions, which isGating
+#     (cmd/audit_spec_drift/audit.go) treats differently from the
+#     operation-level $title/$description kinds: it fires on any non-empty
+#     Before and does not consult AfterOverridden, so toolutil.WithNarrative
+#     buys them nothing and an entry here is the only instrument available.
 
 - operation_id: DockerContainerGpusInspect
   field: containerId
@@ -101,3 +122,84 @@
     forbid" for why a test that only proves a realistic string resolves is
     not sufficient evidence this field is actually string-typed.
   added: 2026-08-08
+
+- operation_id: CustomTemplateCreateRepository
+  field: platform
+  reason: >-
+    Measured against a live Portainer 2.44.0, Community and Business Edition
+    alike (2026-08-14): a Type 2 (compose) template created with no Platform
+    is refused with 500 "Invalid custom template platform", while the
+    vendored required array omits the field entirely. The field's own
+    description already says "Required for Docker stacks", so the prose is
+    right and the array is wrong. ValidateInput enforces required-ness
+    locally, before the handler runs, so publishing the vendored array
+    verbatim would make every model that fills exactly the required fields
+    omit Platform and take that 500. See docs/api-divergences.md §3.7.
+  added: 2026-08-14
+
+- operation_id: CustomTemplateCreateRepository
+  field: sourceId
+  reason: >-
+    Measured against a live Portainer 2.44.0, Community and Business Edition
+    alike (2026-08-14): RepositoryURL plus Platform 1 with no SourceID at all
+    answers 200 and clones the repository, and SourceID 0 sent explicitly
+    behaves identically, while the vendored required array lists the field.
+    (SourceID is read when a real identifier is supplied — 99999 answers 500
+    "Source not found" — so it is optional rather than ignored.) Because
+    ValidateInput enforces required-ness locally, publishing the vendored
+    array verbatim would refuse outright every caller cloning from the
+    inline repository fields for lacking a SourceID the server never wanted.
+    See docs/api-divergences.md §3.7.
+  added: 2026-08-14
+
+- operation_id: CustomTemplateCreateString
+  field: platform
+  reason: >-
+    The same measurement as CustomTemplateCreateRepository.platform above, on
+    the sibling JSON create route: a live 2.44.0 on both editions refuses a
+    Type 2 template with no Platform (500 "Invalid custom template
+    platform") although the vendored required array omits it. Listed
+    separately because this allow-list keys on (operation_id, field) — one
+    entry may never excuse two operations, so one measured decision spanning
+    two routes needs one entry per route. Deliberately NOT extended to
+    CustomTemplateUpdate, which carries the same "Required for Docker
+    stacks" note but was never probed. See docs/api-divergences.md §3.7.
+  added: 2026-08-14
+
+- operation_id: CustomTemplateCreateFile
+  field: edgeSettings
+  reason: >-
+    The vendored description, "A json object of edge config", is copied from
+    the two JSON create routes where EdgeSettings really is a nested object.
+    On this multipart route the schema types it "string" — a JSON document
+    inside a form field — and the published text says so ("...passed as a
+    JSON-encoded string"). Kept rather than reverted: the vendored wording
+    on a string-typed field steers a model into sending a nested object,
+    which the handler would marshal into the part and Portainer would then
+    fail to unmarshal, the exact mistake this action's handler tests pin.
+    The divergence is recorded here rather than hidden.
+  added: 2026-08-14
+
+- operation_id: CustomTemplateCreateFile
+  field: file
+  reason: >-
+    The vendored description of this field is the single word "File". It is
+    the one field carrying the stack file body, and published as "Content of
+    the stack file to upload" because the content itself — not a path — is
+    what crosses the tool boundary: the specification types it "string"
+    with format "binary", and a model has no way to name a path on the
+    filesystem this process runs on. One word that repeats the field name
+    tells a model nothing it could act on, so the elaboration is kept and
+    the divergence recorded here.
+  added: 2026-08-14
+
+- operation_id: CustomTemplateCreateFile
+  field: variables
+  reason: >-
+    Same shape as edgeSettings above: the vendored "A json array of
+    variables definitions" is accurate on the JSON create routes, where the
+    field is a real array, and misleading on this multipart route, where the
+    schema types it "string". Published as "...passed as a JSON-encoded
+    string" so a caller encodes the array itself instead of handing over a
+    structure this route cannot carry.
+  added: 2026-08-14
