@@ -261,9 +261,10 @@ func TestUnit_Specs_AreAllValid(t *testing.T) {
 // catches — the override disappearing.
 func TestUnit_Narrative_OverridesTitleAndDescriptionAwayFromTheSpecText(t *testing.T) {
 	t.Parallel()
-	// The eight generated actions. CustomTemplateCreateFile has a narrative
-	// case too, but no ActionSpec until its hand-written handler lands; add
-	// it here with that handler.
+	// All nine shippable operations: the eight generated ones and
+	// CustomTemplateCreateFile, whose ActionSpec is declared by hand in
+	// handWrittenSpecs but goes through toolutil.WithNarrative exactly like
+	// the rest.
 	overridden := []string{
 		"CustomTemplateList",
 		"CustomTemplateInspect",
@@ -272,6 +273,7 @@ func TestUnit_Narrative_OverridesTitleAndDescriptionAwayFromTheSpecText(t *testi
 		"CustomTemplateUpdate",
 		"CustomTemplateCreateString",
 		"CustomTemplateCreateRepository",
+		"CustomTemplateCreateFile",
 		"CustomTemplateDelete",
 	}
 	for _, id := range overridden {

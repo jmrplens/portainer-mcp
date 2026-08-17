@@ -458,3 +458,90 @@ type customTemplateUpdateInputVariablesItem struct {
 	Label        *string `json:"label,omitempty"`
 	Name         *string `json:"name,omitempty"`
 }
+
+// The type below is hand-written, not scaffolded: cmd/gen_action_inputs
+// never reaches CustomTemplateCreateFile, because oapi-codegen emitted only
+// CustomTemplateCreateFileWithBodyWithResponse for its multipart-only
+// request body and clientMethodFor looks up the plain
+// CustomTemplateCreateFileWithResponse that does not exist (see
+// custom_templates.go's package doc). Its handler lives in handlers.go and
+// renders these fields into a multipart body through
+// portainer.MultipartForm; every field name, type and required-ness below is
+// transcribed from the "multipart/form-data" schema of POST
+// /custom_templates/create/file in api/specs/ee-2.44.0.json.
+//
+// Unexported and with the domain's ordinary "ID" capitalisation, like every
+// other Input struct in this file, for the reason docker/inputs.go states:
+// golangci-lint's revive var-naming rule applies to struct fields regardless
+// of whether the struct itself is exported.
+
+// customTemplateCreateFileInput is the parameter shape for operation CustomTemplateCreateFile (POST /custom_templates/create/file).
+//
+// Unlike its two JSON siblings above, this route's vendored required array
+// is self-consistent and is published verbatim: it already lists Platform
+// (which the JSON creates omit although the server enforces it, the
+// divergence recorded in docs/api-divergences.md §3.7) and its Type enum
+// already admits 3 (which CustomTemplateCreateRepository's omits, §6.5). So
+// there is no override here and no spec-drift allowlist entry to add — the
+// two corrections carried by customTemplateCreateRepositoryInput and
+// customTemplateCreateStringInput must not be copied onto this route, since
+// on this one they would be inventing a divergence rather than recording
+// one.
+//
+// Note is required here and optional on both JSON creates. That too is what
+// the vendored specification says for this route, unmeasured against a live
+// server: nothing here was probed end to end, and where the JSON siblings'
+// prose reports measurements, this action's narrative deliberately reports
+// only what the document states.
+type customTemplateCreateFileInput struct {
+	// Description Description of the template
+	Description string `json:"description" jsonschema:"Description of the template"`
+	// EdgeSettings A json object of edge config
+	//
+	// A string, not a nested object, and deliberately so: this route's
+	// multipart schema types EdgeSettings "string" holding JSON, where the
+	// two JSON create routes take a real nested object. Sending an object
+	// here would marshal a Go struct into the part and Portainer would fail
+	// to unmarshal the part's own JSON. The caller supplies the encoded
+	// document.
+	EdgeSettings *string `json:"edgeSettings,omitempty" jsonschema:"A json object of edge config, passed as a JSON-encoded string" edition:"EE"`
+	// EdgeTemplate Indicates if this template purpose for Edge Stack
+	EdgeTemplate *bool `json:"edgeTemplate,omitempty" jsonschema:"Indicates if this template purpose for Edge Stack" edition:"EE"`
+	// File File
+	//
+	// The uploaded stack file's content. The specification types it "string"
+	// with format "binary" — an upload — and a model has no way to name a
+	// path on the server this process runs on, so the content itself is what
+	// crosses the tool boundary and handlers.go writes it as the multipart
+	// file part. Text only, in consequence: a stack file, a compose file or
+	// a Kubernetes manifest all are, but a payload that is not valid UTF-8
+	// cannot be expressed as a JSON string and so cannot be uploaded through
+	// this action.
+	File string `json:"file" jsonschema:"Content of the stack file to upload"`
+	// Logo URL of the template's logo
+	Logo *string `json:"logo,omitempty" jsonschema:"URL of the template's logo"`
+	// Note A note that will be displayed in the UI. Supports HTML content
+	//
+	// Required on this route, optional on both JSON creates. Published as
+	// the specification declares it; see this type's own doc comment.
+	Note string `json:"note" jsonschema:"A note that will be displayed in the UI. Supports HTML content"`
+	// Platform Platform associated to the template (1 - 'linux', 2 - 'windows')
+	Platform int `json:"platform" jsonschema:"Platform associated to the template (1 - 'linux', 2 - 'windows')"`
+	// Title Title of the template
+	Title string `json:"title" jsonschema:"Title of the template"`
+	// Type Type of created stack (1 - swarm, 2 - compose, 3 - kubernetes)
+	Type int `json:"type" jsonschema:"Type of created stack (1 - swarm, 2 - compose, 3 - kubernetes)"`
+	// Variables A json array of variables definitions
+	//
+	// A string for the same reason EdgeSettings above is: this route's
+	// multipart schema types it "string" holding a JSON array, where the
+	// JSON creates take a real array of objects.
+	Variables *string `json:"variables,omitempty" jsonschema:"A json array of variables definitions, passed as a JSON-encoded string"`
+}
+
+func (customTemplateCreateFileInput) EnumParams() map[string][]any {
+	return map[string][]any{
+		"platform": {1, 2},
+		"type":     {1, 2, 3},
+	}
+}

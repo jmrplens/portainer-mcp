@@ -15,8 +15,8 @@
 // in the vendored specification, is the sole deprecated operation in this
 // domain, and is skipped before checkCredentialRedaction ever runs.
 //
-// CustomTemplateCreateFile (POST /custom_templates/create/file) stays
-// hand-written (a later task) because oapi-codegen emitted only a
+// CustomTemplateCreateFile (POST /custom_templates/create/file) is
+// hand-written, in handlers.go, because oapi-codegen emitted only a
 // WithBody variant for its multipart-only request body: the generated
 // client declares CustomTemplateCreateFileWithBodyWithResponse but no
 // CustomTemplateCreateFileWithResponse — verified, zero hits:
@@ -40,28 +40,32 @@
 // (redact<OperationID>). That check runs before the hand-written-override
 // skip (main.go:471 precedes main.go:487), so CustomTemplateCreateFile
 // needs its wrapper even though its handler will never be generated: the
-// wrapper is what the hand-written handler in the later task is expected to
-// call, the same way a hand-written handler elsewhere in this codebase
-// states that it redacts. The six wrappers below all defer to
+// wrapper is what the hand-written handler calls, the same way a
+// hand-written handler elsewhere in this codebase states that it redacts.
+// The six wrappers below all defer to
 // redactCustomTemplate, which in turn defers to redact.RepoConfig
 // (internal/redact) — the same git-credential redactor
 // PortainereeStack, StacksStackResponse and PortainereeEdgeStack's own
 // domains use, since all four reach the identical RepoConfig type.
 //
-// generatedSpecs now lives in actions.go, written by `make scaffold-domain`:
+// generatedSpecs lives in actions.go, written by `make scaffold-domain`:
 // eight ActionSpecs, each wrapped in toolutil.WithNarrative(…,
 // narrative(operationID)), and five of them calling one of the redaction
-// wrappers below. handWrittenSpecs is still a stub, and still holds the
-// throwaway reference to redactCustomTemplateCreateFile that keeps
-// golangci-lint's unused check meaningful until the hand-written CreateFile
-// handler calls it for real — a linter quieted about this domain's own
-// redaction wrappers is exactly the wrong thing to quiet, since an uncalled
-// wrapper is a silent path for a credential to reach a model unredacted.
-// Replacing that stub's body with the real handler's ActionSpec removes the
-// reference as a side effect of doing the work.
+// wrappers below. handWrittenSpecs, in this file, adds the ninth in the
+// same shape, over the handler in handlers.go and the shared multipart
+// writer in internal/portainer. That handler is what calls
+// redactCustomTemplateCreateFile: the wrapper was declared before it
+// existed, held live only by a throwaway reference in this function's
+// earlier stub, and the reference is gone now that a real call site does the
+// work. Nothing mechanical would have noticed its absence — golangci-lint's
+// unused check would simply have gone quiet — which is why the call is
+// pinned by a test of its own (handlers_test.go) rather than left to review:
+// an uncalled redaction wrapper is a silent path for a credential to reach
+// a model.
 package custom_templates
 
 import (
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/redact"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -73,18 +77,34 @@ func Specs() []toolutil.ActionSpec {
 }
 
 // handWrittenSpecs returns the one action this generator can never produce:
-// CustomTemplateCreateFile. See this file's package doc for why.
+// CustomTemplateCreateFile. See this file's package doc for why, and
+// handlers.go for the handler itself.
 //
-// filled in by Task 5: today there is no hand-written handler yet, so this
-// stub returns nil purely to let the package compile. The assignment below
-// is the same throwaway-reference device generatedSpecs uses above, here
-// for redactCustomTemplateCreateFile specifically: Task 5's hand-written
-// handler is what is actually expected to call it, and replacing this
-// stub's body with that handler's real ActionSpec entry deletes this line
-// along with the rest of the stub.
+// Declared with the vendored summary and description as its literal Title
+// and Description and then passed through toolutil.WithNarrative, exactly
+// like the eight in actions.go. The literals are what a regeneration would
+// write and what cmd/audit_spec_drift compares against; the narrative case
+// is what a model actually reads, and WithNarrative is what records the
+// difference as a deliberate override rather than as drift.
+//
+// Edition CE: POST /custom_templates/create/file is declared in both
+// vendored specifications (internal/apiversion/applicability_gen.go), unlike
+// the deprecated POST /custom_templates, which is Business Edition only.
+//
+// Mutating and not Destructive, matching the two JSON creates: it adds a
+// template at a new identifier and removes nothing.
 func handWrittenSpecs() []toolutil.ActionSpec {
-	_ = redactCustomTemplateCreateFile
-	return nil
+	return []toolutil.ActionSpec{
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "custom_templates.create_file", Domain: "custom_templates", OperationID: "CustomTemplateCreateFile",
+			Title:       "Create a custom template",
+			Description: "Create a custom template.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Handler:     customTemplateCreateFile,
+			Input:       customTemplateCreateFileInput{},
+		}, narrative("CustomTemplateCreateFile")),
+	}
 }
 
 // narrative supplies the Title and Description overrides for operations
@@ -159,8 +179,9 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // CustomTemplateCreate (POST /custom_templates) has no case: it is
 // deprecated upstream, cmd/gen_action_inputs skips it, and it never becomes
 // an action. CustomTemplateCreateFile has one even though its ActionSpec is
-// still hand-written elsewhere — the hook is keyed by operationId, so the
-// case is ready for the handler that will call it.
+// declared by hand in handWrittenSpecs rather than in actions.go — the hook
+// is keyed by operationId, so where the spec is written makes no
+// difference.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "CustomTemplateList":
