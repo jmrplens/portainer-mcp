@@ -41,11 +41,17 @@ import (
 //     reports the field missing while its bytes sit in the request.
 //
 // The body is assembled in memory. Every payload these routes take is a
-// stack file, a manifest or a certificate — kilobytes — and buffering keeps
-// the returned io.Reader re-readable, which matters because the generated
-// client may need to rebuild the request (and because an io.Pipe would tie
-// the caller's error handling to a second goroutine for no gain at these
-// sizes).
+// stack file, a manifest or a certificate — kilobytes — and buffering buys
+// something net/http can observe: http.NewRequest type-switches on the
+// reader it is handed, and for a *bytes.Reader it sets ContentLength and
+// installs a GetBody closure that rewinds and replays. Wrap the identical
+// bytes in anything opaque — an io.Pipe, an io.MultiReader — and the upload
+// goes out chunked with GetBody nil, so a redirect or a retry after a
+// half-closed connection fails instead of being resent. Uploads are the
+// requests most worth replaying, which is why this is enforced by a test
+// (TestUnit_MultipartFormBody_IsReplayableByNetHTTP) and not merely stated
+// here: every other test in this package reads the body once and cannot
+// tell the two apart.
 //
 // Errors are accumulated rather than returned per call, so a caller can
 // declare a whole form as a run of statements and check once at Build. A
@@ -169,6 +175,10 @@ func (f *MultipartForm) File(name, filename string, content []byte) {
 // The two are returned together and never separately: the boundary is
 // generated per form, so a content type obtained anywhere else describes a
 // different body.
+//
+// The reader is a *bytes.Reader, and that concrete choice is load-bearing
+// rather than incidental — see this type's own doc comment for what
+// net/http derives from it, and for the test that holds it in place.
 func (f *MultipartForm) Build() (io.Reader, string, error) {
 	if f.err != nil {
 		return nil, "", f.err

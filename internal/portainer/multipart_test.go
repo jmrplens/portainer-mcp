@@ -4,6 +4,7 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -294,5 +295,74 @@ func TestUnit_MultipartFormWithEveryFieldKind_RoundTripsThroughAParser(t *testin
 	}
 	if _, ok := parsed.File["File"]; !ok {
 		t.Errorf("File is not a file part; file parts present: %v", parsed.File)
+	}
+}
+
+// TestUnit_MultipartFormBody_IsReplayableByNetHTTP pins the one property
+// Build's doc comment claims and nothing else here checks: the body it hands
+// back is a re-readable *bytes.Reader, not an opaque stream.
+//
+// The distinction is invisible to every other test in this file, because
+// every one of them reads the body exactly once. net/http is what notices.
+// http.NewRequest type-switches on the reader it is given: for a
+// *bytes.Reader (and *bytes.Buffer, *strings.Reader) it sets ContentLength
+// from Len() and installs a GetBody closure that rewinds and replays; for
+// anything else — an io.MultiReader wrapping the very same bytes, say — it
+// leaves ContentLength at 0 and GetBody nil, and the request goes out
+// chunked with no way to resend it.
+//
+// That costs a retry and a redirect. A 307/308 from Portainer, or an
+// http.Client retry after an idle connection is closed mid-flight, needs
+// GetBody to rebuild the body; without it the request fails instead of being
+// replayed. Uploads are exactly the requests most worth replaying, so the
+// two fields net/http derives are asserted here rather than the concrete
+// type: they are the observable consequences, and asserting them keeps this
+// test honest if Build ever returns some other rewindable reader net/http
+// also recognises.
+func TestUnit_MultipartFormBody_IsReplayableByNetHTTP(t *testing.T) {
+	t.Parallel()
+
+	form := NewMultipartForm()
+	form.Field("Title", "nginx")
+	form.File("File", "template.yml", []byte("services:\n  web:\n    image: nginx\n"))
+
+	body, contentType, err := form.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// NewRequestWithContext rather than NewRequest only because golangci's
+	// noctx rule requires it; the body type switch this test is about is the
+	// same code either way — NewRequest is a thin wrapper over it.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		"https://portainer.example.com/api/custom_templates/create/file", body)
+	if err != nil {
+		t.Fatalf("http.NewRequestWithContext: %v", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	if req.ContentLength <= 0 {
+		t.Errorf("ContentLength = %d, want the body's own length; net/http could not size the body, so the upload goes out chunked", req.ContentLength)
+	}
+	if req.GetBody == nil {
+		t.Fatal("GetBody is nil; net/http cannot replay this body on a redirect or a retry, which is what Build's doc comment says a buffered reader prevents")
+	}
+
+	// GetBody must actually produce the same bytes a second time, not merely
+	// be non-nil: a closure returning an exhausted reader satisfies the check
+	// above and still replays nothing.
+	replayed, err := req.GetBody()
+	if err != nil {
+		t.Fatalf("GetBody(): %v", err)
+	}
+	second, err := io.ReadAll(replayed)
+	if err != nil {
+		t.Fatalf("read the replayed body: %v", err)
+	}
+	if int64(len(second)) != req.ContentLength {
+		t.Errorf("the replayed body is %d bytes, want %d", len(second), req.ContentLength)
+	}
+	if !strings.Contains(string(second), "image: nginx") {
+		t.Errorf("the replayed body does not carry the file part; got:\n%s", second)
 	}
 }
