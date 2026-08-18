@@ -473,8 +473,6 @@ content through `update` is accepted and lost.
 
 ---
 
----
-
 ## 3. Requirements the documents understate or omit
 
 ### 3.1 `X-Setup-Token` on `POST /users/admin/init`
