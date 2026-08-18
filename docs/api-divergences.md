@@ -1024,22 +1024,23 @@ in §9.5 below.
 `cmd/fetch_spec/normalise.go`, with its test, when a domain that publishes
 these fields needs them — which cannot happen before §9.5 is fixed.
 
-### 6.7 `CustomTemplateList.type` is declared `explode: false`, and the server cannot parse what that produces
+### 6.7 `CustomTemplateList.type` is declared `explode: false`, and the server cannot parse what that produces — fixed by a hand-written handler
 
-**Evidence: measured** against a live Portainer 2.44.0. The literal exchange
-below was run against Community Edition; Business Edition is covered by
-`TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime`, which asserts the
-same failure, with the same message, on both legs of the estate. Recorded
-2026-08-18 (wave 1 stage B, task 7).
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-18 (wave 1 stage B, task 7).
 
 `GET /custom_templates` declares its required `type` parameter as an array
 with `style: form` and **`explode: false`**. That combination means one
 comma-joined value, and the generated client encodes it exactly so — via
 `runtime.StyleParamWithOptions("form", false, "type", ...)` in
 `NewCustomTemplateListRequest`. Portainer's own handler then parses each
-value with `strconv.Atoi` and fails:
+value with `strconv.Atoi` and fails, while the repeated form it expects
+answers 200:
 
 ```text
+GET /api/custom_templates?type=2
+200 [...]
+
 GET /api/custom_templates?type=1,2,3
 400 {"message":"Invalid Custom template type",
      "details":"Failed parsing template type: strconv.Atoi: parsing \"1,2,3\": invalid syntax"}
@@ -1048,30 +1049,52 @@ GET /api/custom_templates?type=1&type=2&type=3
 200 [...]
 ```
 
-Neither side is wrong on its own terms: the client encodes what the document
-declares, and the server implements what `explode: true` would have
-declared. The document is wrong, and the cost lands on the catalog:
-**`custom_templates.list` works for exactly one stack type and fails for
-any more than one**, which is the natural call — "list every custom
-template" — for a model that reads the field's own description ("Template
-types").
+Neither implementation is wrong on its own terms: the client encodes what
+the document declares, and the server implements what `explode: true` would
+have declared. The document is wrong, and the cost lands squarely on the
+catalog, because `type` is `required: true`: there is no "omit it and get
+everything" escape, so a list action published on the generated client works
+for exactly one stack type and fails on the most obvious call a list action
+has.
 
-Not fixed here, and the options are not equivalent:
+**What the catalog does about it.** `custom_templates.list` is hand-written
+(`internal/tools/custom_templates/handlers.go`, declared in
+`handWrittenSpecs()` beside `custom_templates.create_file`) and builds the
+query itself with `url.Values`, which renders one `type=` per value — the
+form the server accepts. Everything else about the action is unchanged: the
+same `customTemplateListInput` (`type` as `[]int`, `edge` optional), the same
+`redactCustomTemplateList` wrapper over a response that still carries
+`GitConfig`, the same edition and flags.
 
-- Patching the vendored specification is not something this repository does:
-  `make update-spec` refetches it, and a hand edit would be silently
-  reverted on the next refresh.
-- Regenerating the client after a local patch has the same problem.
-- A hand-written `CustomTemplateList` handler that builds the query itself
-  (repeating `type=`) would fix the action for good, at the cost of a second
-  hand-written handler in this domain — the precedent for which already
-  exists in `handlers.go` for `CustomTemplateCreateFile`.
+**No allow-list entry, and that is a considered answer rather than an
+omission.** `api/spec-drift-allowlist.yaml` excuses differences between the
+parameter shape the catalog PUBLISHES and the one the vendored specification
+declares; `cmd/audit_spec_drift` compares exactly that. This change alters
+neither: the published input is byte-identical to what the generator emitted,
+and only the wire encoding of an already-declared array parameter differs.
+`make audit-spec-drift` reports no finding for it, and adding an entry
+anyway would be reported as stale, which is itself a build error.
 
-Recorded here, pinned by `TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime`
-(`test/e2e/suite/custom_templates_test.go`) so that neither a server-side
-change nor a client-side one can alter this silently, and worked around
-inside the suite's own cross-run cleanup (`listAllCustomTemplates`, one
-request per type).
+Pinned from three directions, because a list call is easy to test in a way
+that cannot fail:
+
+- `TestUnit_CustomTemplateList_SendsTheTypeParameterRepeated` asserts the
+  literal query string (`type=1&type=2&type=3`, and no comma anywhere),
+  including for the single-type call the broken encoding also got right.
+- `TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall`
+  (`test/e2e/suite/custom_templates_test.go`) seeds two templates of
+  different stack types and requires the one live multi-type call to return
+  both, on both editions and all three surfaces — so a handler that quietly
+  sent one type and dropped the rest fails it.
+- The same test's last subtest calls the GENERATED client against the same
+  server at the same moment and requires it to still fail with the
+  `strconv.Atoi` message above. If Portainer ever starts accepting the comma
+  form, that subtest fails and this section needs revisiting.
+
+Confirmed discriminating: reverting the handler to a comma-joined value
+makes the unit test report
+`query = "type=1%2C2%2C3", want "type=1&type=2&type=3"` and all six
+(edition, surface) pairs of the e2e test fail with the server's own 400.
 
 ---
 

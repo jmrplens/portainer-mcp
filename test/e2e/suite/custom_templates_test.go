@@ -41,16 +41,20 @@ import (
 // intercepts before the handler runs (internal/tools/register.go), so a
 // safe-mode-only test proves the interception and nothing about the action.
 
-// customTemplateFixtureType is the stack type every template this file
-// creates carries: 2, compose. It is also what the list calls below ask for,
-// and they ask for exactly this one type rather than all three for a
-// measured reason — see
-// TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime.
+// customTemplateFixtureType is the stack type templates in this file carry
+// unless a test needs a specific other one: 2, compose.
 const customTemplateFixtureType = 2
 
-// customTemplateListTypes is every stack type the list route accepts. Used
-// only where a caller has to sweep everything (orphan cleanup) and therefore
-// issues one request per type.
+// customTemplateListTypes is every stack type the list route accepts, and
+// what the list calls in this file ask for.
+//
+// Asking for all three in one call is the thing that used to fail: the
+// vendored specification declares the parameter explode: false, the
+// generated client comma-joined it, and the server answered 400 (§6.7).
+// custom_templates.list is hand-written now and sends the repeated form,
+// so this is the ordinary call again — and
+// TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall is what keeps
+// it that way.
 var customTemplateListTypes = []int{1, 2, 3}
 
 // customTemplateStackFile builds a stack file carrying marker, so a content
@@ -73,6 +77,15 @@ func customTemplateStackFile(marker string) string {
 // whatever the test was really about.
 func createCustomTemplateFixture(t *testing.T, ed, title string) int {
 	t.Helper()
+	return createCustomTemplateFixtureOfType(t, ed, title, customTemplateFixtureType)
+}
+
+// createCustomTemplateFixtureOfType is createCustomTemplateFixture for a
+// caller that needs a specific stack type — which one test does: proving
+// custom_templates.list really returns several types in one call needs the
+// server to hold more than one type in the first place.
+func createCustomTemplateFixtureOfType(t *testing.T, ed, title string, stackType int) int {
+	t.Helper()
 	client := fixtureClient(t, ed)
 
 	var id int
@@ -86,7 +99,7 @@ func createCustomTemplateFixture(t *testing.T, ed, title string) int {
 			Description: "e2e fixture",
 			FileContent: customTemplateStackFile(title),
 			Platform:    &platform,
-			Type:        2,
+			Type:        apigen.PortainerStackType(stackType),
 		}
 		resp, err := client.API.CustomTemplateCreateStringWithResponse(ctx, body)
 		if err != nil {
@@ -376,8 +389,11 @@ func TestCustomTemplates_InlineTemplateLifecycle_CreatesReadsUpdatesAndDeletes(t
 					t.Errorf("custom_templates.create_string returned Title %q, want %q", got, title)
 				}
 
+				// Every type, not just this template's own: that is the
+				// call the hand-written list handler exists for (§6.7), so
+				// the ordinary lifecycle path exercises it too.
 				listed := callAction[[]map[string]any](t, session, surface, "custom_templates.list", map[string]any{
-					"type": []int{customTemplateFixtureType},
+					"type": customTemplateListTypes,
 				})
 				if !customTemplateListed(listed, id, title) {
 					t.Errorf("custom_templates.list does not carry the template %d (%q) just created: %v", id, title, listed)
@@ -443,51 +459,91 @@ func customTemplateListed(listed []map[string]any, id int, title string) bool {
 	return false
 }
 
-// TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime pins a live defect
-// this suite found rather than a property worth having.
+// TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall is the live
+// proof of the hand-written list handler (internal/tools/custom_templates/
+// handlers.go), and it is built so that the encoding it exists to fix is the
+// only thing it can be passing on.
 //
-// custom_templates.list takes an array of stack types, and the obvious call
-// — "list every custom template", type [1, 2, 3] — fails against a real
-// 2.44.0 with 400 "Invalid Custom template type: Failed parsing template
-// type: strconv.Atoi: parsing \"1,2,3\": invalid syntax". The vendored
-// specification declares the parameter `explode: false`, so the generated
-// client encodes the array the OpenAPI way, as one comma-joined value, while
-// Portainer's handler expects the parameter repeated. Neither side is
-// misbehaving on its own terms; the document is wrong, and every caller
-// passing more than one type pays for it. See docs/api-divergences.md
-// section 6.7.
+// The defect: `type` is declared explode: false, so the generated client
+// rendered [1, 2, 3] as one comma-joined value and Portainer — which parses
+// each value with strconv.Atoi — answered 400 on both editions, making the
+// most obvious call a list action has ("every template") the one call that
+// failed, with no escape, since the parameter is required.
 //
-// It is asserted as the measured behaviour, with the server's own words, for
-// the same reason TestDocker_ContainerImageStatus_AgainstARealContainer
-// asserts that a fabricated container id answers "skipped": recording what
-// the server really does is what makes a change to it — a Portainer that
-// starts accepting the comma form, or a regenerated client that stops
-// sending it — visible instead of silent. A test that only ever called list
-// with one type would leave this defect invisible to the whole suite.
-func TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime(t *testing.T) {
+// Two properties, and the second is the one that discriminates:
+//
+//  1. the multi-type call succeeds at all;
+//  2. what comes back really does carry more than one stack type — both
+//     seeded templates are present and their Type values differ.
+//
+// Property 2 needs the server to hold templates of different types, which
+// is why two are seeded through the raw API first. Without it the test
+// would pass against a handler that quietly sent one type and dropped the
+// rest, which is the plausible wrong fix.
+//
+// The last subtest is the evidence for the divergence itself, run against
+// the same server at the same moment: the GENERATED client, called with the
+// same three types, still fails with the server's own strconv.Atoi message.
+// That is what makes this a fixed divergence rather than a defect that
+// quietly went away — and if Portainer ever starts accepting the comma
+// form, that subtest fails and §6.7 needs revisiting.
+func TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall(t *testing.T) {
 	for _, leg := range composeLegs(estate) {
+		composeTitle := uniqueName("template-list-compose")
+		swarmTitle := uniqueName("template-list-swarm")
+		composeID := createCustomTemplateFixtureOfType(t, leg.Name, composeTitle, 2)
+		swarmID := createCustomTemplateFixtureOfType(t, leg.Name, swarmTitle, 1)
+
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
 				session := sessions.For(t, surface, leg.Name)
-				toolName, args := actionCallParams(t, surface, "custom_templates.list", map[string]any{
+
+				listed := callAction[[]map[string]any](t, session, surface, "custom_templates.list", map[string]any{
 					"type": customTemplateListTypes,
 				})
-				res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: args})
-				if err != nil {
-					t.Fatalf("CallTool(%s): %v", toolName, err)
+				if !customTemplateListed(listed, composeID, composeTitle) {
+					t.Errorf("custom_templates.list over types %v does not carry the compose template %d (%q)", customTemplateListTypes, composeID, composeTitle)
 				}
-				if !res.IsError {
-					t.Fatalf("custom_templates.list with types %v succeeded; if Portainer now accepts the comma-joined form, docs/api-divergences.md section 6.7 and this test are out of date: %s",
-						customTemplateListTypes, toolResultText(res))
+				if !customTemplateListed(listed, swarmID, swarmTitle) {
+					t.Errorf("custom_templates.list over types %v does not carry the swarm template %d (%q)", customTemplateListTypes, swarmID, swarmTitle)
 				}
-				const want = "Invalid Custom template type"
-				if text := toolResultText(res); !strings.Contains(text, want) {
-					t.Errorf("custom_templates.list with types %v failed with %q, want the measured %q: a different failure is a different defect",
-						customTemplateListTypes, text, want)
+
+				// The discriminating half: one call, more than one type in
+				// the answer. A handler that sent a single type would still
+				// satisfy "the call succeeded".
+				types := map[int]bool{}
+				for _, entry := range listed {
+					if stackType, ok := entry["Type"].(float64); ok {
+						types[int(stackType)] = true
+					}
+				}
+				if !types[1] || !types[2] {
+					t.Errorf("custom_templates.list over types %v returned templates of types %v, want at least types 1 and 2 in the same answer", customTemplateListTypes, types)
 				}
 			})
 		}
+
+		t.Run(leg.Name+"/the generated client still fails on the comma-joined form", func(t *testing.T) {
+			t.Parallel()
+			client := fixtureClient(t, leg.Name)
+			ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+			defer cancel()
+
+			params := &apigen.CustomTemplateListParams{Type: []apigen.CustomTemplateListParamsType{1, 2, 3}}
+			resp, err := client.API.CustomTemplateListWithResponse(ctx, params)
+			if err != nil {
+				t.Fatalf("generated CustomTemplateList: %v", err)
+			}
+			err = toolutil.Check(resp)
+			if err == nil {
+				t.Fatalf("the generated client's comma-joined type parameter now succeeds: docs/api-divergences.md §6.7 and the hand-written handler in internal/tools/custom_templates/handlers.go are out of date")
+			}
+			const want = "Invalid Custom template type"
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("generated CustomTemplateList failed with %v, want the measured %q: a different failure is a different defect", err, want)
+			}
+		})
 	}
 }
 
@@ -709,7 +765,7 @@ func TestCustomTemplates_CreateRepository_DropsTheStoredGitUsername(t *testing.T
 				}
 
 				listed := callAction[[]map[string]any](t, session, surface, "custom_templates.list", map[string]any{
-					"type": []int{customTemplateFixtureType},
+					"type": customTemplateListTypes,
 				})
 				for _, entry := range listed {
 					entryID, ok := entry["Id"].(float64)
@@ -1037,17 +1093,21 @@ func assertCustomTemplateAbsent(t *testing.T, ed, title, reason string) {
 // issuing ONE REQUEST PER STACK TYPE rather than one request naming all
 // three.
 //
-// That is not a stylistic choice. The vendored specification declares the
-// type parameter `explode: false`, so the generated client encodes a
-// three-element slice as `type=1,2,3` — and Portainer's own handler parses
-// each value with strconv.Atoi and answers
+// That is not a stylistic choice, and it is not the same path the catalog
+// takes any more. This sweep and the orphan cleanup behind it talk through
+// the GENERATED client, which renders a three-element slice as the
+// comma-joined `type=1,2,3` the vendored specification's `explode: false`
+// asks for — and which Portainer answers with
 // 400 "Invalid Custom template type: Failed parsing template type:
-// strconv.Atoi: parsing \"1,2,3\": invalid syntax". Measured live; see
-// docs/api-divergences.md section 6.7 and
-// TestCustomTemplates_List_RefusesMoreThanOneTypeAtATime, which pins the
-// behaviour so a Portainer that starts accepting the comma form (or a
-// client that stops sending it) is noticed rather than silently changing
-// what this sweep can see.
+// strconv.Atoi: parsing \"1,2,3\": invalid syntax". The catalog's own
+// custom_templates.list no longer goes through that client: it is
+// hand-written and sends the repeated form (see
+// internal/tools/custom_templates/handlers.go and
+// docs/api-divergences.md section 6.7). One request per type is what keeps
+// this generated-client caller working, and
+// TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall keeps both
+// halves — the generated client's failure and the hand-written handler's
+// success — measured against the same live server.
 func listAllCustomTemplates(ctx context.Context, client *portainer.Client) ([]apigen.PortainereeCustomTemplate, error) {
 	var all []apigen.PortainereeCustomTemplate
 	for _, stackType := range customTemplateListTypes {

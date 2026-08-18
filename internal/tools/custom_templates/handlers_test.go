@@ -19,6 +19,7 @@ import (
 type capturedRequest struct {
 	method      string
 	path        string
+	rawQuery    string
 	contentType string
 	form        *multipart.Form
 }
@@ -38,6 +39,7 @@ func capturingClient(t *testing.T, status int, body []byte) (*portainer.Client, 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.method = r.Method
 		captured.path = r.URL.Path
+		captured.rawQuery = r.URL.RawQuery
 		captured.contentType = r.Header.Get("Content-Type")
 
 		if _, params, err := mime.ParseMediaType(captured.contentType); err == nil && params["boundary"] != "" {
@@ -391,4 +393,106 @@ func partNames(form *multipart.Form) []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// TestUnit_CustomTemplateList_SendsTheTypeParameterRepeated pins the one
+// thing the hand-written list handler exists for.
+//
+// The generated client rendered `type=1,2,3` because the vendored
+// specification declares the parameter explode: false, and a live 2.44.0
+// answers that with 400 "Failed parsing template type: strconv.Atoi:
+// parsing \"1,2,3\"" on both editions, while `type=1&type=2&type=3`
+// answers 200 (docs/api-divergences.md §6.7). Only the wire encoding
+// distinguishes the two, so only an assertion on the wire encoding can
+// catch a regression back to the comma form — url.Values.Encode is what
+// produces the repeated key today, and a future edit reaching for
+// strings.Join would compile, pass every other test in this package, and
+// break the action against every real server.
+//
+// The single-type call is asserted too, and deliberately: it is the one
+// call the broken encoding also got right, so a test that only ever passed
+// one type could not tell the two encodings apart at all.
+func TestUnit_CustomTemplateList_SendsTheTypeParameterRepeated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "three types",
+			input: `{"type":[1,2,3]}`,
+			want:  "type=1&type=2&type=3",
+		},
+		{
+			name:  "one type",
+			input: `{"type":[2]}`,
+			want:  "type=2",
+		},
+		{
+			name:  "types and the edge filter",
+			input: `{"type":[1,2],"edge":true}`,
+			want:  "edge=true&type=1&type=2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, captured := capturingClient(t, http.StatusOK, []byte(`[]`))
+
+			if _, err := customTemplateList(context.Background(), c, json.RawMessage(tt.input)); err != nil {
+				t.Fatalf("customTemplateList(%s): %v", tt.input, err)
+			}
+			if captured.path != "/api/custom_templates" {
+				t.Errorf("path = %q, want %q", captured.path, "/api/custom_templates")
+			}
+			if captured.rawQuery != tt.want {
+				t.Errorf("query = %q, want %q (the repeated form the server parses; a comma-joined value is a 400)", captured.rawQuery, tt.want)
+			}
+			if strings.Contains(captured.rawQuery, "%2C") || strings.Contains(captured.rawQuery, ",") {
+				t.Errorf("query = %q carries a comma: that is the encoding the server refuses", captured.rawQuery)
+			}
+		})
+	}
+}
+
+// TestUnit_CustomTemplateList_EmptyBodyAnswersAnEmptyList records the one
+// behavioural difference between this handler and the generated one it
+// replaced: a 200 with no body at all now answers [] rather than the null
+// the generated decoder's nil pointer produced.
+func TestUnit_CustomTemplateList_EmptyBodyAnswersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	c, _ := capturingClient(t, http.StatusOK, nil)
+
+	out, err := customTemplateList(context.Background(), c, json.RawMessage(`{"type":[2]}`))
+	if err != nil {
+		t.Fatalf("customTemplateList: %v", err)
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if string(encoded) != "[]" {
+		t.Errorf("customTemplateList over an empty body = %s, want []", encoded)
+	}
+}
+
+// TestUnit_CustomTemplateList_ServerErrorIsReported proves the hand-written
+// handler classifies a failing status instead of decoding the error body as
+// a template list. The message is the server's own, which is what makes a
+// 400 like §6.7's diagnosable from a tool result.
+func TestUnit_CustomTemplateList_ServerErrorIsReported(t *testing.T) {
+	t.Parallel()
+	c, _ := capturingClient(t, http.StatusBadRequest,
+		[]byte(`{"message":"Invalid Custom template type","details":"Failed parsing template type"}`))
+
+	_, err := customTemplateList(context.Background(), c, json.RawMessage(`{"type":[2]}`))
+	if err == nil {
+		t.Fatal("customTemplateList against a 400 returned no error")
+	}
+	if !strings.Contains(err.Error(), "Invalid Custom template type") {
+		t.Errorf("error = %v, want it to carry the server's own message", err)
+	}
 }

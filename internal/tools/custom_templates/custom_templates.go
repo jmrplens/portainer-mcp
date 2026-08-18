@@ -76,9 +76,21 @@ func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(), handWrittenSpecs()...)
 }
 
-// handWrittenSpecs returns the one action this generator can never produce:
-// CustomTemplateCreateFile. See this file's package doc for why, and
-// handlers.go for the handler itself.
+// handWrittenSpecs returns the two actions this domain declares by hand,
+// for two unrelated reasons.
+//
+// CustomTemplateCreateFile the generator can never produce: see this file's
+// package doc, and handlers.go for the handler itself.
+//
+// CustomTemplateList the generator produces perfectly well, and what it
+// produces does not work: the vendored specification declares the required
+// `type` parameter explode: false, so the generated client comma-joins it
+// and the server — which parses each value with strconv.Atoi — refuses
+// every call naming more than one stack type, which is the most obvious
+// call a list action has. The hand-written handler sends the repeated form
+// the server accepts. The published input shape is untouched, so this is a
+// wire-encoding override and not a schema divergence; see handlers.go's
+// customTemplateList and docs/api-divergences.md §6.7.
 //
 // Declared with the vendored summary and description as its literal Title
 // and Description and then passed through toolutil.WithNarrative, exactly
@@ -104,6 +116,18 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 			Handler:     customTemplateCreateFile,
 			Input:       customTemplateCreateFileInput{},
 		}, narrative("CustomTemplateCreateFile")),
+		// Edition CE, no Mutating flag and the same redaction wrapper the
+		// generated version used: only the handler changed, so everything
+		// the catalog publishes about this action is what generatedSpecs()
+		// declared before it moved here.
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "custom_templates.list", Domain: "custom_templates", OperationID: "CustomTemplateList",
+			Title:       "List available custom templates",
+			Description: "List available custom templates.",
+			Edition:     edition.CE,
+			Handler:     customTemplateList,
+			Input:       customTemplateListInput{},
+		}, narrative("CustomTemplateList")),
 	}
 }
 
@@ -191,7 +215,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title: "List custom templates",
 			Description: "Returns the custom templates visible to the caller: for each one its identifier, title, description, stack type, platform, ownership and — for a git-backed template — its repository configuration. " +
 				"The stack file body is not included; custom_templates.file returns it for one template at a time. " +
-				"type is required and selects which stack types to return (1 swarm, 2 compose, 3 kubernetes); edge returns Edge stack templates instead. " +
+				"type is required and selects which stack types to return (1 swarm, 2 compose, 3 kubernetes); pass several at once — [1, 2, 3] returns every template regardless of type — or one to narrow the list; edge returns Edge stack templates instead. " +
 				"Any git credential a template stores is stripped before the list reaches you.",
 		}
 	case "CustomTemplateInspect":

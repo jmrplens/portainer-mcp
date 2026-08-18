@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -116,4 +120,98 @@ func customTemplateCreateFileBody(params customTemplateCreateFileInput) (io.Read
 		return nil, "", fmt.Errorf("build multipart body: %w", err)
 	}
 	return body, contentType, nil
+}
+
+// customTemplateListMaxBody bounds how much of the list response is read.
+//
+// 4 MiB rather than the 1 MiB internal/tools/docker/handlers.go uses,
+// because this response grows with the number of templates on the server
+// where docker's grows with nothing. Truncation is not silent either way: a
+// body cut mid-array fails to unmarshal and the caller gets a decode error,
+// never a short list presented as the whole one.
+const customTemplateListMaxBody = 4 << 20
+
+// customTemplateList is the second hand-written handler in this domain, and
+// unlike customTemplateCreateFile it exists because the generated one is
+// WRONG on the wire rather than absent.
+//
+// GET /custom_templates declares its required `type` parameter as
+// style: form, explode: false, so the generated client renders a
+// three-element slice as one comma-joined value —
+// runtime.StyleParamWithOptions("form", false, "type", ...) in
+// NewCustomTemplateListRequest. Portainer's own handler parses each value
+// with strconv.Atoi and answers:
+//
+//	GET /custom_templates?type=1,2,3
+//	400 "Invalid Custom template type: Failed parsing template type:
+//	     strconv.Atoi: parsing \"1,2,3\": invalid syntax"
+//
+// while the repeated form it expects answers 200:
+//
+//	GET /custom_templates?type=1&type=2&type=3   -> 200
+//
+// Both measured against a live 2.44.0, Community and Business Edition alike
+// (docs/api-divergences.md §6.7). The document is wrong, not either
+// implementation, and the cost of publishing the generated call is that the
+// most obvious use of a list action — every template, whatever its type —
+// is the one call that fails, with no way to avoid it: the parameter is
+// required, so there is no "omit it and get everything" escape.
+//
+// So the query is built here instead. url.Values.Encode renders a repeated
+// key per value, which is exactly the encoding the server accepts. Nothing
+// about the PUBLISHED parameter shape changes — customTemplateListInput
+// still declares type as []int and edge as an optional bool — so this is a
+// wire-encoding fix, not a schema divergence, and it needs no
+// api/spec-drift-allowlist.yaml entry: cmd/audit_spec_drift compares the
+// catalog's published input against the vendored one and sees no difference
+// to report.
+//
+// The redaction wrapper is called for the same reason customTemplateCreateFile
+// calls its own: the generator's guard requires redactCustomTemplateList to
+// be declared, but nothing mechanical forces a hand-written handler to
+// actually call it, and this response carries GitConfig for every git-backed
+// template in the list.
+func customTemplateList(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var params customTemplateListInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("CustomTemplateList: parse input: %w", err)
+	}
+
+	query := url.Values{}
+	for _, stackType := range params.Type {
+		query.Add("type", strconv.Itoa(stackType))
+	}
+	if params.Edge != nil {
+		query.Set("edge", strconv.FormatBool(*params.Edge))
+	}
+	path := "/custom_templates"
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	resp, err := c.Do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("CustomTemplateList: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, customTemplateListMaxBody))
+	if err != nil {
+		return nil, fmt.Errorf("CustomTemplateList: read response: %w", err)
+	}
+	if err := portainer.ClassifyResponse(resp.StatusCode, body); err != nil {
+		return nil, fmt.Errorf("CustomTemplateList: %w", err)
+	}
+
+	// An empty body answers as an empty list rather than as null: the
+	// generated handler returned the nil *[]PortainereeCustomTemplate its
+	// decoder left behind, and "no templates" reads better to a model as []
+	// than as null.
+	templates := []apigen.PortainereeCustomTemplate{}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &templates); err != nil {
+			return nil, fmt.Errorf("CustomTemplateList: decode response: %w", err)
+		}
+	}
+	return redactCustomTemplateList(&templates), nil
 }

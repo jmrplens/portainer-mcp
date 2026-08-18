@@ -112,22 +112,6 @@ func customTemplateInspect(ctx context.Context, c *portainer.Client, input json.
 	return redactCustomTemplateInspect(resp.JSON200), nil
 }
 
-// customTemplateList is the generated handler for operation CustomTemplateList.
-func customTemplateList(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var queryParams apigen.CustomTemplateListParams
-	if err := json.Unmarshal(input, &queryParams); err != nil {
-		return nil, fmt.Errorf("CustomTemplateList: parse query parameters: %w", err)
-	}
-	resp, err := c.API.CustomTemplateListWithResponse(ctx, &queryParams)
-	if err != nil {
-		return nil, fmt.Errorf("CustomTemplateList: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("CustomTemplateList: %w", err)
-	}
-	return redactCustomTemplateList(resp.JSON200), nil
-}
-
 // customTemplateUpdate is the generated handler for operation CustomTemplateUpdate.
 func customTemplateUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params customTemplateUpdateInput
@@ -230,14 +214,6 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Handler:     customTemplateInspect,
 			Input:       customTemplateInspectInput{},
 		}, narrative("CustomTemplateInspect")),
-		toolutil.WithNarrative(toolutil.ActionSpec{
-			Name: "custom_templates.list", Domain: "custom_templates", OperationID: "CustomTemplateList",
-			Title:       "List available custom templates",
-			Description: "List available custom templates.",
-			Edition:     edition.CE,
-			Handler:     customTemplateList,
-			Input:       customTemplateListInput{},
-		}, narrative("CustomTemplateList")),
 		// Not Destructive, and that is a ruling rather than the default being
 		// left alone: this is a whole-object replace, but every field it
 		// overwrites the caller supplies in the same request, the template
