@@ -168,6 +168,51 @@ jobs:
 
           exit $fail
 
+  no-committed-binaries:
+    name: "Guard: no compiled binary is tracked"
+    runs-on: ubuntu-latest
+    # This guard exists because it happened twice in one day, and the second
+    # time the first fix did not stop it. `go build ./cmd/<name>` drops its
+    # output in the repository root, a `git add -A` commits it, and a 3.4 MB
+    # and a 9.5 MB binary each reached a pull request that way.
+    #
+    # .gitignore alone cannot be the answer: it was extended after the first
+    # incident and the second binary sailed past it, because **gitignore never
+    # applies to a file git is already tracking**. The rules stop a NEW build
+    # output being added; only a check that reads the index stops one that is
+    # already in it.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Reject any tracked file that is a compiled executable
+        run: |
+          fail=0
+
+          # Read the index, not the working tree: an ignored-but-tracked file
+          # is exactly the case this guard exists for, and a working-tree scan
+          # would not distinguish it from ordinary build scratch.
+          while IFS= read -r path; do
+            [ -f "$path" ] || continue
+            case "$(head -c 4 "$path" | od -An -tx1 | tr -d ' \n')" in
+              7f454c46|cffaedfe|cefaedfe|feedface|feedfacf)
+                echo "::error file=$path::$path is a compiled executable and must not be tracked; the Makefile builds into dist/"
+                fail=1
+                ;;
+            esac
+          done < <(git ls-files)
+
+          # And name the specific shape that caused both incidents, so the
+          # failure says what to do rather than only what is wrong: a tracked
+          # file at the repository root sharing a name with a cmd/ package.
+          for dir in cmd/*/; do
+            name=$(basename "$dir")
+            if git ls-files --error-unmatch "$name" >/dev/null 2>&1; then
+              echo "::error file=$name::$name is the build output of ./cmd/$name; run 'git rm --cached $name' — adding it to .gitignore does not untrack it"
+              fail=1
+            fi
+          done
+
+          exit $fail
+
   audit-1to1:
     name: "1:1 API coverage (ratchet)"
     runs-on: ubuntu-latest

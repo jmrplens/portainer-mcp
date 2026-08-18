@@ -65,6 +65,9 @@ func bodyFor(method string) io.Reader {
 type probeResult struct {
 	StatusCode  int
 	RouteAbsent bool
+	// WrongVerb is set when the path is registered but not for the method
+	// probed — see isWrongVerb. Never set at the same time as RouteAbsent.
+	WrongVerb bool
 }
 
 // maxProbeBodyBytes caps how much of a probed response this command reads.
@@ -89,6 +92,75 @@ const maxProbeBodyBytes = 4 << 10
 // distinguishable from the exact literal checked here.
 func isRouteAbsent(statusCode int, body []byte) bool {
 	return statusCode == http.StatusNotFound && strings.TrimSpace(string(body)) == "404 page not found"
+}
+
+// isWrongVerb reports whether statusCode is the router's "this path is
+// registered, but not for this method" answer.
+//
+// This is the second thing a probe can establish about a documented
+// operation, and until wave 1's `endpoints` domain it was thrown away.
+// isRouteAbsent above answers "does this path exist at all"; a 405 answers
+// "it does, and the specification names the wrong verb for it". The two are
+// mutually exclusive and neither implies the other.
+//
+// It is a status-only test, unlike isRouteAbsent's literal body comparison,
+// because 405 is not a status Portainer's own handlers produce: reaching a
+// handler at all means the router already matched a method, and every
+// refusal a handler issues afterwards is a 400, 401, 403, 404 or 409 with
+// its own {"message","details"} body. Confirmed against a live 2.44.0 —
+// `PUT /endpoints/{id}/association` answers 405 with an empty body in under
+// a millisecond, where every handler-produced refusal on that same estate
+// carries a JSON body.
+func isWrongVerb(statusCode int) bool {
+	return statusCode == http.StatusMethodNotAllowed
+}
+
+// sweepVerbs is the set tried against a path whose documented verb answered
+// 405, to name the verb that does serve it.
+//
+// HEAD and OPTIONS are deliberately absent: Go's net/http answers HEAD from
+// a registered GET handler and many routers answer OPTIONS generically, so
+// either would report a path as served by a verb no caller can usefully
+// send.
+var sweepVerbs = []string{
+	http.MethodGet,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodPatch,
+	http.MethodDelete,
+}
+
+// verbsServing probes every verb in sweepVerbs except documented against
+// path, and returns those the router accepts — that is, every verb whose
+// answer is neither 405 nor the literal absent-route response.
+//
+// Only ever called for an operation already known to answer 405 on its own
+// documented verb, and never for a PublicAccess route. That second
+// restriction is the load-bearing one: this command's safety argument (see
+// main.go's package doc) is that Portainer rejects the sentinel credential
+// before any handler runs, which is what makes sending a DELETE at an
+// arbitrary documented route harmless. That argument is about the
+// credential check, so it covers any verb at a path that has one — but a
+// public route has no credential check at all, and the separate argument
+// that covers those ("an initialized Portainer refuses /restore and
+// /users/admin/init for its own reasons") was measured for those routes on
+// their own documented verbs and says nothing about others. Sweeping a
+// public route would be probing past the evidence.
+func verbsServing(ctx context.Context, client *http.Client, timeout time.Duration, baseURL, path, documented string) ([]string, error) {
+	var served []string
+	for _, verb := range sweepVerbs {
+		if verb == documented {
+			continue
+		}
+		res, err := probe(ctx, client, timeout, verb, baseURL, path)
+		if err != nil {
+			return nil, fmt.Errorf("verb sweep %s %s: %w", verb, path, err)
+		}
+		if !isWrongVerb(res.StatusCode) && !res.RouteAbsent {
+			served = append(served, verb)
+		}
+	}
+	return served, nil
 }
 
 // probe issues one HTTP request against baseURL+path using method, with the
@@ -124,6 +196,7 @@ func probe(ctx context.Context, client *http.Client, timeout time.Duration, meth
 	return probeResult{
 		StatusCode:  resp.StatusCode,
 		RouteAbsent: isRouteAbsent(resp.StatusCode, data),
+		WrongVerb:   isWrongVerb(resp.StatusCode),
 	}, nil
 }
 
