@@ -644,6 +644,50 @@ PUT /api/stacks/3/git/redeploy?endpointId=1  {}   → 200   (no new commit; file
 against an implementation that fetches nothing at all. The same is true of
 both webhook routes, which answer `204` with no body either way.
 
+### 2.10 `GET /teams`'s two filters both return an empty list for an administrator
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `teams`).
+
+`GET /teams` declares two optional query parameters: `onlyLedTeams` ("Only
+list teams that the user is leader of") and `environmentId` ("Identifier of
+the environment(endpoint) that will be used to filter the authorized
+teams"). Both answer `200` with `[]` for an administrator, including for a
+team that administrator demonstrably leads.
+
+The measurement, run identically on both editions (CE `19000`, EE `19001`),
+with the administrator holding a `Role: 1` — team leader — membership in
+team 3:
+
+```text
+POST /teams {"Name":"task4-led-ce","TeamLeaders":[1]}  -> 200 {"Id":3,...}
+POST /teams {"Name":"task4-unled-ce"}                  -> 200 {"Id":4,...}
+GET  /team_memberships   -> 200 [{"Id":3,"UserID":1,"TeamID":3,"Role":1}]
+GET  /teams              -> 200 [{"Id":3,...},{"Id":4,...}]
+GET  /teams?onlyLedTeams=true   -> 200 []
+GET  /teams?onlyLedTeams=false  -> 200 [{"Id":3,...},{"Id":4,...}]
+GET  /teams?environmentId=1     -> 200 []          (environment 1 exists)
+```
+
+`onlyLedTeams=false` returns the full list, so the parameter is parsed and
+acted on — this is not "the server ignores an unknown query key". Repeated
+with a JWT (`Authorization: Bearer`) instead of the `X-API-Key` the rest of
+this project uses, on both editions, with the same result, so it is not an
+artefact of the API-key authentication path either.
+
+Unexplained, and deliberately left in "measured, not diagnosed": the
+plausible reading is that the filter resolves the caller's led teams from
+something other than the membership table, and an administrator — who
+reaches every team by role rather than by membership — falls outside
+whatever that is. Nothing was read of Portainer's source to confirm it. Both
+filters are described as unreliable-for-an-administrator in `teams.list`'s
+own narrative, which tells a model to filter the unfiltered list itself.
+
+Not probed: whether either filter works for a non-administrator user. The
+estate provisions exactly one user (`admin`), and creating a second one to
+answer this is a `users` domain concern that wave 2 stage A does not yet
+own.
+
 ---
 
 ## 3. Requirements the documents understate or omit
@@ -1243,6 +1287,74 @@ later domain reading `endpointgroups.endpointGroupResponse`, or a
 contributor whose tooling normalises schema names by case and so treats the
 two editions' types as one, could not otherwise learn that Community's own,
 differently-cased schema declares no `Policies` property at all.
+
+### 5.4 The team model: a Business-only *field* on shared routes, and four behaviours neither document records
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `teams` / `team_memberships`);
+**vendored spec** for what each document declares.
+
+All ten team and team-membership routes are served by both editions —
+`cmd/audit_spec_reality` reports none of them divergent on either leg — so
+this domain pair's edition asymmetry is not a route, it is a single field.
+
+- **`DenyPortainerAccess` is Business-only, and Community accepts it and
+  silently ignores it.** The Business document declares the property on
+  `teams.teamCreatePayload` and `teams.teamUpdatePayload`; the Community
+  document declares neither. `portainer.Team` — the *response* schema —
+  declares it in both, its own description reading "(EE only)". Measured:
+
+  ```text
+  EE  PUT /teams/2 {"Name":"task4-renamed-ee","DenyPortainerAccess":true}
+      -> 200 {"Id":2,"Name":"task4-renamed-ee","DenyPortainerAccess":true}
+  CE  PUT /teams/2 {"Name":"task4-renamed-ce","DenyPortainerAccess":true}
+      -> 200 {"Id":2,"Name":"task4-renamed-ce","DenyPortainerAccess":false}
+  ```
+
+  Community answers `200`, applies the name, and leaves the flag `false`.
+  It does not reject the field, so a caller gets no signal that the half of
+  the request it cared about did nothing. The scaffolded Input structs are
+  built from the Business document, so the field is offered on both
+  editions with an `edition:"EE"` tag; `teams.create`'s and
+  `teams.update`'s narratives state what Community does with it.
+
+- **Deleting a team deletes that team's memberships with it.** Neither
+  document says what becomes of them, and the two readings — a cascade, or
+  rows left pointing at a team id that no longer resolves — are very
+  different things to tell a model. Measured on both editions:
+
+  ```text
+  POST   /teams {"Name":"task4-measure-ce"}            -> 200 {"Id":1,...}
+  POST   /team_memberships {"UserID":1,"TeamID":1,"Role":2}
+                                                       -> 200 {"Id":1,...}
+  GET    /team_memberships   -> 200 [{"Id":1,"UserID":1,"TeamID":1,"Role":2}]
+  DELETE /teams/1            -> 204
+  GET    /team_memberships   -> 200 []
+  GET    /teams/1/memberships-> 200 []
+  DELETE /team_memberships/1 -> 404 (bucket=team_membership, key=1)
+  ```
+
+  The membership is gone from the database, not merely unreachable: the
+  later delete of its own id answers `404` naming the bucket and key.
+
+- **`GET /teams/{id}/memberships` answers `200 []` for a team id that never
+  existed**, on both editions (`GET /teams/9999/memberships -> 200 []`),
+  while `GET /teams/9999` answers `404`. Consistent with the documents,
+  which declare no `404` for the memberships route — recorded because the
+  two routes look interchangeable as an existence check and are not.
+
+- **Both `POST /teams` and `POST /team_memberships` refuse a duplicate with
+  `409`.** A team name is effectively unique (`"A team with the same name
+  already exists"`), and a user may hold at most one membership per team
+  (`"Team membership already registered"`) regardless of the `Role` the
+  second attempt names — so promoting a member to leader is a `PUT` on the
+  existing membership, never a second `POST`. Both documents declare the
+  `409` response; neither says what makes a request a duplicate.
+
+  One related behaviour that *is* a team action creating a membership:
+  `POST /teams` with `TeamLeaders: [1]` leaves a `Role: 1` membership for
+  user 1 in the new team (measured on both editions). It is the only such
+  case, and only at creation time.
 
 ## 6. Defects in the vendored document itself
 

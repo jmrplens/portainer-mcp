@@ -41,6 +41,8 @@ var destructiveAndIdempotent = map[string]string{
 	"stacks.delete":                    "deleting an absent stack answers 404 and leaves the same end state",
 	"stacks.delete_kubernetes_by_name": "deleting absent Kubernetes stacks answers 404 and leaves the same end state; the request names them, so the end state it converges on is \"no stack by this name\"",
 	"tags.delete":                      "deleting an absent tag leaves the same end state",
+	"team_memberships.delete":          "deleting an absent membership answers 404 and leaves the same end state; the request names the membership, so the end state it converges on is \"this user is not in this team\"",
+	"teams.delete":                     "deleting an absent team answers 404 and leaves the same end state; the cascade that takes the team's memberships with it has nothing left to remove on a repeat call",
 }
 
 func TestUnit_DestructiveAndIdempotentActions_MatchTheirRoster(t *testing.T) {

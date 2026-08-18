@@ -56,6 +56,8 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
+	"github.com/jmrplens/portainer-mcp/internal/tools/team_memberships"
+	"github.com/jmrplens/portainer-mcp/internal/tools/teams"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -96,6 +98,8 @@ func allSpecs() []toolutil.ActionSpec {
 	specs = append(specs, endpoints.Specs()...)
 	specs = append(specs, stacks.Specs()...)
 	specs = append(specs, endpoint_groups.Specs()...)
+	specs = append(specs, teams.Specs()...)
+	specs = append(specs, team_memberships.Specs()...)
 	return specs
 }
 

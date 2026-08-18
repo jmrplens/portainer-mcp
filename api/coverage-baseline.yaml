@@ -28,8 +28,16 @@
 # visible.
 #
 # Later the same day, endpoint_groups.inspect covered that very route on both
-# editions, which is what moved these two numbers to their values below: CE
-# 71 -> 72, EE 93 -> 94. One route made visible, then actually served — the
-# pair of numbers moving for the reason this file exists.
-ce_covered: 72
-ee_covered: 94
+# editions, which is what moved these two numbers to CE 72 / EE 94. One route
+# made visible, then actually served — the pair of numbers moving for the
+# reason this file exists.
+#
+# Wave 2 stage A's teams and team_memberships domains then covered ten more
+# operations, five each, every one of them served by both editions: CE
+# 72 -> 82 and EE 94 -> 104, the same +10 on both sides because no team route
+# is exclusive to either edition. (The Business-only part of this domain pair
+# is a *field*, teams.create/update's DenyPortainerAccess, not a route — a
+# Community server accepts it and ignores it — and a field difference moves
+# neither number.)
+ce_covered: 82
+ee_covered: 104
