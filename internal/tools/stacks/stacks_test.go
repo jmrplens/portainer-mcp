@@ -485,15 +485,23 @@ func TestUnit_Narrative_GivesEveryActionADistinctTitleAndDescription(t *testing.
 	}
 }
 
-// TestUnit_DangerFlags_MatchThisDomainsRulings pins every Mutating and
-// Destructive flag this domain publishes, generated and hand-ruled alike.
+// TestUnit_DangerFlags_MatchThisDomainsRulings pins every Mutating,
+// Destructive and Idempotent flag this domain publishes, generated and
+// hand-ruled alike.
 //
 // The flags live in generated code, and `make scaffold-domain FORCE=1`
 // rewrites actions.go from the specification: a hand ruling is one verb-rule
 // re-run away from being silently reverted, and the previous stage proved
-// that matters. Every row is therefore listed, not only the overridden ones
-// — a test that pinned only the hand rulings would go quiet the moment a
+// that matters. Every action is therefore listed, not only the overridden
+// ones — a test that pinned only the hand rulings would go quiet the moment a
 // regeneration changed one of the others.
+//
+// Idempotent is pinned for the same reason and is not decoration: it is what
+// tools.AnnotationsFor publishes as IdempotentHint, which tells a client an
+// action is safe to retry unattended. Four of this domain's writes carry it
+// and stacks.git_redeploy deliberately does not, though the verb-derived rule
+// gives every PUT here Idempotent — see actions.go for why that one is
+// cleared and why the other three PUTs keep it.
 //
 // Three of the five Destructive rows are hand rulings the generator did not
 // prompt: suspectDangerMismatch's keyword list matches nothing in this
@@ -506,44 +514,54 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 		action      string
 		mutating    bool
 		destructive bool
+		idempotent  bool
 	}{
-		// Reads.
-		{name: "list only reads", action: "stacks.list", mutating: false, destructive: false},
-		{name: "inspect only reads", action: "stacks.inspect", mutating: false, destructive: false},
-		{name: "file_inspect only reads, despite the noun-like name", action: "stacks.file_inspect", mutating: false, destructive: false},
-		{name: "images_status only reads", action: "stacks.images_status", mutating: false, destructive: false},
+		// Reads. Idempotent is only meaningful when Mutating, so it stays
+		// false on all four.
+		{name: "list only reads", action: "stacks.list"},
+		{name: "inspect only reads", action: "stacks.inspect"},
+		{name: "file_inspect only reads, despite the noun-like name", action: "stacks.file_inspect"},
+		{name: "images_status only reads", action: "stacks.images_status"},
 
-		// Generated Destructive: both deletes.
-		{name: "delete removes the stack", action: "stacks.delete", mutating: true, destructive: true},
-		{name: "delete_kubernetes_by_name removes stacks", action: "stacks.delete_kubernetes_by_name", mutating: true, destructive: true},
+		// Generated Destructive: both deletes. Deleting an already-deleted
+		// stack answers 404 and leaves the same end state, which is the
+		// ordinary reading of an idempotent DELETE.
+		{name: "delete removes the stack", action: "stacks.delete", mutating: true, destructive: true, idempotent: true},
+		{name: "delete_kubernetes_by_name removes stacks", action: "stacks.delete_kubernetes_by_name", mutating: true, destructive: true, idempotent: true},
 
 		// Hand ruling: content replaced from a remote at a revision the
-		// request cannot name, with no stored copy to restore.
-		{name: "git_redeploy overwrites the deployment from git", action: "stacks.git_redeploy", mutating: true, destructive: true},
-		{name: "webhook_invoke is git_redeploy by another door", action: "stacks.webhook_invoke", mutating: true, destructive: true},
-		{name: "edge_stack_webhook_invoke likewise, on edge environments", action: "stacks.edge_stack_webhook_invoke", mutating: true, destructive: true},
+		// request cannot name, with no stored copy to restore. The same fact
+		// clears Idempotent on git_redeploy — repeating it can deploy
+		// something different — and the two webhook rows must agree with it,
+		// since the domain calls all three the same act.
+		{name: "git_redeploy overwrites the deployment from git", action: "stacks.git_redeploy", mutating: true, destructive: true, idempotent: false},
+		{name: "webhook_invoke is git_redeploy by another door", action: "stacks.webhook_invoke", mutating: true, destructive: true, idempotent: false},
+		{name: "edge_stack_webhook_invoke likewise, on edge environments", action: "stacks.edge_stack_webhook_invoke", mutating: true, destructive: true, idempotent: false},
 
 		// Hand ruling the other way: convert returns generated files for
 		// preview and changes nothing, so the name is the only thing about
 		// it that sounds irreversible.
-		{name: "convert only previews", action: "stacks.convert", mutating: true, destructive: false},
+		{name: "convert only previews", action: "stacks.convert", mutating: true},
 
 		// Writes that are not destructive: every field they overwrite the
 		// caller supplies in the same request, or they are reversible.
-		{name: "update replaces caller-supplied content", action: "stacks.update", mutating: true, destructive: false},
-		{name: "update_git changes settings only", action: "stacks.update_git", mutating: true, destructive: false},
-		{name: "start is reversible by stop", action: "stacks.start", mutating: true, destructive: false},
-		{name: "stop is reversible by start", action: "stacks.stop", mutating: true, destructive: false},
-		{name: "associate re-parents a record", action: "stacks.associate", mutating: true, destructive: false},
+		// update and associate keep the verb-derived Idempotent because
+		// their own requests carry the end state they produce.
+		{name: "update replaces caller-supplied content", action: "stacks.update", mutating: true, idempotent: true},
+		{name: "update_git changes settings only", action: "stacks.update_git", mutating: true},
+		{name: "start is reversible by stop", action: "stacks.start", mutating: true},
+		{name: "stop is reversible by start", action: "stacks.stop", mutating: true},
+		{name: "associate re-parents a record", action: "stacks.associate", mutating: true, idempotent: true},
 
 		// Creates: they add a stack at a new identifier and remove nothing.
-		{name: "create_docker_standalone_repository", action: "stacks.create_docker_standalone_repository", mutating: true, destructive: false},
-		{name: "create_docker_standalone_string", action: "stacks.create_docker_standalone_string", mutating: true, destructive: false},
-		{name: "create_docker_swarm_repository", action: "stacks.create_docker_swarm_repository", mutating: true, destructive: false},
-		{name: "create_docker_swarm_string", action: "stacks.create_docker_swarm_string", mutating: true, destructive: false},
-		{name: "create_kubernetes_string", action: "stacks.create_kubernetes_string", mutating: true, destructive: false},
-		{name: "create_kubernetes_git", action: "stacks.create_kubernetes_git", mutating: true, destructive: false},
-		{name: "create_kubernetes_url", action: "stacks.create_kubernetes_url", mutating: true, destructive: false},
+		// None is idempotent — a second call makes a second stack.
+		{name: "create_docker_standalone_repository", action: "stacks.create_docker_standalone_repository", mutating: true},
+		{name: "create_docker_standalone_string", action: "stacks.create_docker_standalone_string", mutating: true},
+		{name: "create_docker_swarm_repository", action: "stacks.create_docker_swarm_repository", mutating: true},
+		{name: "create_docker_swarm_string", action: "stacks.create_docker_swarm_string", mutating: true},
+		{name: "create_kubernetes_string", action: "stacks.create_kubernetes_string", mutating: true},
+		{name: "create_kubernetes_git", action: "stacks.create_kubernetes_git", mutating: true},
+		{name: "create_kubernetes_url", action: "stacks.create_kubernetes_url", mutating: true},
 	}
 	if len(tests) != len(generatedOperations) {
 		t.Fatalf("this table covers %d action(s) and the domain ships %d; every action must have a row", len(tests), len(generatedOperations))
@@ -558,6 +576,81 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 			if spec.Destructive != tt.destructive {
 				t.Errorf("%s: Destructive = %v, want %v", tt.action, spec.Destructive, tt.destructive)
 			}
+			if spec.Idempotent != tt.idempotent {
+				t.Errorf("%s: Idempotent = %v, want %v (it reaches clients as IdempotentHint, which invites unattended retry)", tt.action, spec.Idempotent, tt.idempotent)
+			}
+		})
+	}
+}
+
+// pendingRulings carries a danger-flag decision this domain has made for an
+// operation whose ActionSpec does not exist yet.
+//
+// Three of this domain's twenty-five operations were refused by
+// cmd/gen_action_inputs and are hand-written by later tasks. Rulings about
+// them were made while the whole domain was in view — the vendored
+// descriptions of all twenty-five side by side is the only place from which
+// "this one removes the original stack and the others do not" is visible —
+// but the file those rulings have to land in is one this task must not
+// write. A doc comment would be the obvious carrier and is the wrong one:
+// the person who needs it will be editing actions.go, not this package's
+// domain file, and nothing would make them read it.
+//
+// This map is the carrier instead. It asserts nothing today, because no spec
+// matches; it starts asserting the moment one does, in the same commit that
+// declares it, and it names the reasoning in its own failure message. A
+// ruling that activates itself when the code it rules on arrives is the only
+// kind that survives being handed between tasks.
+var pendingRulings = map[string]struct {
+	destructive bool
+	because     string
+}{
+	"StackMigrate": {
+		destructive: true,
+		because: "POST /stacks/{id}/migrate is described in the vendored specification as re-creating the stack " +
+			"in the target environment \"before removing the original stack\": the original is gone, and no field of " +
+			"stacks.stackMigratePayload describes what it held. That is the same criterion stacks.git_redeploy is " +
+			"flagged under, and the clearest case in this domain",
+	},
+	"StackCreateDockerStandaloneFile": {
+		destructive: false,
+		because: "POST /stacks/create/standalone/file adds a stack at a new identifier and removes nothing, " +
+			"exactly like the four JSON creates that already ship non-destructive",
+	},
+	"StackCreateDockerSwarmFile": {
+		destructive: false,
+		because: "POST /stacks/create/swarm/file adds a stack at a new identifier and removes nothing, " +
+			"exactly like the four JSON creates that already ship non-destructive",
+	},
+}
+
+// TestUnit_PendingRulings_HoldWhenTheirActionsLand skips every operation
+// whose ActionSpec this domain does not declare yet, and enforces the ruling
+// on every one it does.
+//
+// Today it skips all three and asserts nothing — deliberately, since a
+// failing red test for work a later task owns is noise this task cannot
+// clear. It is a no-op with a trigger, not a check that is passing.
+func TestUnit_PendingRulings_HoldWhenTheirActionsLand(t *testing.T) {
+	t.Parallel()
+	declared := map[string]toolutil.ActionSpec{}
+	for _, s := range Specs() {
+		declared[s.OperationID] = s
+	}
+	for id, ruling := range pendingRulings {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			spec, ok := declared[id]
+			if !ok {
+				t.Skipf("%s has no ActionSpec yet; this ruling activates when its hand-written handler lands", id)
+			}
+			if spec.Destructive != ruling.destructive {
+				t.Errorf("%s: Destructive = %v, want %v — %s", id, spec.Destructive, ruling.destructive, ruling.because)
+			}
+			// An operation that has landed belongs in the domain's own
+			// roster and its danger-flag table, not here.
+			t.Errorf("%s now has an ActionSpec: move this entry out of pendingRulings into generatedOperations "+
+				"and TestUnit_DangerFlags_MatchThisDomainsRulings, which pin every flag rather than Destructive alone", id)
 		})
 	}
 }

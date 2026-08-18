@@ -661,6 +661,37 @@ func generatedSpecs() []toolutil.ActionSpec {
 		// with repositoryAuthentication it overwrites the stack's stored git
 		// credential as a side effect of redeploying — and prune deletes
 		// services the new file no longer names.
+		//
+		// Idempotent is cleared, and that is the same ruling read the other
+		// way round rather than a second, independent one. The verb-derived
+		// rule gives every PUT in this domain Idempotent, and for the other
+		// three that is right; here it contradicts the paragraph above it.
+		// "Can be repeated without additional effect" (toolutil.ActionSpec's
+		// own words) is exactly what an action cannot claim when the content
+		// it deploys is not determined by its own request: two calls a minute
+		// apart deploy whatever the configured reference points at each time,
+		// and those can differ. The flag is not inert — tools.AnnotationsFor
+		// passes it to clients as IdempotentHint, whose whole purpose is to
+		// tell a caller an action is safe to retry unattended — so leaving it
+		// set would invite automatic retry of the most irreversible
+		// non-delete write this domain has.
+		//
+		// It also has to agree with stacks.webhook_invoke, which the narrative
+		// calls this same replacement through a different door. That one is a
+		// POST and so carries no idempotency hint at all; two actions this
+		// domain itself calls equivalent must not hand callers opposite advice
+		// about retrying them.
+		//
+		// The line this draws for the whole domain is the one the Destructive
+		// rulings already draw, read for a different flag: an action is
+		// idempotent when repeating it with the same arguments leaves the same
+		// state, and what decides that is whether the request determines the
+		// state. stacks.update keeps Idempotent on exactly that basis — its
+		// stackFileContent and env carry the end state — even though its
+		// optional repullImageAndRedeploy lets a caller opt into the same
+		// non-determinism. Opt-in through a field the request carries is the
+		// caller's own choice to express; unconditional and inexpressible is
+		// this route's.
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "stacks.git_redeploy", Domain: "stacks", OperationID: "StackGitRedeploy",
 			Title:       "Redeploy a stack",
@@ -668,7 +699,6 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Destructive: true,
-			Idempotent:  true,
 			Handler:     stackGitRedeploy,
 			Input:       stackGitRedeployInput{},
 		}, narrative("StackGitRedeploy")),

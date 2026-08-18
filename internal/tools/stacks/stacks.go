@@ -135,13 +135,15 @@ func Specs() []toolutil.ActionSpec {
 //     before removing the original stack" — so the original is gone and no
 //     field of the payload describes what it held. That is the same
 //     criterion stacks.git_redeploy is flagged under (see actions.go), and
-//     it is the strongest case in this domain. Nothing enforces it yet: a
-//     row in TestUnit_DangerFlags_MatchThisDomainsRulings for an action that
-//     does not exist would simply fail, so the ruling waits for the spec it
-//     belongs to. StackCreateDockerStandaloneFile and
-//     StackCreateDockerSwarmFile are Mutating and NOT Destructive, matching
-//     the four JSON creates: each adds a stack at a new identifier and
-//     removes nothing.
+//     it is the strongest case in this domain. StackCreateDockerStandaloneFile
+//     and StackCreateDockerSwarmFile are Mutating and NOT Destructive,
+//     matching the four JSON creates: each adds a stack at a new identifier
+//     and removes nothing. All three rulings are carried by pendingRulings
+//     in stacks_test.go rather than by this comment, and that is the point:
+//     the map skips an operation with no ActionSpec and starts asserting the
+//     moment one is declared, in whatever commit declares it. A ruling made
+//     in one task and needed by another has to activate itself; prose in a
+//     file the next author has no reason to open does not.
 //  2. Each of the three needs a case in narrative() below rather than a
 //     literal Title/Description on the ActionSpec declared here, exactly
 //     like the twenty-two. Both file creates arrive carrying the same
@@ -261,10 +263,10 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		}
 	case "StackCreateDockerStandaloneString":
 		return toolutil.ActionNarrative{
-			Title: "Deploy a Compose stack from an inline file",
-			Description: "Creates and deploys a Docker Compose stack on a standalone Docker environment, with the Compose file passed inline in this call as stackFileContent. " +
+			Title: "Deploy a Compose stack from inline content",
+			Description: "Creates and deploys a Docker Compose stack on a standalone Docker environment, with the Compose file passed inline in this call as the stackFileContent string. Nothing is uploaded: the two actions that take a real file upload are stacks.create_docker_standalone_file and stacks.create_docker_swarm_file. " +
 				"endpointId names the environment, name names the stack, and env carries deployment-time environment variables as name/value pairs. " +
-				"The siblings take the same file from a git repository (stacks.create_docker_standalone_repository) or from an uploaded file. " +
+				"The sibling that clones the same file from a git repository instead is stacks.create_docker_standalone_repository. " +
 				"Use the Swarm actions instead for a Swarm cluster and the Kubernetes ones for a Kubernetes environment: the routes are not interchangeable, and this one deploys through the standalone Docker engine. " +
 				"Business Edition also accepts registries, naming the registries to pull from, and webhook, a UUID that later lets stacks.webhook_invoke redeploy this stack. " +
 				"Answers with the created stack, git credentials stripped.",
@@ -281,8 +283,8 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		}
 	case "StackCreateDockerSwarmString":
 		return toolutil.ActionNarrative{
-			Title: "Deploy a Swarm stack from an inline file",
-			Description: "Creates and deploys a Docker Swarm stack, with the stack file passed inline in this call as stackFileContent. " +
+			Title: "Deploy a Swarm stack from inline content",
+			Description: "Creates and deploys a Docker Swarm stack, with the stack file passed inline in this call as the stackFileContent string. Nothing is uploaded: stacks.create_docker_swarm_file is the action that takes a real file upload. " +
 				"Differs from stacks.create_docker_standalone_string in the orchestrator and in one required field: swarmId, the Swarm cluster identifier, which the standalone routes have no equivalent of. " +
 				"endpointId names the environment, name the stack, env the deployment-time variables. " +
 				"Business Edition also accepts registries and a webhook UUID for later redeployment through stacks.webhook_invoke. " +
@@ -341,13 +343,14 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"sourceId references a stored git source and, when set, the URL, authentication and TLS settings come from that source and the inline repository fields are ignored. " +
 				"repositoryAuthentication with a non-empty repositoryPassword REPLACES the stored credential; leaving repositoryPassword blank keeps whatever is already stored. " +
 				"Answers with the stack's git configuration, and the credential is stripped from that answer — this action cannot be used to read back a password, including one it has just set. " +
-				"It is the one action in this domain that answers with stacks.stackResponse rather than a full stack object.",
+				"It is the one action in this domain whose answer is a git-configuration summary rather than a full stack object, so do not expect the fields stacks.inspect returns.",
 		}
 	case "StackGitRedeploy":
 		return toolutil.ActionNarrative{
 			Title: "Pull from git and redeploy a stack, discarding what is deployed",
 			Description: "Pulls a git-backed stack's file from its repository and REDEPLOYS the stack from what the remote holds now, replacing what is deployed. " +
 				"This is a write with no undo, which is why it is flagged destructive although its summary (\"Redeploy a stack\") and its HTTP verb both read as an ordinary update: the request names no revision, so what arrives is whatever the configured reference points at when the call is made, and Portainer keeps no copy of the replaced deployment to restore. " +
+				"For the same reason it is not marked idempotent and must not be retried automatically: repeating the call is not a no-op, it is a second deployment of whatever the remote holds by then. " +
 				"prune additionally removes services the new file no longer names. repullImageAndRedeploy forces a fresh image pull; pullImage is its pre-2.36 spelling and is deprecated. " +
 				"repositoryAuthentication with a non-empty repositoryPassword also replaces the stack's stored git credential as a side effect of redeploying. " +
 				"endpointId is only for a stack created before Portainer 1.18.0 that has no environment recorded against it. " +
