@@ -581,8 +581,10 @@ type customTemplateCreateFileInput struct {
 	Logo *string `json:"logo,omitempty" jsonschema:"URL of the template's logo"`
 	// Note A note that will be displayed in the UI. Supports HTML content
 	//
-	// Required on this route, optional on both JSON creates. Published as
-	// the specification declares it; see this type's own doc comment.
+	// Listed required for this route and optional on both JSON creates. The
+	// server was measured accepting a body with no Note part at all, on both
+	// editions, so it is published optional here; see this type's own doc
+	// comment and docs/api-divergences.md §3.7.
 	Note *string `json:"note,omitempty" jsonschema:"A note that will be displayed in the UI. Supports HTML content"`
 	// Platform Platform associated to the template (1 - 'linux', 2 - 'windows')
 	Platform int `json:"platform" jsonschema:"Platform associated to the template (1 - 'linux', 2 - 'windows')"`
