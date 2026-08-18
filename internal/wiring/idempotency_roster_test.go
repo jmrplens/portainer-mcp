@@ -37,26 +37,37 @@ var destructiveAndIdempotent = map[string]string{
 }
 
 func TestUnit_DestructiveAndIdempotentActions_MatchTheirRoster(t *testing.T) {
-	var got []string
+	claimed := map[string]bool{}
 	for _, spec := range AllSpecs() {
 		if spec.Destructive && spec.Idempotent {
-			got = append(got, spec.Name)
+			claimed[spec.Name] = true
 		}
 	}
-	sort.Strings(got)
 
-	want := make([]string, 0, len(destructiveAndIdempotent))
-	for name := range destructiveAndIdempotent {
-		want = append(want, name)
+	// One subtest per rostered action, so a roster entry that goes stale
+	// names itself rather than hiding inside a set difference. This is the
+	// direction that catches a flag being dropped by a regeneration.
+	for name, why := range destructiveAndIdempotent {
+		t.Run(name, func(t *testing.T) {
+			if !claimed[name] {
+				t.Errorf("%s is on the Destructive+Idempotent roster (%q) but no longer claims both flags; if that is deliberate, remove it from the roster", name, why)
+			}
+		})
 	}
-	sort.Strings(want)
 
-	if len(got) != len(want) {
-		t.Fatalf("actions claiming Destructive AND Idempotent = %v, roster = %v.\nAn action that removes or irreversibly alters state, yet promises callers it can be retried freely, is only honest when the request itself determines the end state. If this one qualifies, add it to destructiveAndIdempotent with the reason; if it does not, drop its Idempotent flag.", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("actions claiming Destructive AND Idempotent = %v, roster = %v", got, want)
+	// And the other direction, which is the one that caught
+	// custom_templates.git_fetch: an action claiming both flags that nobody
+	// has written a reason for.
+	t.Run("no unrostered action claims both", func(t *testing.T) {
+		var extra []string
+		for name := range claimed {
+			if _, ok := destructiveAndIdempotent[name]; !ok {
+				extra = append(extra, name)
+			}
 		}
-	}
+		sort.Strings(extra)
+		if len(extra) > 0 {
+			t.Errorf("%v claim Destructive AND Idempotent but are not on the roster.\nAn action that removes or irreversibly alters state, yet promises callers it can be retried freely, is only honest when the request itself determines the end state. If one of these qualifies, add it to destructiveAndIdempotent with the reason; if it does not, drop its Idempotent flag.", extra)
+		}
+	})
 }
