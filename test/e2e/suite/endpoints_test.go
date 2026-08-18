@@ -4,6 +4,8 @@ package suite
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1085,7 +1087,7 @@ func kubernetesRawJSON(t *testing.T, method, path string, body io.Reader, out an
 func createKubernetesStandardUser(t *testing.T, name string) int {
 	t.Helper()
 	var created map[string]any
-	payload := fmt.Sprintf(`{"Username":%q,"Password":"E2eNsAccess-Passw0rd!","Role":2}`, name)
+	payload := fmt.Sprintf(`{"Username":%q,"Password":%q,"Role":2}`, name, generateUserPassword(t))
 	kubernetesRawJSON(t, http.MethodPost, "/users", strings.NewReader(payload), &created)
 
 	idFloat, ok := created["Id"].(float64)
@@ -1097,6 +1099,28 @@ func createKubernetesStandardUser(t *testing.T, name string) int {
 		kubernetesRawJSON(t, http.MethodDelete, fmt.Sprintf("/users/%d", id), nil, nil)
 	})
 	return id
+}
+
+// generateUserPassword mints a fresh password for a throwaway test user.
+//
+// Generated rather than written down, following
+// harness.generateAdminPassword's own reasoning and for one reason beyond it.
+// The reason it shares: crypto/rand, because this is a credential a real
+// Portainer will accept, and base64 URL-safe encoding so the value needs no
+// escaping in the JSON body it travels in.
+//
+// The reason of its own: nothing else in this suite hard-codes a password,
+// and the literal that was here first was the only one — it tripped the
+// repository's secret scanner on every run. A permanently red security check
+// is worse than the "it is only a test literal" it would have been waived
+// with, because it teaches everyone to skip past that check.
+func generateUserPassword(t *testing.T) string {
+	t.Helper()
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("generate a password for the fixture user: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
 // grantEnvironmentRole gives userID a role on the environment, which
