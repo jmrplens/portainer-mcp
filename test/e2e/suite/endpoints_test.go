@@ -6,16 +6,55 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/jmrplens/portainer-mcp/internal/config"
+	"github.com/jmrplens/portainer-mcp/internal/logging"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
 )
+
+// rawEndpointsJSON issues one request against edition ed's server and decodes
+// the answer, failing the test on any non-200.
+//
+// The status check is the point, and it is checked before the body is
+// decoded: a 401, a 404 or a 500 carries a JSON object too, so decoding first
+// either succeeds into an empty struct — a read-back that silently reports
+// "no such environment" as "the field is absent" — or fails with a decode
+// error naming a type rather than the status that actually went wrong. Same
+// treatment stacks_test.go's rawStack already gives its own reads.
+func rawEndpointsJSON(t *testing.T, ed, path string, out any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+	defer cancel()
+
+	resp, err := fixtureClient(t, ed).Do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		t.Fatalf("raw GET %s on %s: %v", path, ed, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		t.Fatalf("raw GET %s on %s: read response: %v", path, ed, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("raw GET %s on %s: HTTP %d: %s", path, ed, resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		t.Fatalf("raw GET %s on %s: decode %s: %v", path, ed, body, err)
+	}
+}
 
 // rawEnvironments reads the environment list straight from the Portainer
 // API, bypassing every surface.
@@ -26,38 +65,16 @@ import (
 // through itself.
 func rawEnvironments(t *testing.T, ed string) []map[string]any {
 	t.Helper()
-	client := fixtureClient(t, ed)
-	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
-	defer cancel()
-
-	resp, err := client.Do(ctx, http.MethodGet, "/endpoints", nil)
-	if err != nil {
-		t.Fatalf("raw GET /endpoints on %s: %v", ed, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	var out []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode raw /endpoints on %s: %v", ed, err)
-	}
+	rawEndpointsJSON(t, ed, "/endpoints", &out)
 	return out
 }
 
 // rawEnvironment reads one environment straight from the Portainer API.
 func rawEnvironment(t *testing.T, ed string, id int) map[string]any {
 	t.Helper()
-	client := fixtureClient(t, ed)
-	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
-	defer cancel()
-
-	resp, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/endpoints/%d", id), nil)
-	if err != nil {
-		t.Fatalf("raw GET /endpoints/%d on %s: %v", id, ed, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode raw /endpoints/%d on %s: %v", id, ed, err)
-	}
+	rawEndpointsJSON(t, ed, fmt.Sprintf("/endpoints/%d", id), &out)
 	return out
 }
 
@@ -79,19 +96,8 @@ func rawEnvironment(t *testing.T, ed string, id int) map[string]any {
 // inspecting a newly-enrolled edge environment meets it too.
 func rawEdgeEnvironment(t *testing.T, ed string, id int) map[string]any {
 	t.Helper()
-	client := fixtureClient(t, ed)
-	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
-	defer cancel()
-
-	resp, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/endpoints/%d?excludeSnapshot=true", id), nil)
-	if err != nil {
-		t.Fatalf("raw GET /endpoints/%d (no snapshot) on %s: %v", id, ed, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
 	var out map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode raw /endpoints/%d on %s: %v", id, ed, err)
-	}
+	rawEndpointsJSON(t, ed, fmt.Sprintf("/endpoints/%d?excludeSnapshot=true", id), &out)
 	return out
 }
 
@@ -108,16 +114,38 @@ func environmentIDByName(t *testing.T, ed, name string) int {
 	return -1
 }
 
-// firstDockerEnvironmentID returns the id of an environment already
+// environmentTypeLocalDocker and environmentTypeAgent are the two Portainer
+// environment types this suite can address as a Docker host: a direct daemon
+// connection and one reached through a Portainer agent.
+const (
+	environmentTypeLocalDocker = 1
+	environmentTypeAgent       = 2
+)
+
+// firstDockerEnvironmentID returns the id of a DOCKER environment already
 // provisioned by the estate, which every read-only action below addresses.
+//
+// The type filter is load-bearing rather than defensive. The Business Edition
+// leg registers an edge environment beside its Docker one, and this file
+// registers more of its own; returning whichever happens to come first in
+// GET /endpoints would hand a caller an edge environment, which fails
+// type-dependent actions (registries_list, docker_browse_put) and drags the
+// ~20 second first-inspect delay rawEdgeEnvironment documents into tests that
+// have nothing to do with edge. It works today only because the Docker
+// environment happens to be listed first, which is not a property anything
+// guarantees.
 func firstDockerEnvironmentID(t *testing.T, ed string) int {
 	t.Helper()
 	for _, e := range rawEnvironments(t, ed) {
+		envType, ok := e["Type"].(float64)
+		if !ok || (int(envType) != environmentTypeLocalDocker && int(envType) != environmentTypeAgent) {
+			continue
+		}
 		if id, ok := e["Id"].(float64); ok {
 			return int(id)
 		}
 	}
-	t.Fatalf("%s estate has no environments at all", ed)
+	t.Fatalf("%s estate has no Docker environment (type %d or %d)", ed, environmentTypeLocalDocker, environmentTypeAgent)
 	return 0
 }
 
@@ -776,23 +804,36 @@ func TestEndpoints_CreateGlobalKey_IsReachableAndCannotIdentifyAnAgent(t *testin
 				if err != nil {
 					t.Fatalf("endpoints.create_global_key: %v", err)
 				}
-				t.Logf("endpoints.create_global_key answered: %s", toolResultText(res))
+				// Asserted, not merely logged: the doc comment above claims
+				// this proves reachability, and a version that 404'd or failed
+				// while building the request would satisfy a bare log. The
+				// refusal text is the one measured 2026-08-18 against a live
+				// 2.44.0 of both editions — Portainer reads the agent's
+				// identity from a header this action does not send, so it
+				// refuses for want of an Edge ID rather than for want of a
+				// route.
+				text := toolResultText(res)
+				if res.IsError && !strings.Contains(text, "The Edge ID cannot be empty") {
+					t.Errorf("endpoints.create_global_key failed for a reason other than the measured missing-Edge-ID refusal: %s", text)
+				}
 			})
 		}
 	}
 }
 
-// TestEndpoints_NamespacesAccessUpdate_IsRefusedByADockerEnvironment is
-// negative coverage, and deliberately labelled as such.
+// TestEndpoints_NamespacesAccessUpdate_IsRefusedByADockerEnvironment is the
+// negative half, and it is kept for what it does prove rather than promoted
+// to something it does not.
 //
-// The action updates access on a Kubernetes namespace and needs a Kubernetes
-// environment; this estate's compose legs register Docker environments only,
-// so there is nothing here for it to succeed against. Refusing on a Docker
-// environment is still a real property worth pinning — it is the same
-// treatment, for the same reason, that stacks_test.go's
-// TestStacks_KubernetesCreates_AreRefusedByADockerEnvironment gives the
-// three Kubernetes stack creates. Positive coverage needs the Kubernetes leg
-// (`make e2e-k8s-up`) and is not provided by this wave.
+// It asserts a Docker environment refuses the action — the same treatment,
+// for the same reason, that stacks_test.go's
+// TestStacks_KubernetesCreates_AreRefusedByADockerEnvironment gives the three
+// Kubernetes stack creates. What it emphatically does NOT prove is that the
+// action works, and that gap was not theoretical: this test passed for a
+// whole wave against an rpn parameter typed as an integer, which the server
+// rejects outright, because a Docker environment refuses the call whatever
+// the rpn is. See TestEndpoints_NamespacesAccessUpdate_GrantsAndRevokes
+// below, and docs/api-divergences.md §6.3.
 func TestEndpoints_NamespacesAccessUpdate_IsRefusedByADockerEnvironment(t *testing.T) {
 	if !estate.HasBusinessEdition() {
 		t.Skip("namespaces_access_update is Business Edition only")
@@ -870,7 +911,6 @@ func TestSafeMode_Endpoints_MutatingActionsArePreviewedAndNothingChanges(t *test
 				envID := firstDockerEnvironmentID(t, "CE")
 				before := rawEnvironment(t, "CE", envID)
 				beforeName, _ := before["Name"].(string)
-				beforeCount := len(rawEnvironments(t, "CE"))
 
 				input := mutation.input(envID)
 				toolName, args := actionCallParams(t, surface, mutation.action, input)
@@ -904,10 +944,207 @@ func TestSafeMode_Endpoints_MutatingActionsArePreviewedAndNothingChanges(t *test
 				if got, _ := rawEnvironment(t, "CE", envID)["Name"].(string); got != beforeName {
 					t.Errorf("environment %d is now named %q, want %q: safe mode let %s through", envID, got, beforeName, mutation.action)
 				}
-				if got := len(rawEnvironments(t, "CE")); got != beforeCount {
-					t.Errorf("the server now has %d environments, want %d: safe mode let %s through", got, beforeCount, mutation.action)
+				// Named environments only, never a total. Four other tests in
+				// this file create and delete Community Edition environments
+				// in parallel with these subtests, so a count read before and
+				// after is not measuring safe mode at all — it would go red
+				// for somebody else's create and green for a leaked one.
+				if name, ok := input["name"].(string); ok {
+					if got := environmentIDByName(t, "CE", name); got != -1 {
+						t.Errorf("safe mode let %s through: it created environment %q as %d", mutation.action, name, got)
+					}
+				}
+				if environmentIDByName(t, "CE", beforeName) != envID {
+					t.Errorf("environment %q (%d) is gone: safe mode let %s through", beforeName, envID, mutation.action)
 				}
 			})
 		}
 	}
+}
+
+// TestEndpoints_NamespacesAccessUpdate_GrantsAndRevokes is the positive half,
+// and the only test in this file that needs the Kubernetes leg.
+//
+// It is what turned this action from "covered" into "working": the negative
+// test above passed for a whole wave while the rpn parameter was published as
+// an integer, which the server rejects with `namespaces "1" not found`. A
+// Docker environment refuses the call whatever the rpn is, so nothing short
+// of a real namespace could tell the two apart.
+//
+// The sequence is the one Portainer actually requires, and each step is here
+// because leaving it out fails:
+//
+//  1. a standard (non-administrator) user, since an administrator already has
+//     access to everything and cannot be granted more;
+//  2. that user given a role on the ENVIRONMENT, or the call is refused with
+//     "access of user N cannot be updated by the current user since there is
+//     no role assigned" — the requirement this action's own narrative states;
+//  3. only then the namespace grant, addressed by the namespace's NAME.
+//
+// The revoke half matters as much as the grant: an action that ignored
+// usersToRemove entirely would pass a grant-only test.
+func TestEndpoints_NamespacesAccessUpdate_GrantsAndRevokes(t *testing.T) {
+	if !estate.HasKubernetes() {
+		t.Skip("no Kubernetes leg provisioned in this estate: run `make e2e-k8s-up` first")
+	}
+
+	logger := logging.New(slog.LevelWarn)
+	// Deliberately NOT parallel. grantEnvironmentRole sends the environment's
+	// whole UserAccessPolicies map, and Portainer replaces it wholesale rather
+	// than merging, so three surfaces granting three different users at once
+	// each wipe the previous one's grant — measured, as three subtests failing
+	// with "no role assigned" for users the test had just authorised. The
+	// contention is over one shared environment, so serialising is the fix
+	// rather than a workaround.
+	for _, surface := range surfaceNames {
+		t.Run(surface, func(t *testing.T) {
+			// Its own session, like TestKubernetesLeg_ReachableThroughEveryMCPSurface:
+			// the package's shared Sessions only ever carries the compose
+			// legs, and this leg's Helm chart serves a self-signed
+			// certificate, hence skipTLSVerify.
+			session, err := buildSession(estate.Kubernetes, config.ToolSurface(surface), false, false, true, logger)
+			if err != nil {
+				t.Fatalf("build session against the Kubernetes leg: %v", err)
+			}
+			defer func() { _ = session.Close() }()
+
+			envID, ok := estate.Kubernetes.Environment(harness.EnvironmentK3D)
+			if !ok {
+				t.Fatalf("the Kubernetes leg has no %q environment", harness.EnvironmentK3D)
+			}
+
+			userID := createKubernetesStandardUser(t, uniqueName("nsuser"))
+			grantEnvironmentRole(t, envID, userID)
+
+			// "default" is the one namespace every Kubernetes cluster has, so
+			// this does not depend on anything k3d-up.sh happens to deploy.
+			const namespace = "default"
+
+			callAction[any](t, session, surface, "endpoints.namespaces_access_update", map[string]any{
+				"id": envID, "rpn": namespace, "usersToAdd": []int{userID},
+			})
+			if !namespaceGrants(t, namespace, userID) {
+				t.Fatalf("user %d has no access to namespace %q after the grant", userID, namespace)
+			}
+
+			callAction[any](t, session, surface, "endpoints.namespaces_access_update", map[string]any{
+				"id": envID, "rpn": namespace, "usersToRemove": []int{userID},
+			})
+			if namespaceGrants(t, namespace, userID) {
+				t.Errorf("user %d still has access to namespace %q after the revoke", userID, namespace)
+			}
+		})
+	}
+}
+
+// kubernetesRawClient talks to the Kubernetes leg directly, for the fixture
+// setup and read-back this file's Kubernetes test needs.
+//
+// Not fixtureClient: that resolves a leg by edition name out of the shared
+// Sessions, which never carries this one.
+func kubernetesRawClient(t *testing.T) *portainer.Client {
+	t.Helper()
+	client, err := portainer.New(&config.Config{
+		URL:           estate.Kubernetes.BaseURL,
+		Token:         estate.Kubernetes.Creds.APIKey,
+		SkipTLSVerify: true,
+		ToolSurface:   config.SurfaceDynamic,
+	})
+	if err != nil {
+		t.Fatalf("build a raw client against the Kubernetes leg: %v", err)
+	}
+	return client
+}
+
+// kubernetesRawJSON issues one request against the Kubernetes leg and decodes
+// the answer, or fails the test.
+func kubernetesRawJSON(t *testing.T, method, path string, body io.Reader, out any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+	defer cancel()
+
+	resp, err := kubernetesRawClient(t).Do(ctx, method, path, body)
+	if err != nil {
+		t.Fatalf("raw %s %s on the Kubernetes leg: %v", method, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if out == nil {
+		return
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		t.Fatalf("decode raw %s %s: %v", method, path, err)
+	}
+}
+
+// createKubernetesStandardUser creates a non-administrator user on the
+// Kubernetes leg and registers its removal.
+//
+// Role 2 is Portainer's "standard user". An administrator is deliberately not
+// used: it already has access to every namespace, so granting it more is a
+// no-op the read-back could not distinguish from a working grant.
+func createKubernetesStandardUser(t *testing.T, name string) int {
+	t.Helper()
+	var created map[string]any
+	payload := fmt.Sprintf(`{"Username":%q,"Password":"E2eNsAccess-Passw0rd!","Role":2}`, name)
+	kubernetesRawJSON(t, http.MethodPost, "/users", strings.NewReader(payload), &created)
+
+	idFloat, ok := created["Id"].(float64)
+	if !ok {
+		t.Fatalf("creating user %q returned no Id: %v", name, created)
+	}
+	id := int(idFloat)
+	t.Cleanup(func() {
+		kubernetesRawJSON(t, http.MethodDelete, fmt.Sprintf("/users/%d", id), nil, nil)
+	})
+	return id
+}
+
+// grantEnvironmentRole gives userID a role on the environment, which
+// Portainer requires before any namespace within it can be granted.
+//
+// Role 3 is "Standard User". Without this the namespace grant is refused with
+// "access of user N cannot be updated by the current user since there is no
+// role assigned", which is the requirement endpoints.namespaces_access_update's
+// narrative states and this fixture exists to satisfy.
+func grantEnvironmentRole(t *testing.T, envID, userID int) {
+	t.Helper()
+	payload := fmt.Sprintf(`{"UserAccessPolicies":{"%d":{"RoleId":3}}}`, userID)
+	kubernetesRawJSON(t, http.MethodPut, fmt.Sprintf("/endpoints/%d", envID), strings.NewReader(payload), nil)
+}
+
+// namespaceGrants reports whether userID currently has access to namespace,
+// read out of the CLUSTER rather than out of Portainer.
+//
+// Two reasons, and the first is decisive: the vendored specification declares
+// no route that reads namespace access back. `PUT
+// /endpoints/{id}/pools/{rpn}/access` is the only operation on that path, so
+// there is nothing to GET. The second is that the cluster is the better
+// witness anyway — it shows the grant actually reached Kubernetes, where
+// Portainer's own record would only show that Portainer stored it.
+//
+// Portainer implements a grant as a ServiceAccount per user plus RoleBindings
+// in the target namespace, and names the account after the user's own
+// identifier. Measured 2026-08-18: granting user N produces bindings whose
+// subject is `portainer-sa-user-<instance>-N`, and revoking removes every
+// binding it created.
+func namespaceGrants(t *testing.T, namespace string, userID int) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+	defer cancel()
+
+	cluster := os.Getenv("E2E_K3D_CLUSTER")
+	if cluster == "" {
+		cluster = "portainer-mcp-e2e"
+	}
+	out, err := exec.CommandContext(ctx, "kubectl", "--context", "k3d-"+cluster,
+		"get", "rolebindings", "-n", namespace,
+		"-o", "jsonpath={.items[*].subjects[*].name}").Output()
+	if err != nil {
+		t.Fatal(kubectlRunError("reading namespace rolebindings through kubectl", err))
+	}
+	// The suffix is anchored so user 2 never matches a binding for user 21.
+	return slices.ContainsFunc(strings.Fields(string(out)), func(subject string) bool {
+		return strings.HasPrefix(subject, "portainer-sa-user-") &&
+			strings.HasSuffix(subject, "-"+strconv.Itoa(userID))
+	})
 }

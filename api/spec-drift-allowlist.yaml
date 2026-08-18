@@ -326,3 +326,23 @@
     well-formed while being uncallable with any container ID Docker has ever
     assigned.
   added: 2026-08-18
+
+- operation_id: NamespacesAccessUpdate
+  field: rpn
+  reason: >-
+    The fifth instance of the defect the three docker entries at the top of
+    this file and SnapshotContainerInspect.containerId record, and the first
+    found by running an action rather than reading a document. The vendored
+    specification declares this path parameter "integer"; Portainer resolves
+    the segment as the Kubernetes namespace's own NAME. Measured 2026-08-18
+    against a live Business Edition 2.44.0 with the Kubernetes leg up:
+    PUT /endpoints/1/pools/default/access and .../pools/portainer/access both
+    answer 204, while .../pools/1/access fails with the server naming the
+    cause itself — `namespaces "1" not found`. The generated client bakes the
+    same wrong type into its signature (NamespacesAccessUpdateWithResponse(
+    ctx, id int, rpn int, ...)), which is why the handler is hand-written.
+    The published description diverges for the same reason and under the same
+    entry: "Namespace identifier" invites exactly the numeric value the server
+    refuses, so it says what the value actually is. See
+    docs/api-divergences.md §6.3.
+  added: 2026-08-18

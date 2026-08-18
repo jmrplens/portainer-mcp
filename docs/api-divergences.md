@@ -1242,15 +1242,16 @@ The one operation this cannot help is `GET /endpoint_groups/{id}`, which
 *neither* edition names: there is no name to borrow, and it stays absent from
 both indexes and from both coverage totals.
 
-### 6.3 Four identifiers declared `integer` that Portainer never treats as a number
+### 6.3 Five identifiers declared `integer` that Portainer never treats as a number
 
 **Evidence: vendored spec** for the declaration; **diagnosed** for what Portainer actually does with
 each value, from the shape of the identifier itself and Docker's/Docker Swarm's own ID conventions;
 recorded 2026-08-04 (P3.3 task 7).
 
-Four path parameters across three `docker`-tagged operations and one endpoint-scoped one declare
-`"type": "integer"` in the vendored Business Edition specification, yet the identifier each one
-names is never actually a number:
+Five path parameters declare `"type": "integer"` in the vendored Business Edition specification,
+yet the identifier each one names is never actually a number. Four were diagnosed from the shape of
+the identifier itself in 2026-08-04; the fifth was **measured against a live server** in 2026-08-18
+and is described below the table:
 
 | Operation ID | Route | Parameter | Real shape |
 |---|---|---|---|
@@ -1258,6 +1259,7 @@ names is never actually a number:
 | `containerImageStatus` | `GET /docker/{environmentId}/containers/{containerId}/image_status` | `containerId` | same |
 | `snapshotContainerInspect` | `GET /docker/{environmentId}/snapshot/containers/{containerId}` | `containerId` | same |
 | `ServiceImageStatus` | `GET /docker/{environmentId}/services/{serviceId}/image_status` | `serviceId` | Docker Swarm's own alphanumeric service ID (e.g. `9mnpnzenvg8p8tdbtq4wvbkcz`) |
+| `namespacesAccessUpdate` | `PUT /endpoints/{id}/pools/{rpn}/access` | `rpn` | the Kubernetes namespace's own name (e.g. `default`) |
 
 Left as generated, all four actions were uncallable: `cmd/gen_action_inputs` rendered each field as
 Go `int`, publishing JSON Schema `"type": "integer"`, and `toolutil.ActionSpec.ValidateInput` (the
@@ -1290,6 +1292,31 @@ domain hand-wrote `dockerContainerGpusInspect`, `containerImageStatus` and `Serv
 neighbours travel with it for the same reason — `snapshotInspect` and `snapshotContainersList` are
 also dual-tagged and also declared in `endpoints`. A reader looking for any of the three in the
 `docker` domain will not find them there, and nothing in the tag itself says so.
+
+**The fifth row is the only one confirmed by the server naming the defect itself**, and the only
+one found by running the action rather than reading the document. `rpn` is Portainer's internal
+name for a resource pool, which is what its interface calls a namespace. Measured 2026-08-18
+against a live Business Edition 2.44.0 with the Kubernetes leg up (`make e2e-k8s-up`):
+
+| Request | Answer |
+|---|---|
+| `PUT /endpoints/1/pools/default/access` | `204` |
+| `PUT /endpoints/1/pools/portainer/access` | `204` |
+| `PUT /endpoints/1/pools/1/access` | error — ``namespaces "1" not found`` |
+
+Two things about how it was found are worth carrying forward. First, **neither standing audit could
+have caught it**: `audit_spec_drift` compares the catalog against the same document that is wrong,
+and `audit_spec_reality` only asks whether a route exists. Second, **the domain's own negative test
+passed against the broken parameter type** — `endpoints.namespaces_access_update` was covered by a
+test asserting a Docker environment refuses it, and a Docker environment refuses it whatever the
+`rpn` is. Negative coverage of an action that needs infrastructure the estate lacks proves the
+action is refused; it does not begin to prove the action works. Bringing the Kubernetes leg up is
+what turned an untested action into a measured defect.
+
+Also worth stating, because it was written down wrongly first: this catalog's own
+`ParameterGuidance` for `rpn` initially told a model the value was "a number rather than the
+namespace's name", transcribed in good faith from the specification. Prose derived from a document
+inherits the document's defects.
 
 **The cheat this is written down to forbid.** `docker.service_image_status`'s `serviceId` can be made
 to look correct without actually being correct: label a probe container (or a Swarm service, in the
@@ -1643,8 +1670,10 @@ elements carry `Id`, `Names`, `Image`, `Labels` and the rest.
 `*PortainerDockerContainerSnapshot` accordingly, so the generated handler
 failed on every call, on every input, while decoding:
 
-    json: cannot unmarshal array into Go value of type
-    portainerapi.PortainerDockerContainerSnapshot
+```text
+json: cannot unmarshal array into Go value of type
+portainerapi.PortainerDockerContainerSnapshot
+```
 
 `internal/tools/endpoints/handlers.go` hand-writes the handler, building the
 request directly and decoding the array.

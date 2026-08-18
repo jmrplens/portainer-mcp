@@ -276,26 +276,6 @@ func endpointUpdateRelations(ctx context.Context, c *portainer.Client, input jso
 	return map[string]any{"status": "ok"}, nil
 }
 
-// namespacesAccessUpdate is the generated handler for operation NamespacesAccessUpdate.
-func namespacesAccessUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params namespacesAccessUpdateInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("NamespacesAccessUpdate: parse input: %w", err)
-	}
-	var body apigen.NamespacesAccessUpdateJSONRequestBody
-	if err := json.Unmarshal(input, &body); err != nil {
-		return nil, fmt.Errorf("NamespacesAccessUpdate: parse request body: %w", err)
-	}
-	resp, err := c.API.NamespacesAccessUpdateWithResponse(ctx, params.ID, params.Rpn, body)
-	if err != nil {
-		return nil, fmt.Errorf("NamespacesAccessUpdate: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("NamespacesAccessUpdate: %w", err)
-	}
-	return map[string]any{"status": "ok"}, nil
-}
-
 // snapshotInspect is the generated handler for operation SnapshotInspect.
 func snapshotInspect(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params snapshotInspectInput
@@ -479,32 +459,6 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Handler:     endpointUpdateRelations,
 			Input:       endpointUpdateRelationsInput{},
 		}, narrative("EndpointUpdateRelations")),
-		toolutil.WithNarrative(toolutil.ActionSpec{
-			Name: "endpoints.namespaces_access_update", Domain: "endpoints", OperationID: "NamespacesAccessUpdate",
-			Title:       "Update namespace access for a given namespace",
-			Description: "Update the access permissions on a namespace in the given environment. This endpoint allows adding or removing users and teams that can access the specified namespace. Please note that users or teams must be added to the environment before they can be added to the namespace.",
-			Edition:     edition.EE,
-			Mutating:    true,
-			Idempotent:  true,
-			Handler:     namespacesAccessUpdate,
-			Input:       namespacesAccessUpdateInput{},
-			// rpn is the one identifier this domain publishes that
-			// toolutil.scopeParameterDefaults does not already cover, and the
-			// only place in the catalog the name appears at all. Left to the
-			// default fill it would arrive with no guidance whatsoever, while
-			// reading like an abbreviation a model would have to guess at.
-			ParameterGuidance: map[string]toolutil.ParameterGuidance{
-				"rpn": {
-					SemanticRole: "Identifies one Kubernetes namespace inside the environment named by id. Portainer calls it a resource pool internally, which is what the abbreviation stands for; the user interface calls the same thing a namespace.",
-					ValueSource:  "The namespace's numeric identifier as Portainer records it, not the namespace's name — \"default\" and \"kube-system\" are not valid values here.",
-					CommonConfusions: []string{
-						"Not the namespace's name: this is a number, and the Kubernetes name of the same namespace will not be accepted.",
-						"Not an environment identifier: id already names the environment, and rpn selects a namespace within it.",
-					},
-					ExampleBinding: "2",
-				},
-			},
-		}, narrative("NamespacesAccessUpdate")),
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "endpoints.snapshot_inspect", Domain: "endpoints", OperationID: "SnapshotInspect",
 			Title:       "Fetch latest snapshot of environment",

@@ -7,13 +7,28 @@
 // vendored specification and the generated client use, and says
 // "environment" in every narrative a model reads.
 //
-// Twenty-two actions run on cmd/gen_action_inputs's generated code
-// (actions.go). Five are hand-written in handlers.go, for three reasons that
-// file records in full: two multipart-only bodies whose typed client method
-// oapi-codegen named something clientMethodFor cannot find (EndpointCreate,
+// Eighteen actions run on cmd/gen_action_inputs's generated code
+// (actions.go). Nine are hand-written in handlers.go, and the split is worth
+// reading as two groups rather than one number.
+//
+// Five were refused by the generator, which named each reason: two
+// multipart-only bodies whose typed client method oapi-codegen named
+// something clientMethodFor cannot find (EndpointCreate,
 // EndpointDockerBrowsePut), two specification "number" parameters against a
 // generated client's float32 (EndpointList, EndpointUpdate), and one path
-// parameter the specification mistypes as an integer (SnapshotContainerInspect).
+// parameter the specification mistypes as an integer
+// (SnapshotContainerInspect).
+//
+// The other four generated perfectly well and were WRONG, which is the more
+// useful half of this list: EndpointAssociationDelete issued a verb the
+// server answers 405 to, SnapshotContainersList decoded an object where the
+// server sends an array, EndpointSettingsUpdate sent a body Community
+// Edition silently ignores, and NamespacesAccessUpdate sent a namespace
+// identifier as a number where the server wants the namespace's name. Every
+// one of the four was found by calling the action against a live server;
+// none was visible to any standing audit. See docs/api-divergences.md §5.1,
+// §6.3, §6.8 and §6.9.
+//
 // A twenty-eighth operation, EndpointDeleteBatchDeprecated (DELETE
 // /endpoints), is marked deprecated upstream, generates nothing, and carries
 // its own api/coverage-allowlist.yaml entry.
@@ -28,9 +43,10 @@
 //
 // Nine redaction wrappers, below, are what let the generator emit a handler
 // for the nine operations whose success response can carry a credential.
-// Six of those nine are generated; the other three (list, create, update)
-// are among the hand-written five, and nothing mechanical makes a
-// hand-written handler call its wrapper — handlers_test.go is what does.
+// Four of the nine are called from generated handlers; the other five (list,
+// create, update, settings_update, association_delete) are called from
+// hand-written ones, and nothing mechanical makes a hand-written handler call
+// its wrapper — redaction_test.go's own table is what proves each one does.
 package endpoints
 
 import (
@@ -101,6 +117,32 @@ func Specs() []toolutil.ActionSpec {
 			Handler:  endpointDockerBrowsePut,
 			Input:    endpointDockerBrowsePutInput{},
 		}, narrative("EndpointDockerBrowsePut")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "endpoints.namespaces_access_update", Domain: "endpoints", OperationID: "NamespacesAccessUpdate",
+			Title:       "Update namespace access for a given namespace",
+			Description: "Update the access permissions on a namespace in the given environment. This endpoint allows adding or removing users and teams that can access the specified namespace. Please note that users or teams must be added to the environment before they can be added to the namespace.",
+			Edition:     edition.EE,
+			Mutating:    true,
+			Idempotent:  true,
+			Handler:     namespacesAccessUpdate,
+			Input:       namespacesAccessUpdateInput{},
+			// rpn is the one identifier this domain publishes that
+			// toolutil.scopeParameterDefaults does not already cover, and the
+			// only place in the catalog the name appears at all. Left to the
+			// default fill it would arrive with no guidance whatsoever, while
+			// reading like an abbreviation a model would have to guess at.
+			ParameterGuidance: map[string]toolutil.ParameterGuidance{
+				"rpn": {
+					SemanticRole: "Names one Kubernetes namespace inside the environment named by id. Portainer calls it a resource pool internally, which is what the abbreviation stands for; the user interface calls the same thing a namespace.",
+					ValueSource:  "The namespace's own Kubernetes name, as listed for this environment — \"default\", \"kube-system\", or whatever the cluster calls it.",
+					CommonConfusions: []string{
+						"Not a number, although the vendored specification declares this parameter an integer: Portainer looks the segment up as a namespace name and answers `namespaces \"1\" not found` for a numeric one. See docs/api-divergences.md §6.3.",
+						"Not an environment identifier: id already names the environment, and rpn selects a namespace within it.",
+					},
+					ExampleBinding: "default",
+				},
+			},
+		}, narrative("NamespacesAccessUpdate")),
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "endpoints.settings_update", Domain: "endpoints", OperationID: "EndpointSettingsUpdate",
 			Title:       "Update settings for an environment(endpoint)",
@@ -313,8 +355,8 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title: "Grant or revoke namespace access",
 			Description: "Adds and removes the users and teams allowed to work in one Kubernetes namespace of one environment. Business Edition only. " +
 				"Unlike most access actions in this catalog it is a delta, not a replacement: the four lists add and remove, and anyone not named keeps what they had. " +
-				"A user or team must already have access to the environment before it can be given access to a namespace within it; otherwise Portainer refuses. " +
-				"rpn is the namespace, and it is a number rather than the namespace's name.",
+				"A user or team must already have access to the ENVIRONMENT before it can be given access to a namespace within it — otherwise Portainer refuses the whole call, naming the user and saying it has no role assigned. Grant that first with endpoints.update's userAccessPolicies. " +
+				"rpn is the namespace's own Kubernetes name, such as \"default\": a number is refused, whatever the specification says.",
 		}
 	case "EndpointMTLSCertificate":
 		return toolutil.ActionNarrative{

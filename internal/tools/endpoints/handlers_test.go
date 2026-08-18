@@ -3,6 +3,7 @@ package endpoints
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -238,9 +239,11 @@ func TestUnit_EndpointCreate_SendsTheTLSMaterialAsFilePartsWithFilenames(t *test
 			t.Fatalf("%s: open part: %v", part.name, err)
 		}
 		defer func() { _ = f.Close() }()
-		buf := make([]byte, 256)
-		n, _ := f.Read(buf)
-		if !strings.Contains(string(buf[:n]), part.contains) {
+		content, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatalf("%s: read part: %v", part.name, err)
+		}
+		if !strings.Contains(string(content), part.contains) {
 			t.Errorf("%s: part content does not contain %q; the caller's PEM was not forwarded", part.name, part.contains)
 		}
 	}
@@ -497,6 +500,28 @@ func TestUnit_EveryDeclaredAction_HasANarrative(t *testing.T) {
 	}
 }
 
+// capturingJSONBodyClient answers with one environment and hands back the
+// JSON body the handler sent, decoded.
+//
+// Distinct from capturingClient above, which parses a multipart form: the two
+// settings tests care about the JSON body's own shape and nothing else, and a
+// helper that decoded both would have to guess which.
+func capturingJSONBodyClient(t *testing.T) (*portainer.Client, *map[string]any) {
+	t.Helper()
+	seen := map[string]any{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&seen)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(createdEnvironment))
+	}))
+	t.Cleanup(server.Close)
+	c, err := portainer.New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("portainer.New: %v", err)
+	}
+	return c, &seen
+}
+
 // TestUnit_EndpointSettingsUpdate_SendsBothEditionShapes is the guard on the
 // one defect in this domain no refusal from the generator pointed at.
 //
@@ -509,32 +534,22 @@ func TestUnit_EveryDeclaredAction_HasANarrative(t *testing.T) {
 // still does.
 func TestUnit_EndpointSettingsUpdate_SendsBothEditionShapes(t *testing.T) {
 	t.Parallel()
-	var seen map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&seen)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(createdEnvironment))
-	}))
-	t.Cleanup(server.Close)
-	c, err := portainer.New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
-	if err != nil {
-		t.Fatalf("portainer.New: %v", err)
-	}
+	c, seen := capturingJSONBodyClient(t)
 
 	input := `{"id":1,"securitySettings":{"allowBindMountsForRegularUsers":false,"allowPrivilegedModeForRegularUsers":true}}`
 	if _, err := endpointSettingsUpdate(context.Background(), c, json.RawMessage(input)); err != nil {
 		t.Fatalf("endpointSettingsUpdate: %v", err)
 	}
 
-	nested, ok := seen["securitySettings"].(map[string]any)
+	nested, ok := (*seen)["securitySettings"].(map[string]any)
 	if !ok {
-		t.Fatalf("body carried no nested securitySettings object; Business Edition would ignore this call: %v", seen)
+		t.Fatalf("body carried no nested securitySettings object; Business Edition would ignore this call: %v", *seen)
 	}
 	if nested["allowBindMountsForRegularUsers"] != false || nested["allowPrivilegedModeForRegularUsers"] != true {
 		t.Errorf("nested securitySettings = %v, want the caller's own values", nested)
 	}
-	if seen["allowBindMountsForRegularUsers"] != false || seen["allowPrivilegedModeForRegularUsers"] != true {
-		t.Errorf("body carried no top-level copy of the security settings (%v); Community Edition would answer 200 and change nothing", seen)
+	if (*seen)["allowBindMountsForRegularUsers"] != false || (*seen)["allowPrivilegedModeForRegularUsers"] != true {
+		t.Errorf("body carried no top-level copy of the security settings (%v); Community Edition would answer 200 and change nothing", *seen)
 	}
 }
 
@@ -544,29 +559,19 @@ func TestUnit_EndpointSettingsUpdate_SendsBothEditionShapes(t *testing.T) {
 // top-level keys, and with the path parameter kept out of it.
 func TestUnit_EndpointSettingsUpdate_WithoutSecuritySettings_SendsTheGeneratedBody(t *testing.T) {
 	t.Parallel()
-	var seen map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&seen)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(createdEnvironment))
-	}))
-	t.Cleanup(server.Close)
-	c, err := portainer.New(&config.Config{URL: server.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
-	if err != nil {
-		t.Fatalf("portainer.New: %v", err)
-	}
+	c, seen := capturingJSONBodyClient(t)
 
 	if _, err := endpointSettingsUpdate(context.Background(), c,
 		json.RawMessage(`{"id":3,"enableGPUManagement":true}`)); err != nil {
 		t.Fatalf("endpointSettingsUpdate: %v", err)
 	}
-	if _, present := seen["id"]; present {
+	if _, present := (*seen)["id"]; present {
 		t.Error(`the body carried "id"; it is a path parameter and the specification declares no such body property`)
 	}
-	if seen["enableGPUManagement"] != true {
-		t.Errorf("enableGPUManagement = %v, want true", seen["enableGPUManagement"])
+	if (*seen)["enableGPUManagement"] != true {
+		t.Errorf("enableGPUManagement = %v, want true", (*seen)["enableGPUManagement"])
 	}
-	if len(seen) != 1 {
-		t.Errorf("body = %v, want exactly the one field the caller sent", seen)
+	if len(*seen) != 1 {
+		t.Errorf("body = %v, want exactly the one field the caller sent", *seen)
 	}
 }

@@ -16,9 +16,14 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// This file holds the five handlers cmd/gen_action_inputs refuses to
-// generate for this domain, and nothing else. Three distinct reasons, none
-// of them fixable by authoring the domain differently:
+// This file holds the nine hand-written handlers of this domain.
+//
+// Five are here because cmd/gen_action_inputs refused to generate them and
+// named the reason; three distinct reasons, none fixable by authoring the
+// domain differently. The remaining four generated perfectly well and were
+// wrong about the server — each carries its own doc comment with the
+// measurement that established it, and each was found by calling the action
+// rather than by any audit. The five refusals:
 //
 //   - EndpointCreate and EndpointDockerBrowsePut declare a multipart/form-data
 //     request body and nothing else, so oapi-codegen emitted only
@@ -45,8 +50,8 @@ import (
 //
 // Everything else follows the generated handlers in actions.go exactly —
 // unmarshal the Input, call, toolutil.Check, redact — and deliberately so:
-// the shape being identical is what lets a reader check these five against
-// their twenty-two generated neighbours. The redaction calls are the part
+// the shape being identical is what lets a reader check these nine against
+// their eighteen generated neighbours. The redaction calls are the part
 // that must not drift. redactEndpointList, redactEndpointCreate and
 // redactEndpointUpdate are real functions this domain declares (the
 // generator refuses to emit any handler for a PortainereeEndpoint-returning
@@ -570,4 +575,79 @@ func endpointAssociationDelete(ctx context.Context, c *portainer.Client, input j
 		return nil, fmt.Errorf("EndpointAssociationDelete: decode response: %w", err)
 	}
 	return redactEndpointAssociationDelete(&environment), nil
+}
+
+// namespacesAccessUpdate grants and revokes access to one Kubernetes
+// namespace.
+//
+// Hand-written for the same reason snapshotContainerInspect is, on the fifth
+// instance of the defect docs/api-divergences.md §6.3 catalogues: the
+// vendored specification declares the rpn path parameter "integer", and
+// Portainer resolves that segment as the Kubernetes namespace's own NAME.
+// The generated client bakes the wrong type into its signature —
+// NamespacesAccessUpdateWithResponse(ctx, id int, rpn int, ...) — so no
+// correctly-typed action could ever call it.
+//
+// Measured 2026-08-18 against a live Business Edition 2.44.0 with the
+// Kubernetes leg up (`make e2e-k8s-up`):
+//
+//	PUT /endpoints/1/pools/default/access   -> 204
+//	PUT /endpoints/1/pools/portainer/access -> 204
+//	PUT /endpoints/1/pools/1/access         -> error: namespaces "1" not found
+//
+// The server names the cause itself in that last line, which is what makes
+// this a measurement rather than an inference.
+//
+// This one was found only because the Kubernetes leg was brought up to give
+// the action positive e2e coverage. Neither standing audit could see it —
+// audit_spec_drift compares the catalog against the same document that is
+// wrong, and audit_spec_reality only asks whether a route exists — and the
+// domain's own negative test (the action is refused by a Docker
+// environment) passed happily against a broken parameter type, because a
+// Docker environment refuses it whatever the rpn is.
+func namespacesAccessUpdate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var params namespacesAccessUpdateInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("NamespacesAccessUpdate: parse input: %w", err)
+	}
+	body, err := json.Marshal(apigen.NamespacesAccessUpdateJSONRequestBody{
+		TeamsToAdd:    toIntSlice(params.TeamsToAdd),
+		TeamsToRemove: toIntSlice(params.TeamsToRemove),
+		UsersToAdd:    toIntSlice(params.UsersToAdd),
+		UsersToRemove: toIntSlice(params.UsersToRemove),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("NamespacesAccessUpdate: render request body: %w", err)
+	}
+
+	// url.PathEscape for the reason internal/tools/docker's handlers record:
+	// a Kubernetes namespace name cannot contain "/" today, but nothing here
+	// guarantees the caller sends a valid one, and a segment that splices
+	// extra path components into the route is a different request from the
+	// one asked for.
+	path := fmt.Sprintf("/endpoints/%d/pools/%s/access", params.ID, url.PathEscape(params.Rpn))
+	resp, err := c.Do(ctx, http.MethodPut, path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("NamespacesAccessUpdate: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	answer, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("NamespacesAccessUpdate: read response: %w", err)
+	}
+	if err := portainer.ClassifyResponse(resp.StatusCode, answer); err != nil {
+		return nil, fmt.Errorf("NamespacesAccessUpdate: %w", err)
+	}
+	return map[string]any{"status": "ok"}, nil
+}
+
+// toIntSlice renders an optional list of identifiers the way the generated
+// request body declares it: absent when the caller sent nothing, so a call
+// that only adds users does not also send four empty arrays.
+func toIntSlice(in []int) *[]int {
+	if in == nil {
+		return nil
+	}
+	return &in
 }

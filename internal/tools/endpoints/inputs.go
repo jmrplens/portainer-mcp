@@ -575,11 +575,25 @@ type namespacesAccessUpdateInput struct {
 	// ID Environment identifier
 	ID int `json:"id" jsonschema:"Environment identifier"`
 	// Rpn Namespace identifier
-	Rpn           int   `json:"rpn" jsonschema:"Namespace identifier"`
-	TeamsToAdd    []int `json:"teamsToAdd,omitempty"`
-	TeamsToRemove []int `json:"teamsToRemove,omitempty"`
-	UsersToAdd    []int `json:"usersToAdd,omitempty"`
-	UsersToRemove []int `json:"usersToRemove,omitempty"`
+	//
+	// A string, where the vendored specification declares this path
+	// parameter "integer". Portainer resolves the segment as the Kubernetes
+	// namespace's own NAME and looks it up as one: measured 2026-08-18
+	// against a live Business Edition 2.44.0 with the Kubernetes leg up,
+	// PUT /endpoints/1/pools/default/access answers 204 while
+	// PUT /endpoints/1/pools/1/access answers an error naming the cause —
+	// `namespaces "1" not found`. Same defect class as the four identifiers
+	// in docs/api-divergences.md §6.3, and this is its fifth instance.
+	//
+	// It carries an api/spec-drift-allowlist.yaml entry, and it is why
+	// namespacesAccessUpdate is hand-written: the generated client's own
+	// signature is NamespacesAccessUpdateWithResponse(ctx, id int, rpn int,
+	// ...), which cannot carry a namespace name at all.
+	Rpn           string `json:"rpn" jsonschema:"Namespace name, for example \"default\" — not a number, despite the specification declaring one"`
+	TeamsToAdd    []int  `json:"teamsToAdd,omitempty"`
+	TeamsToRemove []int  `json:"teamsToRemove,omitempty"`
+	UsersToAdd    []int  `json:"usersToAdd,omitempty"`
+	UsersToRemove []int  `json:"usersToRemove,omitempty"`
 }
 
 func (namespacesAccessUpdateInput) MinimumParams() map[string]int {

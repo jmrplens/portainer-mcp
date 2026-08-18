@@ -173,7 +173,10 @@ func run(args []string) error {
 	}
 	buf.WriteString("}\n")
 
-	borrowed := borrowIDsAcrossEditions(allByEdition, opIDsByEdition)
+	borrowed, err := borrowIDsAcrossEditions(allByEdition, opIDsByEdition)
+	if err != nil {
+		return err
+	}
 
 	buf.WriteString("\n// operationIDs maps an operation's OpenAPI operationId to the operation it\n")
 	buf.WriteString("// identifies. oapi-codegen derives every generated Go method name from the\n")
@@ -344,7 +347,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // The one operation this cannot help is GET /endpoint_groups/{id}, which
 // neither edition names; there is no name to borrow, and it stays absent
 // from both indexes.
-func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsByEdition map[string]map[string]operation) []string {
+func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsByEdition map[string]map[string]operation) ([]string, error) {
 	// operation -> the id some edition publishes for it.
 	named := map[operation]string{}
 	for _, ed := range sortedKeys(opIDsByEdition) {
@@ -377,9 +380,22 @@ func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsBy
 			if !ok {
 				continue
 			}
+			// Never overwrite a name this edition already resolves. Two
+			// operations sharing one operationId across editions cannot both
+			// be right, and silently taking the borrowed one would move an
+			// action's edition on the strength of a guess — the exact
+			// failure mode this whole index exists to make impossible. No
+			// vendored specification collides today; refusing rather than
+			// picking is what keeps that true when one does.
+			if existing, taken := opIDsByEdition[ed][id]; taken && existing != op {
+				return nil, fmt.Errorf(
+					"edition %s: operationId %q already resolves to %s %s, so it cannot be borrowed for %s %s; "+
+						"one of the two vendored documents names the same operation for two different routes",
+					ed, id, existing.Method, existing.Path, op.Method, op.Path)
+			}
 			opIDsByEdition[ed][id] = op
 			borrowed = append(borrowed, fmt.Sprintf("%s %s %s -> %s", ed, op.Method, op.Path, id))
 		}
 	}
-	return borrowed
+	return borrowed, nil
 }
