@@ -240,7 +240,7 @@ func TestE2E_GPU_PortainerRunsAContainerOnTheRealCard(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cleanupCancel()
-		resp := dockerProxy(cleanupCtx, t, srv, envID, http.MethodDelete, "/containers/"+created.ID+"?force=true", nil)
+		resp := dockerProxy(cleanupCtx, t, srv, envID, http.MethodDelete, "/containers/"+created.ID+"?force=true", nil) //nolint:bodyclose // readBody closes it; bodyclose cannot follow the value out of this t.Cleanup closure
 		_ = readBody(t, resp)
 	})
 
