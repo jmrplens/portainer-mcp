@@ -53,12 +53,29 @@ func webhookRoute(operationID string) specOperation {
 func TestUnit_OperationAliases_HoldAgainstTheVendoredDocuments(t *testing.T) {
 	t.Parallel()
 	ce, ee := loadRealSpecs(t)
-	if err := checkAliases(operationAliases, ce, ee); err != nil {
-		t.Fatalf("checkAliases(operationAliases) = %v, want nil: every shipped alias must still name one route under two names", err)
-	}
+
 	if len(operationAliases) == 0 {
 		t.Fatal("operationAliases is empty; this test would then assert nothing at all")
 	}
+
+	// Driven by the table rather than checking it in one call, so a stale
+	// entry names itself instead of arriving inside one aggregate error. The
+	// whole table is then re-checked together, because checkAliases also
+	// rejects a pair that collides with another pair — a property no single
+	// entry can carry on its own.
+	for _, alias := range operationAliases {
+		t.Run(alias.Business+"/"+alias.Community, func(t *testing.T) {
+			if err := checkAliases([]operationAlias{alias}, ce, ee); err != nil {
+				t.Errorf("alias %s/%s no longer names one route under two names: %v", alias.Business, alias.Community, err)
+			}
+		})
+	}
+
+	t.Run("the table as a whole", func(t *testing.T) {
+		if err := checkAliases(operationAliases, ce, ee); err != nil {
+			t.Errorf("checkAliases(operationAliases) = %v, want nil", err)
+		}
+	})
 }
 
 // TestUnit_AuditCoverage_CoveringEitherNameOfAnAliasedRoute_CoversBoth is the

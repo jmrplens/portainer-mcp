@@ -68,7 +68,7 @@ func (r *auditResult) HasGap() bool {
 // implementation that never consulted a table at all.
 func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpec, allowList []allowListEntry, aliases []operationAlias) (*auditResult, error) {
 	if err := checkAliases(aliases, ce, ee); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validating the operation aliases before auditing coverage: %w", err)
 	}
 
 	inEither := func(id string) bool {

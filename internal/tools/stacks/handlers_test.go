@@ -102,8 +102,12 @@ func filePartContent(t *testing.T, form *multipart.Form, name string) string {
 		t.Fatalf("open the %s part: %v", name, err)
 	}
 	defer func() { _ = opened.Close() }()
-	content := make([]byte, headers[0].Size)
-	if _, err := opened.Read(content); err != nil {
+	// io.ReadAll, not one Read into a Size-length buffer: an io.Reader may
+	// return fewer bytes than the buffer holds, which would leave trailing
+	// zeros in the comparison and make this assertion depend on how the
+	// multipart reader happens to chunk.
+	content, err := io.ReadAll(opened)
+	if err != nil {
 		t.Fatalf("read the %s part: %v", name, err)
 	}
 	return string(content)
