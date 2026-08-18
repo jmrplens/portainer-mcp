@@ -25,9 +25,16 @@ jobs:
   e2e:
     name: Ephemeral Portainer estate
     runs-on: ubuntu-latest
-    # Generous ceiling for image pulls on a cold runner, not for the estate
-    # itself: the measured total is well under 3 minutes end to end.
-    timeout-minutes: 20
+    # Sized for the suite, not just for image pulls on a cold runner. That was
+    # true when this job only had to stand the estate up — the estate itself
+    # is still ~25s for the compose legs and ~2 minutes for k3d plus the Helm
+    # chart — but the suite is now the long pole: wave 1 stage C's stacks
+    # domain deploys, redeploys and removes real stacks inside the estate's
+    # own Docker daemon, and a full local run measured 706 seconds
+    # (2026-08-18) on top of provisioning. `make test-e2e`'s own -timeout is
+    # 30m; this ceiling has to leave room for that plus both legs' setup and
+    # teardown.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:

@@ -314,7 +314,8 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Description: "Returns the stacks the caller may see: for each one its identifier, name, stack type (1 swarm, 2 compose, 3 kubernetes), the environment it is deployed to, its ownership and — for a git-backed stack — its repository configuration. " +
 				"The stack file body is not included; stacks.file_inspect returns it for one stack at a time. " +
 				"An administrator gets every stack, any other user only the stacks their authorizations reach, and stacks the server marks limited are never returned by this route at all. " +
-				"filters narrows the result and is a JSON object encoded into a single string rather than an object parameter — \"{\\\"EndpointID\\\":\\\"3\\\"}\" or \"{\\\"SwarmID\\\":\\\"jpofkc0i9uo9wtx1zesuk649w\\\"}\"; EndpointID and SwarmID are the only keys this route supports. " +
+				"filters narrows the result and is a JSON object encoded into a single string rather than an object parameter. EndpointID and SwarmID are the only keys this route supports, and although the specification calls the document a map of string to string, EndpointID is a NUMBER and only SwarmID is a string: send \"{\\\"EndpointID\\\":3}\" or \"{\\\"SwarmID\\\":\\\"jpofkc0i9uo9wtx1zesuk649w\\\"}\", because a quoted EndpointID is refused with 400 \"cannot unmarshal ... of type int\". " +
+				"Each key also matches ONE stack type, measured: EndpointID returns only compose stacks in that environment and never a swarm stack deployed there, SwarmID returns only swarm stacks, and sending both keys returns the union of the two rather than their intersection. Omit filters entirely to see every stack. " +
 				"Any git credential a stack stores is stripped before the list reaches you.",
 		}
 	case "StackInspect":

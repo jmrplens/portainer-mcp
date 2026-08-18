@@ -486,6 +486,12 @@ var orphanSweeps = []namedOrphanSweep{
 	// rather than in this file, which is what this registration point exists
 	// to allow.
 	{name: "custom templates", sweep: deleteOrphanCustomTemplates},
+	// Stacks join the same way, from wave 1 stage C. Their sweep has to
+	// delete through each stack's own recorded environment id, which is
+	// exactly the kind of per-resource knowledge this registration point
+	// exists to keep out of cleanupOrphans; see deleteOrphanStacks in
+	// stacks_test.go.
+	{name: "stacks", sweep: deleteOrphanStacks},
 }
 
 // cleanupOrphans runs every registered orphanSweep (see orphanSweeps) against
