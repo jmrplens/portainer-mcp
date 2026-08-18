@@ -241,7 +241,7 @@ func TestUnit_Qualify_RefusesWhatItCannotQualify(t *testing.T) {
 		{"", specnaming.OriginQuery},
 		{"namespace", "body"},
 	} {
-		t.Run(tc.name+"/"+string(tc.origin), func(t *testing.T) {
+		t.Run(tc.name+"/"+tc.origin, func(t *testing.T) {
 			if got, err := specnaming.Qualify(tc.name, tc.origin); err == nil {
 				t.Errorf("Qualify(%q, %q) = %q, error = nil; want a refusal", tc.name, tc.origin, got)
 			}
