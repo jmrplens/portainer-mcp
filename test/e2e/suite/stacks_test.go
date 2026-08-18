@@ -513,6 +513,16 @@ func createSecondDockerEnvironment(t *testing.T, ed string, srv harness.Server, 
 			URL:          inspect.JSON200.URL,
 		})
 	if err != nil {
+		// A Business Edition licence caps how many nodes may be registered,
+		// and this estate's licence is whatever secret the run was given —
+		// CI's is not the one a developer holds. Running out of allowance is
+		// a property of the licence, not a defect in the action under test,
+		// so it skips rather than reddening the build. Any other failure
+		// still fails: an estate that cannot register an environment for
+		// some other reason is a real problem.
+		if strings.Contains(err.Error(), "node allowance") {
+			t.Skipf("this %s licence has no node allowance left to register a second environment, which this test needs: %v", ed, err)
+		}
 		t.Fatalf("register a second docker environment on %s: %v", ed, err)
 	}
 
@@ -1156,12 +1166,19 @@ func TestStacks_GitRedeploy_DeploysTheCommitPushedSinceTheStackWasCreated(t *tes
 func TestStacks_Migrate_MovesTheStackToTheBodyEndpointNotTheQueryOne(t *testing.T) {
 	for _, leg := range composeLegs(estate) {
 		sourceEnv := dockerEnvID(t, leg)
+		// One target environment per leg, shared by the three surfaces,
+		// rather than one per surface. Each surface migrates its own stack
+		// into it, so sharing costs nothing — and a Business Edition licence
+		// caps registered nodes, so three simultaneous extra environments
+		// exhausted CI's allowance while a developer's larger licence
+		// absorbed it. The estate's limits belong in the test's design, not
+		// in whether it happens to pass on the machine it was written on.
+		targetEnv := createSecondDockerEnvironment(t, leg.Name, leg.Server, uniqueName("migrate-target"))
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
 				session := sessions.For(t, surface, leg.Name)
 
-				targetEnv := createSecondDockerEnvironment(t, leg.Name, leg.Server, uniqueName("migrate-target"))
 				if targetEnv == sourceEnv {
 					t.Fatalf("the migration target environment is the source environment (%d): this test could not tell the two endpointId fields apart", targetEnv)
 				}
@@ -1239,8 +1256,16 @@ func TestStacks_Associate_ReparentsAStackOrphanedByARemovedEnvironment(t *testin
 	for _, leg := range composeLegs(estate) {
 		homeEnv := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
+			// Deliberately NOT parallel across surfaces, unlike the rest of
+			// this file. Each surface registers its own extra environment
+			// and then deletes it — that deletion is how the test produces a
+			// genuinely orphaned stack, so unlike the migrate test above
+			// these cannot share one. Run in parallel, three extra
+			// environments exist at once and a Business Edition licence's
+			// node allowance can refuse the third; run in sequence, only one
+			// is ever registered. The cost is wall-clock on a test that is
+			// already dominated by its estate calls.
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
-				t.Parallel()
 				session := sessions.For(t, surface, leg.Name)
 
 				doomedEnv := createSecondDockerEnvironment(t, leg.Name, leg.Server, uniqueName("orphan-source"))
@@ -2134,7 +2159,12 @@ var stacksSafeModeMutations = []stacksSafeModeMutation{
 	{
 		action: "stacks.delete_kubernetes_by_name", kind: "destructive",
 		inputFor: func(f stacksSafeModeFixture) map[string]any {
-			return map[string]any{"name": f.name, "endpointId": f.envID}
+			// namespace is required and is declared by neither vendored
+			// document: the server demands it and the action publishes it
+			// so it can be sent at all (docs/api-divergences.md §3.9).
+			// Omitting it here is refused by ValidateInput before safe mode
+			// is ever reached.
+			return map[string]any{"name": f.name, "endpointId": f.envID, "namespace": "default"}
 		},
 	},
 	{
