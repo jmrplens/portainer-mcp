@@ -495,6 +495,13 @@ func TestUnit_AuditLeg_PublicRouteUnderTheWrongVerb_IsReportedButNeverSwept(t *t
 	if len(result.WrongVerb) != 1 {
 		t.Fatalf("auditLeg() WrongVerb = %+v, want the finding to be reported", result.WrongVerb)
 	}
+	// The two classifications are mutually exclusive, and saying so here is
+	// what stops a public route being counted twice or filed as the opposite
+	// of what was measured: a 405 means the path IS registered, so reporting
+	// it as an absent route would be worse than not reporting it at all.
+	if len(result.Divergent) != 0 {
+		t.Errorf("auditLeg() Divergent = %+v, want empty: a wrong verb is not an absent route", result.Divergent)
+	}
 	if got := result.WrongVerb[0].ServedBy; len(got) != 0 {
 		t.Errorf("auditLeg() swept verbs on a PublicAccess route (ServedBy = %v); it must never do that", got)
 	}
