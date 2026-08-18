@@ -168,7 +168,7 @@ func createDockerContainer(ctx context.Context, t *testing.T, srv harness.Server
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		resp := dockerProxy(cleanupCtx, t, srv, envID, http.MethodDelete, "/containers/"+created.ID+"?force=true", nil)
+		resp := dockerProxy(cleanupCtx, t, srv, envID, http.MethodDelete, "/containers/"+created.ID+"?force=true", nil) //nolint:bodyclose // readBody closes it; bodyclose cannot follow the value out of this t.Cleanup closure
 		_ = readBody(t, resp)
 	})
 

@@ -28,6 +28,11 @@ cover:
 
 lint:
 	golangci-lint run ./...
+# The e2e suite is behind the `e2e` build tag, so the run above cannot see a
+# line of it: Go's build constraints exclude those files before the linter
+# starts. Until 2026-08-18 that whole tree had never been linted, while
+# `make test-e2e` had been running it with the tag all along.
+	GOFLAGS=-tags=e2e golangci-lint run ./test/...
 
 vulncheck:
 	govulncheck ./...
