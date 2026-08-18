@@ -893,6 +893,16 @@ func pathTemplateParams(path string) []string {
 // declaration order, which is a different source from the path template this
 // test parses. They agree for all 441 operations today; nothing enforced that
 // until now.
+//
+// pathOrder carries JSON names, which are the specification's own parameter
+// names for every path parameter but the four Kubernetes ingress/service
+// routes, where a body property already contributes "namespace" and
+// internal/specnaming qualifies the path parameter to "namespacePath". Each
+// entry is therefore translated back through fieldSpec.WireName — the name
+// the specification declares — before being compared with the route
+// template. That keeps the two sources of this comparison independent: the
+// template is parsed from the path string, WireName comes from
+// op.Parameters, and neither is derived from the other.
 func TestUnit_AssembleOperationFields_PathOrderMatchesTheRouteAcrossTheWholeSpec(t *testing.T) {
 	t.Parallel()
 	doc, paths, err := loadDocument("../../api/specs/ee-2.44.0.json")
@@ -909,16 +919,30 @@ func TestUnit_AssembleOperationFields_PathOrderMatchesTheRouteAcrossTheWholeSpec
 	for _, ops := range byTag {
 		for _, op := range ops {
 			var nested []structSpec
-			_, pathOrder, err := assembleOperationFields(op, res, doc, "probe", &nested)
+			fields, pathOrder, err := assembleOperationFields(op, res, doc, "probe", &nested)
 			if err != nil {
 				// A refusal is this generator's documented behaviour for the
 				// shapes it will not guess at; it says nothing about ordering.
 				continue
 			}
+			wireByJSON := make(map[string]string, len(fields))
+			for _, f := range fields {
+				wireByJSON[f.JSONName] = f.WireName
+			}
+			got := make([]string, 0, len(pathOrder))
+			for _, name := range pathOrder {
+				wire, ok := wireByJSON[name]
+				if !ok || wire == "" {
+					t.Errorf("%s %s (operationId %s): pathOrder names %q, which is not a path field of this operation or carries no WireName",
+						op.Method, op.Path, op.OperationID, name)
+					continue
+				}
+				got = append(got, wire)
+			}
 			want := pathTemplateParams(op.Path)
-			if strings.Join(pathOrder, ",") != strings.Join(want, ",") {
-				t.Errorf("%s %s (operationId %s): pathOrder = %v, want %v (the order the route declares)",
-					op.Method, op.Path, op.OperationID, pathOrder, want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("%s %s (operationId %s): pathOrder = %v (specification names %v), want %v (the order the route declares)",
+					op.Method, op.Path, op.OperationID, pathOrder, got, want)
 			}
 			checked++
 		}

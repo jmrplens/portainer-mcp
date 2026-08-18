@@ -87,7 +87,8 @@ func rawOperationIDsByExportedName(paths map[string]map[string]json.RawMessage) 
 //     the application/json variant alone. Still not listed below: the two
 //     sides still agree, by refusing, just for the same reason now instead
 //     of two different ones.)
-//   - "generator-refuses" (all EE-only, still open): this package refuses
+//
+//   - "generator-refuses" (still open): this package refuses
 //     to scaffold because a *nested* value inside the body has no
 //     expressible type ("map value: schema has no type" — an
 //     additionalProperties value schema declaring no "type" keyword at any
@@ -102,6 +103,20 @@ func rawOperationIDsByExportedName(paths map[string]map[string]json.RawMessage) 
 //     class shared (generator succeeds, specdiff undercounts) cannot occur
 //     here, because the generator never succeeds.
 //
+//     CreateKubernetesService and UpdateKubernetesService joined this class
+//     without themselves changing: both always carried this same
+//     unresolvable nested map value ("Applications[].Configurations[].Data"),
+//     but until internal/specnaming existed, specdiff refused them too — for
+//     the unrelated reason that their path parameter "namespace" collides
+//     with their body property "Namespace" — so the two sides agreed by both
+//     refusing, and neither needed naming here. Disambiguating that
+//     collision let specdiff shape them and left this package's own, older
+//     refusal standing alone. They are the only two of the five colliding
+//     operations in that position: CreateKubernetesIngress and
+//     UpdateKubernetesIngress now shape on both sides, and so does
+//     StackMigrate. They are also the only two entries here that are not
+//     EE-only.
+//
 // Every entry must currently correspond to a real disagreement:
 // TestUnit_FieldCounts_GeneratorAndSpecdiffAgree_AcrossBothVendoredSpecs
 // fails on both a disagreement absent from this map (unnamed regression) and
@@ -111,12 +126,14 @@ func rawOperationIDsByExportedName(paths map[string]map[string]json.RawMessage) 
 // allowed to go stale unnoticed" discipline cmd/audit_1to1's and
 // cmd/audit_spec_drift's own allow-lists apply, for the identical reason.
 var knownFieldCountResidual = map[string]string{
-	"AddonInstall":           "generator-refuses",
-	"OmniCreateCluster":      "generator-refuses",
-	"OmniUpdateCluster":      "generator-refuses",
-	"OmniValidateCluster":    "generator-refuses",
-	"PolicyUpdate":           "generator-refuses",
-	"UpdateAlertingSettings": "generator-refuses",
+	"AddonInstall":            "generator-refuses",
+	"CreateKubernetesService": "generator-refuses",
+	"UpdateKubernetesService": "generator-refuses",
+	"OmniCreateCluster":       "generator-refuses",
+	"OmniUpdateCluster":       "generator-refuses",
+	"OmniValidateCluster":     "generator-refuses",
+	"PolicyUpdate":            "generator-refuses",
+	"UpdateAlertingSettings":  "generator-refuses",
 }
 
 // TestUnit_FieldCounts_GeneratorAndSpecdiffAgree_AcrossBothVendoredSpecs is

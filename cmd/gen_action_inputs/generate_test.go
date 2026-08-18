@@ -677,7 +677,14 @@ func TestUnit_Refusals(t *testing.T) {
 			wantErr: "content types",
 		},
 		{
-			name: "path parameter collides with a body property",
+			// A path parameter colliding with a body property is no longer
+			// refused — internal/specnaming qualifies the parameter and the
+			// body keeps the plain name (see
+			// TestUnit_AssembleOperationFields_CrossOriginCollision_IsDisambiguated).
+			// What is still refused is the collision that rule cannot
+			// resolve: the qualified name is itself already taken, so
+			// renaming into it would shadow a third field.
+			name: "a path parameter whose qualified name is already taken",
 			build: func() error {
 				op := operation{
 					OperationID: "Collide",
@@ -690,9 +697,12 @@ func TestUnit_Refusals(t *testing.T) {
 						"content": map[string]any{
 							"application/json": map[string]any{
 								"schema": map[string]any{
-									"type":       "object",
-									"properties": map[string]any{"name": map[string]any{"type": "string"}},
-									"required":   []any{"name"},
+									"type": "object",
+									"properties": map[string]any{
+										"name":     map[string]any{"type": "string"},
+										"namePath": map[string]any{"type": "string"},
+									},
+									"required": []any{"name"},
 								},
 							},
 						},
@@ -704,7 +714,40 @@ func TestUnit_Refusals(t *testing.T) {
 				_, _, err := assembleOperationFields(op, res, doc, "collideInput", &nested)
 				return err
 			},
-			wantErr: "contributed by both",
+			wantErr: "already contributed by another field",
+		},
+		{
+			// bodyJSONTag is not injective, and two body properties that
+			// render to one JSON tag have no principled winner between them:
+			// this is the collision the refusal was really written for, and
+			// disambiguating cross-origin collisions must not weaken it.
+			name: "two body properties rendering to one JSON tag",
+			build: func() error {
+				op := operation{
+					OperationID: "CollideBody",
+					Method:      "POST",
+					Path:        "/collide-body",
+					RequestBody: map[string]any{
+						"content": map[string]any{
+							"application/json": map[string]any{
+								"schema": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"EndpointID": map[string]any{"type": "integer"},
+										"endpointId": map[string]any{"type": "integer"},
+									},
+								},
+							},
+						},
+					},
+				}
+				doc := newDoc(nil)
+				res := &resolver{doc: doc}
+				var nested []structSpec
+				_, _, err := assembleOperationFields(op, res, doc, "collideBodyInput", &nested)
+				return err
+			},
+			wantErr: "both render as JSON field",
 		},
 		{
 			name: "header parameter is not supported",
@@ -789,5 +832,69 @@ func TestUnit_Refusals(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestUnit_AssembleOperationFields_CrossOriginCollision_IsDisambiguated is
+// the positive half of the refusal table's "a path parameter whose qualified
+// name is already taken" row: when the qualified name is free, the collision
+// is resolved rather than refused, and it is resolved in the one direction
+// internal/specnaming defines — the body keeps the plain name, the parameter
+// carries its origin. Synthetic, so it states the contract independently of
+// whichever real operations happen to collide in the vendored documents this
+// month; TestUnit_WireNames_StackMigrate_BothSidesNameTheSameTwoFields pins
+// the same rule against the real one that motivated it.
+func TestUnit_AssembleOperationFields_CrossOriginCollision_IsDisambiguated(t *testing.T) {
+	t.Parallel()
+	op := operation{
+		OperationID: "Collide",
+		Method:      "POST",
+		Path:        "/collide/{name}",
+		Parameters: []map[string]any{
+			{"name": "name", "in": "path", "required": true, "schema": map[string]any{"type": "string"}},
+		},
+		RequestBody: map[string]any{
+			"content": map[string]any{
+				"application/json": map[string]any{
+					"schema": map[string]any{
+						"type":       "object",
+						"properties": map[string]any{"name": map[string]any{"type": "string"}},
+						"required":   []any{"name"},
+					},
+				},
+			},
+		},
+	}
+	doc := newDoc(nil)
+	res := &resolver{doc: doc}
+	var nested []structSpec
+	fields, pathOrder, err := assembleOperationFields(op, res, doc, "collideInput", &nested)
+	if err != nil {
+		t.Fatalf("assembleOperationFields() error = %v, want the collision disambiguated", err)
+	}
+
+	byJSON := map[string]fieldSpec{}
+	for _, f := range fields {
+		byJSON[f.JSONName] = f
+	}
+	if len(fields) != 2 {
+		t.Fatalf("fields = %v, want exactly 2 (the path parameter and the body property, neither dropped)", fields)
+	}
+	body, ok := byJSON["name"]
+	if !ok || body.Origin != originBody {
+		t.Errorf("fields[\"name\"] = %+v, want the *body* property under the plain name", body)
+	}
+	path, ok := byJSON["namePath"]
+	if !ok || path.Origin != originPath {
+		t.Errorf("fields[\"namePath\"] = %+v, want the path parameter under its origin-qualified name", path)
+	}
+	if path.WireName != "name" {
+		t.Errorf("fields[\"namePath\"].WireName = %q, want %q: the name the specification declares must survive for the handler layer to inspect", path.WireName, "name")
+	}
+	if path.GoName == body.GoName {
+		t.Errorf("both fields render as Go field %q; the generated struct would not compile", path.GoName)
+	}
+	if strings.Join(pathOrder, ",") != "namePath" {
+		t.Errorf("pathOrder = %v, want [namePath]: pathOrder indexes fields by JSON name, so it must carry the disambiguated one", pathOrder)
 	}
 }
