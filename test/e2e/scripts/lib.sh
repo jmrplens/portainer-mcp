@@ -89,33 +89,58 @@ licence_lock_resolve_command() {
 # distinction, so the operator decides, and `make e2e-licence-release`
 # (licence-check.sh) is the one path allowed to actually remove a lock it did
 # not itself just take, because that path first confirms -- via a live
-# attach-then-release round trip -- that nothing genuinely holds the licence
-# any more, rather than inferring it from a process list that can be wrong.
+# attach-then-release round trip, AND its own check of whether the recorded
+# holder still looks running -- that nothing genuinely holds the licence any
+# more, rather than inferring it from a process list alone.
+#
+# The write is attempted FIRST, under `set -o noclobber`, rather than tested
+# with a separate `[[ -f ]]` and written afterward: noclobber's ">" opens
+# with O_EXCL, so the existence check and the write are one atomic kernel
+# call. Two runs racing to take the lock at the same instant cannot both see
+# "absent" and both proceed to write -- the loser's redirection fails
+# outright instead of silently overwriting the winner's file, which a
+# test-then-write pair, however narrow the window, cannot promise. noclobber
+# is scoped to the subshell below so it never leaks into the caller's own
+# shell options.
 take_licence_lock() {
-    local repo_root="$1" leg="$2" lock_path
+    local repo_root="$1" leg="$2" lock_path estate_file
     lock_path=$(licence_lock_path "$repo_root")
+    estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
 
-    if [[ -f "$lock_path" ]]; then
-        local holder taken_at holder_estate resolve_cmd
-        holder=$(grep -E '^HOLDER=' "$lock_path" | head -n1 | cut -d= -f2-)
-        taken_at=$(grep -E '^TAKEN_AT=' "$lock_path" | head -n1 | cut -d= -f2-)
-        holder_estate=$(grep -E '^ESTATE=' "$lock_path" | head -n1 | cut -d= -f2-)
-        resolve_cmd=$(licence_lock_resolve_command "$holder")
-
-        if licence_lock_holder_running "$holder"; then
-            echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
-        else
-            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
-        fi
-        return 1
+    if (
+        set -o noclobber
+        {
+            echo "HOLDER=$leg"
+            echo "TAKEN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "ESTATE=$estate_file"
+        } > "$lock_path"
+    ) 2>/dev/null; then
+        return 0
     fi
 
-    local estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
-    {
-        echo "HOLDER=$leg"
-        echo "TAKEN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        echo "ESTATE=$estate_file"
-    } > "$lock_path"
+    # The write above failed. Overwhelmingly that means the lock already
+    # exists -- the ordinary refusal below -- though the identical failure
+    # would also occur if $lock_path's directory were unwritable for some
+    # other reason; this function cannot tell the two apart, and neither
+    # could the `[[ -f ]]` test this replaces (the file existing right up
+    # until immediately before the write is exactly the read that test
+    # performed). The three fields are read with "|| true": a lock file that
+    # exists but is missing or blank on one line (reachable only via a write
+    # interrupted mid-way) must not make this whole function -- and the
+    # caller's `set -e` script -- abort on a grep that legitimately found no
+    # match, the same reason read_env_var's own pipeline ends the same way.
+    local holder taken_at holder_estate resolve_cmd
+    holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    taken_at=$(grep -E '^TAKEN_AT=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    holder_estate=$(grep -E '^ESTATE=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    resolve_cmd=$(licence_lock_resolve_command "$holder")
+
+    if licence_lock_holder_running "$holder"; then
+        echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
+    else
+        echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
+    fi
+    return 1
 }
 
 # release_licence_lock removes the lock this leg took, and is itself
@@ -137,8 +162,11 @@ release_licence_lock() {
         return 0
     fi
 
+    # "|| true": see take_licence_lock's own doc -- a lock file that exists
+    # but has a missing or blank HOLDER line (an interrupted write) must read
+    # as holder="" here, never abort this function outright.
     local holder
-    holder=$(grep -E '^HOLDER=' "$lock_path" | head -n1 | cut -d= -f2-)
+    holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
     if [[ "$holder" != "$leg" ]]; then
         echo "warning: licence lock at $lock_path is held by '$holder', not '$leg'; leaving it in place" >&2
         return 0
@@ -266,9 +294,14 @@ recorded_docker_host() {
 # to use. Absence of an existing marker is never a mismatch -- it means no
 # earlier run recorded anything for this leg, so the first run (local or
 # remote) is always free to proceed and record. Re-running against the SAME
-# destination an existing marker already names is also not a mismatch: up.sh's
-# own doc says it is idempotent, and a second `make e2e-up-remote` against the
-# same host is exactly that, not a host switch.
+# destination an existing marker already names is also not a mismatch: this
+# guard's own job is telling a host SWITCH apart from a same-destination
+# re-run, and a second `make e2e-up-remote` against the same host is the
+# latter, not the former -- regardless of whether that re-run goes on to
+# succeed. up.sh's own header now qualifies its "idempotent" claim to
+# Community Edition only: a licensed re-run can still refuse a moment later,
+# at take_licence_lock, for an entirely different reason (the licence, not
+# the host) than anything this function checks.
 #
 # Call this before record_docker_host, never after: record_docker_host with an
 # empty destination DELETES the marker (see its own doc), and up.sh/k3d-up.sh

@@ -46,16 +46,33 @@ PORTAINER_E2E_LICENCE="$licence" \
 # recovers from: a run that crashed mid-suite can leave both a stranded
 # licence AND a lock naming a leg that is no longer running. Clearing only
 # the licence would leave the next `make e2e-up` refusing for a licence that
-# the round trip above just confirmed is free. Removed directly here, rather
-# than through release_licence_lock's holder-match check, because this
-# script -- unlike take_licence_lock's own refusal path -- has just proven
-# by a live attach-then-release that nothing genuinely holds the licence any
-# more, which is the one condition under which deleting a lock outright is
-# safe.
+# is now free.
+#
+# The round trip above does NOT, by itself, prove that: harness.ApplyLicence
+# returns a conflicting activation as DATA (a warning logged by
+# logConflictingKeys), never as a failure, so attaching the licence to this
+# throwaway server would succeed even while some other server -- including
+# the real estate this lock is supposed to be protecting -- still holds it
+# too. And the post-release GET /licenses check afterward only reads back
+# THIS throwaway server; it says nothing about any other. So the lock is
+# still only cleared once its own recorded holder does not actually look
+# like it is running -- the identical check take_licence_lock's own refusal
+# path uses, in the direction where being wrong is harmless (leaving a lock
+# in place costs an extra manual look; deleting a live leg's lock is the
+# accident this whole task exists to prevent). This also protects against
+# DOCKER_HOST pointing at the wrong daemon when this script happens to run
+# with a stale export from an unrelated remote session: if that made the
+# holder look absent when it is not, this still only warns rather than
+# deletes.
 lock_path=$(licence_lock_path "$repo_root")
 if [[ -f "$lock_path" ]]; then
-    rm -f "$lock_path"
-    echo "cleared the stale licence lock at $lock_path" >&2
+    lock_holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    if licence_lock_holder_running "$lock_holder"; then
+        echo "warning: $lock_path still names '$lock_holder', and '$lock_holder' appears to be running right now; leaving the lock in place rather than risk clearing a leg that is genuinely still using the licence. If you are certain it is stale, remove it by hand: rm -f $lock_path" >&2
+    else
+        rm -f "$lock_path"
+        echo "cleared the stale licence lock at $lock_path" >&2
+    fi
 fi
 
 echo "licence recovery complete: safe to run make e2e-up again" >&2

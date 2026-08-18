@@ -336,6 +336,252 @@ func runLib(t *testing.T, script string) (string, error) {
 	return string(out), err
 }
 
+// licenceLockPath mirrors licence_lock_path's own construction (repo_root +
+// "/test/e2e/.licence.lock"), so a test can read or stat the lock file
+// directly without sourcing lib.sh a second time just to ask it for the
+// path.
+func licenceLockPath(repoRoot string) string {
+	return filepath.Join(repoRoot, "test", "e2e", ".licence.lock")
+}
+
+// licenceLockRepoRoot returns a fresh temporary directory shaped the way
+// every real caller's repo root already is: with test/e2e/ present, so
+// take_licence_lock's own ">" write has somewhere to land. Every real
+// invocation runs from inside an actual checkout, where that directory is
+// simply part of the repository and always exists; a bare t.TempDir() does
+// not have it, and take_licence_lock's atomic write then fails for a reason
+// that has nothing to do with the lock itself (a missing parent directory,
+// not an existing file) -- its own doc says as much: that failure is
+// indistinguishable from "already locked" from inside the function, which is
+// exactly why the test fixture must not manufacture it by accident.
+func licenceLockRepoRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "test", "e2e"), 0o755); err != nil {
+		t.Fatalf("creating test/e2e under the fixture repo root: %v", err)
+	}
+	return root
+}
+
+// licenceLockDockerStub writes a stub `docker` binary onto PATH that answers
+// licence_lock_holder_running's own `docker ps --filter
+// label=com.docker.compose.project=portainer-mcp-e2e ...` call, so these
+// tests never depend on what containers actually exist on the machine
+// running `go test` -- exactly the ambient-state problem
+// licence_lock_holder_running's own doc names as the reason it matches on
+// the compose project label rather than a container name substring. Mirrors
+// dockerSwarmStub's technique above.
+func licenceLockDockerStub(t *testing.T, dir string, running bool) {
+	t.Helper()
+	answer := ""
+	if running {
+		answer = "echo portainer-mcp-e2e-portainer-ce-1"
+	}
+	body := "#!/usr/bin/env bash\n" +
+		"case \"$*\" in\n" +
+		"    *'com.docker.compose.project=portainer-mcp-e2e'*)\n" +
+		"        " + answer + "\n" +
+		"        ;;\n" +
+		"    *)\n" +
+		"        echo \"unexpected docker invocation: $*\" >&2\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+}
+
+// licenceLockK3DStub mirrors licenceLockDockerStub for the Kubernetes leg's
+// own `k3d cluster list -o json` check.
+func licenceLockK3DStub(t *testing.T, dir string, running bool) {
+	t.Helper()
+	list := "[]"
+	if running {
+		list = `[{"name":"portainer-mcp-e2e"}]`
+	}
+	body := "#!/usr/bin/env bash\n" +
+		"case \"$*\" in\n" +
+		"    *'cluster list -o json'*)\n" +
+		"        echo '" + list + "'\n" +
+		"        ;;\n" +
+		"    *)\n" +
+		"        echo \"unexpected k3d invocation: $*\" >&2\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "k3d"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing k3d stub: %v", err)
+	}
+}
+
+// TestUnit_LicenceLockHolderRunning_MatchesEachLegsOwnSignal proves both
+// branches licence_lock_holder_running switches on -- the compose leg's
+// compose-project label filter and the Kubernetes leg's k3d cluster name --
+// each independently, in both directions, with the real docker/k3d binaries
+// never consulted.
+func TestUnit_LicenceLockHolderRunning_MatchesEachLegsOwnSignal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		leg     string
+		running bool
+	}{
+		{"compose running", "compose", true},
+		{"compose not running", "compose", false},
+		{"kubernetes running", "kubernetes", true},
+		{"kubernetes not running", "kubernetes", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			licenceLockDockerStub(t, dir, tc.running)
+			licenceLockK3DStub(t, dir, tc.running)
+			script := "PATH=" + dir + ":$PATH\nlicence_lock_holder_running " + tc.leg
+			_, err := runLib(t, script)
+			if tc.running && err != nil {
+				t.Errorf("licence_lock_holder_running(%q) with the holder running failed: %v", tc.leg, err)
+			}
+			if !tc.running && err == nil {
+				t.Errorf("licence_lock_holder_running(%q) with the holder absent succeeded; want a non-zero exit", tc.leg)
+			}
+		})
+	}
+}
+
+// TestUnit_TakeLicenceLock_FirstCallWritesHolderTakenAtAndEstate is the
+// success path: with no existing lock, take_licence_lock must record all
+// three fields the refusal message (and licence-check.sh's staleness check)
+// both depend on.
+func TestUnit_TakeLicenceLock_FirstCallWritesHolderTakenAtAndEstate(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("take_licence_lock on an unlocked repo failed: %v", err)
+	}
+	data, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("reading the lock file: %v", err)
+	}
+	for _, want := range []string{"HOLDER=compose", "TAKEN_AT=", "ESTATE="} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("lock file missing %q; content:\n%s", want, data)
+		}
+	}
+}
+
+// TestUnit_TakeLicenceLock_SecondCallRefusesWhileHolderIsRunning is the
+// guard's whole reason to exist: a second leg must not be able to take the
+// lock while the first leg is still using it, and the refusal must name the
+// running holder rather than report it as merely stale.
+func TestUnit_TakeLicenceLock_SecondCallRefusesWhileHolderIsRunning(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, true)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"take_licence_lock " + repoRoot + " compose\n" +
+		"take_licence_lock " + repoRoot + " compose"
+	out, err := runLib(t, script)
+	if err == nil {
+		t.Fatalf("second take_licence_lock call succeeded; want a non-zero exit. output:\n%s", out)
+	}
+	if !strings.Contains(out, "already held by 'compose'") {
+		t.Errorf("refusal did not name the running holder; output:\n%s", out)
+	}
+}
+
+// TestUnit_TakeLicenceLock_StaleHolderRefusesAndLeavesTheLockOnDisk is Step
+// 2's central rule, proven at the function level: a lock naming a leg that
+// is not actually running must still refuse -- never silently clear itself
+// -- and the refusal must point at `make e2e-licence-release` rather than
+// any command that deletes the lock outright.
+func TestUnit_TakeLicenceLock_StaleHolderRefusesAndLeavesTheLockOnDisk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	// The first take below succeeds with no docker/k3d call at all (there is
+	// no existing lock yet to check a holder against); this stub only has to
+	// answer for the SECOND call, which evaluates licence_lock_holder_running
+	// against the lock the first call just wrote.
+	licenceLockDockerStub(t, dir, false)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"take_licence_lock " + repoRoot + " compose\n" +
+		"take_licence_lock " + repoRoot + " compose"
+	out, err := runLib(t, script)
+	if err == nil {
+		t.Fatalf("take_licence_lock against a stale holder succeeded; want a non-zero exit. output:\n%s", out)
+	}
+	if !strings.Contains(out, "stale") || !strings.Contains(out, "make e2e-licence-release") {
+		t.Errorf("stale refusal missing the expected diagnostic; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); err != nil {
+		t.Errorf("stale refusal removed the lock file; it must be reported, never auto-removed: %v", err)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_ToleratesAnAbsentLock is Ruling 1's central
+// case: the very first `make e2e-down` on a machine where a lock was never
+// taken (this task did not exist yet, or a Community-only run never created
+// one) must warn and succeed, never fail teardown.
+func TestUnit_ReleaseLicenceLock_ToleratesAnAbsentLock(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	out, err := runLib(t, `release_licence_lock `+repoRoot+` compose`)
+	if err != nil {
+		t.Fatalf("release_licence_lock against an absent lock failed; want success: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning:") {
+		t.Errorf("release_licence_lock against an absent lock did not warn; output:\n%s", out)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_LeavesAForeignHolderInPlace proves a leg's own
+// teardown can never remove a lock it does not own: down.sh releasing the
+// compose leg's lock must not be able to clear one the Kubernetes leg
+// holds, or vice versa.
+func TestUnit_ReleaseLicenceLock_LeavesAForeignHolderInPlace(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` kubernetes`); err != nil {
+		t.Fatalf("setup: take_licence_lock failed: %v", err)
+	}
+	before, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("reading the lock file after setup: %v", err)
+	}
+	out, err := runLib(t, `release_licence_lock `+repoRoot+` compose`)
+	if err != nil {
+		t.Fatalf("release_licence_lock against a foreign holder failed; want a warned success: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning:") {
+		t.Errorf("release_licence_lock against a foreign holder did not warn; output:\n%s", out)
+	}
+	after, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("lock file removed by a release call for a leg that does not own it: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("lock file content changed by a foreign release; before:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_RemovesItsOwn is the ordinary teardown path:
+// the leg that took the lock is the one releasing it.
+func TestUnit_ReleaseLicenceLock_RemovesItsOwn(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("setup: take_licence_lock failed: %v", err)
+	}
+	if _, err := runLib(t, `release_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("release_licence_lock for the owning leg failed: %v", err)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); !os.IsNotExist(err) {
+		t.Errorf("lock file still present after its own leg released it: err=%v", err)
+	}
+}
+
 func TestUnit_OnDockerHost_EmptyDestinationRunsLocally(t *testing.T) {
 	t.Parallel()
 	got := strings.TrimRight(sourceLib(t, `on_docker_host "" 'echo ran-locally'`), "\n")

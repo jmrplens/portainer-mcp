@@ -113,25 +113,37 @@ was brought up by something other than the matching `-remote` target.
 
 ## One Business Edition licence at a time
 
-`GET /api/licenses` on this estate's key reports `nodes: 3` and
-`multiuseInstancesCount: 0` — a single-use licence good for three nodes at
-once. The estate's own provisioning already spends two of those on the
-compose leg alone (`agents: 1`, `edgeAgents: 1`), leaving exactly one node of
-headroom. Both the compose leg (`up.sh`) and the Kubernetes leg (`k3d-up.sh`)
-read the SAME key out of the same gitignored `.env`, and both give it back on
+`GET /api/licenses` on this estate's key reports `nodes: 3` — a licence good
+for three nodes. `GET /api/system/nodes` on the compose leg's own server
+(measured live, 2026-08-18) reports `2`: the compose estate's own
+provisioning already consumes two of the three nodes by itself. The
+Kubernetes leg is created with `--agents 1` (`k3d-up.sh`), two more nodes.
+Both legs running at once is therefore 4 nodes against an allowance of 3 —
+over the limit on node count alone. This does not rest on
+`multiuseInstancesCount` (also measured `0` on this estate): that counter is
+read the opposite way in `plan/carry-forward.md`'s own nine-cycle
+measurement, where it never moved across nine up/down cycles and so does not
+seem to be counted per instance at all — contested, and not needed to make
+the case above, so this checklist does not lean on it. Both legs read the
+SAME key out of the same gitignored `.env`, and both give it back on
 teardown (`down.sh`, `k3d-down.sh`). Two failure modes both happened for real
 on 2026-08-18: activating the licence on both legs at once, and tearing one
 leg down — releasing the licence — while the other leg was still using it.
 
-The rule: **bring one leg down before bringing the other up.** `test/e2e/
-scripts/lib.sh`'s `take_licence_lock`/`release_licence_lock` enforce this —
-`up.sh` and `k3d-up.sh` take a lock (`test/e2e/.licence.lock`) before
-activating anything, and a second leg's `up` refuses, naming the leg already
-holding it, when it was taken, and the exact command (`make e2e-down` or
-`make e2e-k8s-down`) that frees it. A lock that names a leg no longer running
-is reported as stale, never auto-removed; `make e2e-licence-release`
-(`licence-check.sh`) clears both the stranded licence and the stale lock
-together. The lock is only a guard, though — the licence's own one-instance
+The rule: **bring one leg down before bringing the other up — including
+re-running the SAME leg.** A second `up.sh` (or `k3d-up.sh`) now refuses
+exactly like the other leg's would, while its own first run's lock is still
+held: the licence has to be freed with a teardown, not simply rerun over.
+`test/e2e/scripts/lib.sh`'s `take_licence_lock`/`release_licence_lock`
+enforce this — `up.sh` and `k3d-up.sh` take a lock
+(`test/e2e/.licence.lock`) before activating anything, and a second leg's
+`up` refuses, naming the leg already holding it, when it was taken, and the
+exact command (`make e2e-down` or `make e2e-k8s-down`) that frees it. A lock
+that names a leg no longer running is reported as stale, never
+auto-removed; `make e2e-licence-release` (`licence-check.sh`) clears both
+the stranded licence and the stale lock together, but only once it has
+confirmed the recorded holder does not actually look like it is still
+running. The lock is only a guard, though — the licence's own one-instance
 limit is the real constraint underneath it, and holds regardless of whether
 the lock is in place.
 
