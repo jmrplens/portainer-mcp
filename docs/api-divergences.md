@@ -1206,11 +1206,24 @@ group on both editions:
 Community does not send `Policies` as `null` or `[]` — the key is **absent**
 from the JSON object outright, on both the list and the single-group route.
 Business sends `"Policies":[]`, honouring the schema's own `required` array.
-This is the same class of asymmetry as §5's four lossy schemas above, found
-by probing rather than by the schema diff those four were found from: the
-`required` array is identical text in both vendored documents (the schema
-itself is shared), so nothing in either document predicts that one edition
-would honour it and the other silently would not.
+
+Unlike §5's four lossy schemas above, this is not one shared schema Business
+extends and Community truncates: **the two documents declare two different
+schemas whose type names differ only in the case of their first letter.**
+Community's is `endpointgroups.EndpointGroupResponse` — capital `E` —
+`required: ["Description", "Id", "Name"]`, with no `Policies` property at
+all, declared or undeclared. Business's is
+`endpointgroups.endpointGroupResponse` — lowercase `e` — with `Policies`
+both declared and required (both read directly from their respective
+vendored documents). Community's own document predicts Community's
+behaviour exactly; there is no `required`-vs-actual disagreement *within*
+either document, only *between* the two documents' differently-cased,
+differently-shaped types for what the live API treats as one and the same
+response. This is plausibly why a name-keyed schema diff — the kind that
+already found the four lossy schemas above — never surfaced it: comparing
+schemas by exact name treats `EndpointGroupResponse` and
+`endpointGroupResponse` as two unrelated types, never as one shared schema
+differing between editions.
 
 **Why this does not touch this domain's code.** Every `endpoint_groups`
 Input struct is built from a request body or a path/query parameter, never
@@ -1219,9 +1232,10 @@ unmodified, whatever shape that happens to be, and the MCP transport encodes
 it as JSON same as any other value. A Community caller reading the list
 simply sees no `Policies` field for any group; nothing decodes the response
 into a Go struct that would need the field to exist. Recorded here because a
-later domain reading `endpointgroups.endpointGroupResponse` — or a
-contributor relying on the schema's own `required` array to mean what it
-says — could not otherwise learn that Community does not honour it.
+later domain reading `endpointgroups.endpointGroupResponse`, or a
+contributor whose tooling normalises schema names by case and so treats the
+two editions' types as one, could not otherwise learn that Community's own,
+differently-cased schema declares no `Policies` property at all.
 
 ## 6. Defects in the vendored document itself
 

@@ -165,6 +165,15 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Handler:     endpointGroupDelete,
 			Input:       endpointGroupDeleteInput{},
 		}, narrative("EndpointGroupDelete")),
+		// EndpointGroupDeleteEndpoint's vendored description ("Removes
+		// environment(endpoint) from an environment(endpoint) group",
+		// verbatim above) carries no detail beyond its own title in either
+		// document — this scaffold run flagged it under its weak-description
+		// warnings — so narrative("EndpointGroupDeleteEndpoint")'s
+		// Description is the only account of the move-not-delete behaviour
+		// that reaches a model; see that switch case for what it says and
+		// docs/domain-wave-checklist.md Step 4 for why it is measured rather
+		// than assumed.
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "endpoint_groups.delete_endpoint", Domain: "endpoint_groups", OperationID: "EndpointGroupDeleteEndpoint",
 			Title:       "Removes environment(endpoint) from an environment(endpoint) group",
@@ -190,6 +199,24 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Description: "Update an environment(endpoint) group.",
 			Edition:     edition.CE,
 			Mutating:    true,
+			// Destructive, hand-set (the verb rule leaves PUT non-destructive
+			// by default): associatedEndpoints, when supplied, REPLACES the
+			// group's membership outright rather than adding to it — measured
+			// against a live server (see the narrative). A caller who passes
+			// a partial list silently evicts every unlisted member back to
+			// group 1, discarding whatever access policies or tags it
+			// inherited here, with no error and no confirmation. That is a
+			// real, easily-triggered loss of effect, not merely a delete of
+			// the group object itself (which this operation does not do) —
+			// the same reasoning internal/tools/endpoints/endpoints.go
+			// applies to EndpointAssociationDelete, extended to a state
+			// change that is reversible in principle but not signalled at
+			// all otherwise. It is still Idempotent: the request's
+			// associatedEndpoints fully determines the resulting membership,
+			// so a repeated identical call converges to the same state — see
+			// internal/wiring/idempotency_roster_test.go's
+			// destructiveAndIdempotent roster for the entry this requires.
+			Destructive: true,
 			Idempotent:  true,
 			Handler:     endpointGroupUpdate,
 			Input:       endpointGroupUpdateInput{},
