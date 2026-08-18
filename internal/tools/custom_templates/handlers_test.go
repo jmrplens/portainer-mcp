@@ -87,10 +87,13 @@ const (
 		"variables": "[{\"name\":\"PORT\",\"defaultValue\":\"8080\"}]"
 	}`
 
+	// minimalCreateFileInput carries only what the SERVER requires, which is
+	// not what the vendored document's required array lists: Note is in that
+	// array and was measured omissible on both editions (§3.7), so it belongs
+	// with the optional parts below rather than here.
 	minimalCreateFileInput = `{
 		"title": "uploaded-stack",
 		"description": "a git-backed template",
-		"note": "deploys nginx",
 		"platform": 1,
 		"type": 2,
 		"file": "services: {}"
@@ -242,16 +245,16 @@ func TestUnit_CreateFileRequestWithoutTheOptionalFields_OmitsThoseParts(t *testi
 		t.Fatal("the server could not parse the body as a multipart form")
 	}
 
-	for _, name := range []string{"Logo", "EdgeSettings", "EdgeTemplate", "Variables"} {
+	for _, name := range []string{"Note", "Logo", "EdgeSettings", "EdgeTemplate", "Variables"} {
 		t.Run(name, func(t *testing.T) {
 			if got, ok := captured.form.Value[name]; ok {
 				t.Errorf("%s was not supplied but the body carries it as %q", name, got)
 			}
 		})
 	}
-	// The six required parts are still there: an implementation that emitted
-	// nothing at all would pass every assertion above.
-	for _, name := range []string{"Title", "Description", "Note", "Platform", "Type"} {
+	// The parts the server does require are still there: an implementation
+	// that emitted nothing at all would pass every assertion above.
+	for _, name := range []string{"Title", "Description", "Platform", "Type"} {
 		if _, ok := captured.form.Value[name]; !ok {
 			t.Errorf("required part %s is missing; parts sent: %v", name, partNames(captured.form))
 		}

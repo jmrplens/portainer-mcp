@@ -631,18 +631,19 @@ never probed, and inferring a requirement onto an unmeasured route is how a
 schema starts lying in the other direction.
 
 `Note` on `POST /custom_templates/create/file` was measured later than the
-other two rows (2026-08-18, wave 1 stage B task 7) and is recorded here
-**uncorrected**, unlike them. The reasoning is not that it matters less but
-that it fails differently: an over-required field can never produce a server
-error, only a local refusal, so the cost is a caller with nothing to note
-being made to invent one — irritating, and invisible in any log. Correcting
-it means turning `Note` optional in `customTemplateCreateFileInput`, teaching
-the hand-written multipart handler to omit the part when unset (its sibling
-optional fields already go through `OptionalField`), and adding a dated
-allow-list entry. That is a change to the shipped surface, so it is left as
-a decision rather than folded into the task that measured it; the field's own
-doc comment in `inputs.go` says the requirement was published unmeasured, and
-this row is the measurement it was waiting for.
+other two rows (2026-08-18, wave 1 stage B task 7), recorded uncorrected at
+the time because correcting it changes the shipped surface, and **corrected
+separately once that decision was taken**. `Note` is now `*string` with
+`omitempty` in `customTemplateCreateFileInput`, the hand-written multipart
+handler emits it through `OptionalField` beside its sibling optionals, and
+the allow-list carries a dated entry for
+`(CustomTemplateCreateFile, note)`.
+
+It is worth recording how this one fails, because it is quieter than the
+other two and that is what delayed it: an over-required field can never
+produce a server error, only a local refusal from
+`toolutil.ActionSpec.ValidateInput`. The cost was a caller with nothing to
+note being made to invent one — irritating, and invisible in every log.
 
 Related: the inline repository fields (`RepositoryURL`,
 `RepositoryUsername`, `RepositoryPassword`, `RepositoryAuthentication`,

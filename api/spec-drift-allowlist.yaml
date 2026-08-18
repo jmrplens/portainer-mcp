@@ -60,13 +60,14 @@
 # TitleOverridden/DescriptionOverridden's mechanism above does not apply to
 # them at all. See docs/api-divergences.md §6.3 for the full measurement.
 #
-# The seven custom_templates entries after those three arrived with wave 1
+# The eight custom_templates entries after those three arrived with wave 1
 # stage B. Six landed in the commit that registered the domain (a divergence
 # entry added before its domain is registered matches nothing and is
 # reported stale, which is itself a build error); the seventh followed once
-# the estate was up and the enum below was measured. They are three kinds:
+# the estate was up and the enum below was measured, and the eighth once the
+# decision to correct Note's requiredness was taken. They are three kinds:
 #
-#   - three "requiredness" entries, where a live 2.44.0 was measured
+#   - four "requiredness" entries, where a live 2.44.0 was measured
 #     enforcing a required array different from the vendored one in both
 #     directions. This matters more than a documentation defect normally
 #     would because toolutil.ActionSpec.ValidateInput enforces
@@ -225,4 +226,19 @@
     docs/api-divergences.md §6.5 insisted on before this could be widened,
     and that section prescribed exactly this entry on exactly this
     measurement.
+  added: 2026-08-18
+
+- operation_id: CustomTemplateCreateFile
+  field: note
+  reason: >-
+    Measured 2026-08-18 against a live 2.44.0, Community and Business Edition
+    alike: a multipart body with no Note part at all answers 200, and the
+    template comes back with "Note":"". The vendored document lists Note in
+    this route's required array and lists it optional on both JSON create
+    routes, so it is wrong here and right two routes away. Published optional
+    to match the server, for the same reason as the Platform and SourceID
+    entries above: toolutil.ActionSpec.ValidateInput enforces required-ness
+    locally, before the handler runs, so publishing the document's array
+    verbatim would make this catalog refuse a request Portainer accepts. See
+    docs/api-divergences.md §3.7.
   added: 2026-08-18

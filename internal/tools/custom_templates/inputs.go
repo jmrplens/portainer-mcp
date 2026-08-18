@@ -543,12 +543,15 @@ type customTemplateUpdateInputVariablesItem struct {
 // isGating fires on any ChangeDescription with a non-empty Before and,
 // unlike the $title/$description kinds, does not consult AfterOverridden.
 //
-// Note is required here and optional on both JSON creates. That is what the
-// vendored specification says, and it was later measured wrong: the server
-// accepts the route with the Note part omitted (docs/api-divergences.md
-// §3.7). The shape is published verbatim all the same — relaxing it changes
-// this hand-written multipart handler's input and deserves its own change,
-// not a side effect of the wave that happened to measure it.
+// Note is listed required for this route in the vendored specification and
+// optional on both JSON creates. The specification is wrong: a multipart
+// body with no Note part at all answers 200 on Community and Business
+// Edition alike, and the template comes back with "Note":"" — measured
+// 2026-08-18, docs/api-divergences.md §3.7. It is published optional here to
+// match, for the same reason Platform and SourceID are on the JSON creates:
+// toolutil.ActionSpec.ValidateInput enforces required-ness locally, before
+// the handler runs, so publishing the document's array verbatim would refuse
+// a request the server accepts.
 type customTemplateCreateFileInput struct {
 	// Description Description of the template
 	Description string `json:"description" jsonschema:"Description of the template"`
@@ -578,9 +581,11 @@ type customTemplateCreateFileInput struct {
 	Logo *string `json:"logo,omitempty" jsonschema:"URL of the template's logo"`
 	// Note A note that will be displayed in the UI. Supports HTML content
 	//
-	// Required on this route, optional on both JSON creates. Published as
-	// the specification declares it; see this type's own doc comment.
-	Note string `json:"note" jsonschema:"A note that will be displayed in the UI. Supports HTML content"`
+	// Listed required for this route and optional on both JSON creates. The
+	// server was measured accepting a body with no Note part at all, on both
+	// editions, so it is published optional here; see this type's own doc
+	// comment and docs/api-divergences.md §3.7.
+	Note *string `json:"note,omitempty" jsonschema:"A note that will be displayed in the UI. Supports HTML content"`
 	// Platform Platform associated to the template (1 - 'linux', 2 - 'windows')
 	Platform int `json:"platform" jsonschema:"Platform associated to the template (1 - 'linux', 2 - 'windows')"`
 	// Title Title of the template
