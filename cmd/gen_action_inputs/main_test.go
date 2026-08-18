@@ -257,7 +257,7 @@ func TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec(t *testing.T) {
 // that the two refusals stay two different kinds. Before internal/specnaming,
 // StackMigrate refused earlier, in assembleOperationFields, and never reached
 // the credential check at all; now it does, and without that stub both of
-// this test'"'"'s refusals would be credential-shaped and the "two different
+// this test's refusals would be credential-shaped and the "two different
 // reasons" premise would be quietly false while every assertion still
 // passed.
 //
@@ -293,7 +293,7 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 	if err := os.MkdirAll(filepath.Join(toolsDir, "stacks"), 0o750); err != nil {
 		t.Fatalf("mkdir stacks: %v", err)
 	}
-	// See this test'"'"'s doc comment: the one hand-written declaration this
+	// See this test's doc comment: the one hand-written declaration this
 	// domain gets, so StackMigrate reaches buildHandlerSpec instead of
 	// stopping at the credential check the way its 14 siblings do.
 	handWritten := "package stacks\n\nfunc redactStackMigrate(v any) any { return v }\n"

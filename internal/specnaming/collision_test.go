@@ -219,14 +219,15 @@ func TestUnit_Qualify_AppendsTheOriginInLowerCamelCase(t *testing.T) {
 		{"namespace", specnaming.OriginPath, "namespacePath"},
 		{"token", specnaming.OriginHeader, "tokenHeader"},
 	} {
-		got, err := specnaming.Qualify(tc.name, tc.origin)
-		if err != nil {
-			t.Errorf("Qualify(%q, %q) error = %v", tc.name, tc.origin, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("Qualify(%q, %q) = %q, want %q", tc.name, tc.origin, got, tc.want)
-		}
+		t.Run(tc.name+"/"+tc.origin, func(t *testing.T) {
+			got, err := specnaming.Qualify(tc.name, tc.origin)
+			if err != nil {
+				t.Fatalf("Qualify(%q, %q) error = %v", tc.name, tc.origin, err)
+			}
+			if got != tc.want {
+				t.Errorf("Qualify(%q, %q) = %q, want %q", tc.name, tc.origin, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -240,9 +241,11 @@ func TestUnit_Qualify_RefusesWhatItCannotQualify(t *testing.T) {
 		{"", specnaming.OriginQuery},
 		{"namespace", "body"},
 	} {
-		if got, err := specnaming.Qualify(tc.name, tc.origin); err == nil {
-			t.Errorf("Qualify(%q, %q) = %q, error = nil; want a refusal", tc.name, tc.origin, got)
-		}
+		t.Run(tc.name+"/"+string(tc.origin), func(t *testing.T) {
+			if got, err := specnaming.Qualify(tc.name, tc.origin); err == nil {
+				t.Errorf("Qualify(%q, %q) = %q, error = nil; want a refusal", tc.name, tc.origin, got)
+			}
+		})
 	}
 }
 
