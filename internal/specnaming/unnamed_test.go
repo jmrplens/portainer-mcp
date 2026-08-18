@@ -1,6 +1,7 @@
 package specnaming_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jmrplens/portainer-mcp/internal/specnaming"
@@ -94,14 +95,23 @@ func TestUnit_SyntheticOperationID_TableDrivenLookup_NamesOnlyTheNameless(t *tes
 	}
 }
 
-// TestUnit_SyntheticOperationIDs_EveryEntry_IsResolvableAndSorted checks the
-// listing accessor against the lookup it lists. The two are separate code
-// paths over the same map, and a listing that reported a row
-// SyntheticOperationID does not answer for — a stale method casing, say —
-// would make the honesty checks built on top of it (cmd/audit_1to1's check
-// that no entry names a route the vendored documents already name) assert
-// something about a row nothing else consults.
-func TestUnit_SyntheticOperationIDs_EveryEntry_IsResolvableAndSorted(t *testing.T) {
+// TestUnit_SyntheticOperationIDs_EveryEntry_IsResolvableSortedAndReasoned
+// checks the listing accessor against the lookup it lists, and checks that
+// every row states why it exists.
+//
+// The two accessors are separate code paths over the same map, and a listing
+// that reported a row SyntheticOperationID does not answer for — a stale
+// method casing, say — would make the honesty checks built on top of it
+// (cmd/audit_1to1's check that no entry names a route the vendored documents
+// already name) assert something about a row nothing else consults.
+//
+// The Reason assertion is what makes this table's doc comment true rather
+// than aspirational. It promises that an entry is a decision somebody wrote
+// down, and cmd/audit_1to1 refuses an allow-list entry with an empty reason
+// at parse time for the same reason: an unexplained standing exception is
+// one nobody can ever judge stale. A Go map literal has no parse step to
+// hook, so this test is where that guard lives.
+func TestUnit_SyntheticOperationIDs_EveryEntry_IsResolvableSortedAndReasoned(t *testing.T) {
 	t.Parallel()
 	entries := specnaming.SyntheticOperationIDs()
 	if len(entries) == 0 {
@@ -120,6 +130,10 @@ func TestUnit_SyntheticOperationIDs_EveryEntry_IsResolvableAndSorted(t *testing.
 		}
 		if e.OperationID == "" {
 			t.Errorf("SyntheticOperationIDs() row %+v names nothing", e)
+		}
+		if strings.TrimSpace(e.Reason) == "" {
+			t.Errorf("SyntheticOperationIDs() row %s %s -> %s states no Reason; this table only holds names somebody decided on and wrote down",
+				e.Method, e.Path, e.OperationID)
 		}
 	}
 }

@@ -116,11 +116,20 @@ func SyntheticOperationID(method, path string) (string, bool) {
 }
 
 // SyntheticEntry is one row of the table as SyntheticOperationIDs reports
-// it: the route, and the name this project gives it.
+// it: the route, the name this project gives it, and the judgement behind
+// that name.
+//
+// Reason is carried out of the package rather than kept private because a
+// promise nothing can read is a promise nothing can check. This table's own
+// doc comment says an entry is "a decision somebody made and wrote down";
+// cmd/audit_1to1 enforces exactly that for its allow-list, refusing an entry
+// with an empty reason at parse time (see allowlist.go), and an entry here
+// is the same kind of standing exception to the same kind of rule.
 type SyntheticEntry struct {
 	Method      string
 	Path        string
 	OperationID string
+	Reason      string
 }
 
 // SyntheticOperationIDs returns every row of the table, sorted by path then
@@ -135,7 +144,12 @@ type SyntheticEntry struct {
 func SyntheticOperationIDs() []SyntheticEntry {
 	out := make([]SyntheticEntry, 0, len(syntheticOperationIDs))
 	for key, entry := range syntheticOperationIDs {
-		out = append(out, SyntheticEntry{Method: key.Method, Path: key.Path, OperationID: entry.OperationID})
+		out = append(out, SyntheticEntry{
+			Method:      key.Method,
+			Path:        key.Path,
+			OperationID: entry.OperationID,
+			Reason:      entry.Reason,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Path != out[j].Path {

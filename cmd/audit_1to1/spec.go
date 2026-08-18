@@ -108,6 +108,10 @@ func parseSpecOperations(data []byte) (specDocument, error) {
 	}
 
 	ops := make(map[string]specOperation)
+	// How each name in ops was arrived at, phrased for the collision message
+	// below. Kept beside ops rather than on specOperation because it exists
+	// only to make one refusal readable, and nothing in the report needs it.
+	provenance := make(map[string]string)
 	var unnamed []unnamedOperation
 	for path, methods := range doc.Paths {
 		for method, raw := range methods {
@@ -127,6 +131,7 @@ func parseSpecOperations(data []byte) (specDocument, error) {
 				domain = op.Tags[0]
 			}
 			name := exportedName(op.OperationID)
+			origin := fmt.Sprintf("operationId %q in the document", op.OperationID)
 			if name == "" {
 				synthetic, ok := specnaming.SyntheticOperationID(method, path)
 				if !ok {
@@ -134,6 +139,7 @@ func parseSpecOperations(data []byte) (specDocument, error) {
 					continue
 				}
 				name = synthetic
+				origin = "named by internal/specnaming's table, the document leaving it unnamed"
 			}
 			// A synthetic name colliding with one the document publishes is
 			// caught here, by the check that was already guarding against a
@@ -142,14 +148,11 @@ func parseSpecOperations(data []byte) (specDocument, error) {
 			// entries collided with nothing when it was written, and this is
 			// what keeps that claim true against a future respec.
 			if existing, dup := ops[name]; dup {
-				declared := fmt.Sprintf("operationId %q", op.OperationID)
-				if op.OperationID == "" {
-					declared = "the name internal/specnaming's table gives this otherwise unnamed route"
-				}
-				return specDocument{}, fmt.Errorf(
-					"%s (exported %q) is declared for both %s %s and %s %s",
-					declared, name, existing.Method, existing.Path, strings.ToUpper(method), path)
+				return specDocument{}, collisionError(name,
+					routeOrigin{Method: existing.Method, Path: existing.Path, Origin: provenance[name]},
+					routeOrigin{Method: strings.ToUpper(method), Path: path, Origin: origin})
 			}
+			provenance[name] = origin
 			ops[name] = specOperation{
 				OperationID: name,
 				Method:      strings.ToUpper(method),
@@ -166,6 +169,40 @@ func parseSpecOperations(data []byte) (specDocument, error) {
 		return unnamed[i].Method < unnamed[j].Method
 	})
 	return specDocument{Operations: ops, Unnamed: unnamed}, nil
+}
+
+// routeOrigin is one side of a name collision: the route, and where its name
+// came from.
+type routeOrigin struct {
+	Method string
+	Path   string
+	Origin string
+}
+
+// collisionError reports two routes resolving to one exported operationId,
+// stating for each route where its name came from.
+//
+// The two sides are sorted rather than reported in the order they were met,
+// because the order they were met is Go's map iteration order over the
+// document's path items — random per run. An order-dependent message can
+// attribute a name to the wrong route, and this message exists precisely to
+// tell a published operationId apart from one internal/specnaming's table
+// supplied: getting that backwards would send a reader to remove the wrong
+// thing. Sorting also makes the failure reproducible, which is what lets a
+// test assert the whole message rather than just the id in it.
+func collisionError(name string, a, b routeOrigin) error {
+	sides := []routeOrigin{a, b}
+	sort.Slice(sides, func(i, j int) bool {
+		if sides[i].Path != sides[j].Path {
+			return sides[i].Path < sides[j].Path
+		}
+		return sides[i].Method < sides[j].Method
+	})
+	return fmt.Errorf(
+		"two routes resolve to the exported operationId %q: %s %s (%s) and %s %s (%s)",
+		name,
+		sides[0].Method, sides[0].Path, sides[0].Origin,
+		sides[1].Method, sides[1].Path, sides[1].Origin)
 }
 
 // exportedName converts a raw OpenAPI operationId (e.g. "systemStatus") into

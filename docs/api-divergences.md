@@ -1301,14 +1301,21 @@ un-blocks in advance — `endpoint_groups`, `edge_agent`, `webhooks`,
 The one operation borrowing cannot help is `GET /endpoint_groups/{id}`, which
 *neither* edition names: there is nothing to borrow.
 
-**Named where a name exists.** *Measured 2026-08-18 (wave 2 stage A, task 8),
-against a live Community and a live Business server.* `GET
-/endpoint_groups/{id}` answers **200 on both editions** — Community returns
+**Named where a name exists.** *Route behaviour below is **measured against a
+live Community and a live Business server, 2026-08-18 (wave 2 stage A, task
+1)** — see that task's report for the `curl` invocations and full response
+bodies. The naming and counting change described from here on is task 8, and
+made no server call of its own; its own measurements are of the vendored
+documents and of this repository's toolchain.*
+
+`GET /endpoint_groups/{id}` answers **200 on both editions** — Community
+returns
 `{"Id":1,"Name":"Unassigned","Description":"Unassigned environments",
-"Total":0,"TypeInfo":{...}}`, Business the same plus `"Policies":[]` — and it
-is the *only* one of the 442 routes that neither document names; the
-intersection of Community's 14 nameless operations and Business's 1 is
-exactly this route, and borrowing already resolves the other 13.
+"Total":0,"TypeInfo":{...}}`, Business the same plus `"Policies":[]`.
+**Evidence: vendored spec**, 2026-08-18 (task 8), for what follows: it is the
+*only* one of the 442 routes that neither document names; the intersection of
+Community's 14 nameless operations and Business's 1 is exactly this route,
+and borrowing already resolves the other 13.
 
 Because nothing named it, nothing could declare it: `actioncatalog.Build`
 resolves an action's edition through `apiversion.ByOperationID` and refuses

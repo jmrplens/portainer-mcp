@@ -137,12 +137,25 @@ func TestUnit_ParseSpecOperations_SyntheticNameCollidesWithADocumentedOne_IsErro
 		}
 	}`)
 
-	_, err := parseSpecOperations(data)
-	if err == nil {
-		t.Fatal("parseSpecOperations() = nil error, want a refusal for a synthetic name a document now uses")
-	}
-	if !strings.Contains(err.Error(), "EndpointGroupInspect") {
-		t.Errorf("parseSpecOperations() error = %v, want it to name the colliding id", err)
+	// Run repeatedly: which of the two routes the parser meets first is Go's
+	// map iteration order over the document's path items, which differs per
+	// run. The message must be byte-identical every time, and must attribute
+	// each name to the route it actually came from — an order-dependent
+	// message would tell a reader to remove the published operationId rather
+	// than the table entry, or the reverse. Asserting only that the id
+	// appears somewhere in the text passes for both orderings and for a
+	// message that credits the wrong route.
+	const want = `two routes resolve to the exported operationId "EndpointGroupInspect": ` +
+		`GET /endpoint_groups/{id} (named by internal/specnaming's table, the document leaving it unnamed) and ` +
+		`GET /endpoint_groups/{id}/details (operationId "endpointGroupInspect" in the document)`
+	for i := 0; i < 50; i++ {
+		_, err := parseSpecOperations(data)
+		if err == nil {
+			t.Fatal("parseSpecOperations() = nil error, want a refusal for a synthetic name a document now uses")
+		}
+		if err.Error() != want {
+			t.Fatalf("parseSpecOperations() error on run %d =\n  %v\nwant\n  %s", i, err, want)
+		}
 	}
 }
 
@@ -251,6 +264,15 @@ func TestUnit_SyntheticOperationIDs_EveryEntryIsStillNameless(t *testing.T) {
 			}
 			if !declaredSomewhere {
 				t.Errorf("no vendored document declares %s %s; this table entry names nothing", entry.Method, entry.Path)
+			}
+			// Checked here as well as in internal/specnaming's own test,
+			// because this is the check that runs against the real
+			// documents: an entry that has gone stale and an entry that
+			// never said why it existed are the same problem to whoever has
+			// to decide what to do about it.
+			if strings.TrimSpace(entry.Reason) == "" {
+				t.Errorf("the table entry for %s %s states no Reason; cmd/audit_1to1 refuses an allow-list entry without one, and this is the same kind of standing exception",
+					entry.Method, entry.Path)
 			}
 		})
 	}

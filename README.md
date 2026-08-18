@@ -23,8 +23,14 @@ A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server 
 
 | | Covered | Total |
 |---|---|---|
-| Business Edition operations | **35** | 441 |
-| Community Edition operations | **27** | 251 |
+| Business Edition operations | **35** | 442 |
+| Community Edition operations | **27** | 252 |
+
+The totals were 441 and 251 until 2026-08-18, when `cmd/audit_1to1` stopped
+skipping routes the vendored documents leave without an `operationId`; see
+[§6.2 of the divergence notes](docs/api-divergences.md). The **Covered**
+column is stale and understates the real figures — run `make audit-1to1` for
+the current ones.
 
 Five domains are live: `system`, `tags`, `registries`, `docker` and `custom_templates` — 36 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
 
