@@ -350,3 +350,161 @@ func TestUnit_ParseSpecOperations_DerivesPublicFromTheDocument(t *testing.T) {
 		}
 	}
 }
+
+// verbRestrictedMux registers path so that only served answers normally and
+// every other method answers 405, the way a real router does, while leaving
+// every unregistered path to Go's own not-found fallback.
+//
+// The 401 for the accepted verb is deliberate and matters: it is what a real
+// Portainer answers this command's sentinel credential, so a test that
+// distinguishes "wrong verb" from "served" here is distinguishing the same
+// two things a live run has to.
+func verbRestrictedMux(path, served string) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != served {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Invalid JWT token","details":"Unauthorized"}`))
+	})
+	return mux
+}
+
+// TestUnit_AuditLeg_OperationDocumentedUnderTheWrongVerb_IsReportedAndNotCalledAbsent
+// is the finding this whole classification exists for, reproduced from the
+// real case that motivated it: the vendored documents declare
+// EndpointAssociationDelete as PUT /endpoints/{id}/association, and a live
+// Portainer 2.44.0 serves that path for DELETE only.
+//
+// Two assertions, and the second is the one that would have caught the
+// original miss: before this change the operation was classified as SERVED,
+// because isRouteAbsent only recognises Go's literal "404 page not found"
+// and a 405 is not it. Reporting it as divergent would have been just as
+// wrong in the other direction — the route exists.
+func TestUnit_AuditLeg_OperationDocumentedUnderTheWrongVerb_IsReportedAndNotCalledAbsent(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(verbRestrictedMux("/api/endpoints/1/association", http.MethodDelete))
+	defer srv.Close()
+
+	ops := map[string]specOperation{
+		"EndpointAssociationDelete": {
+			OperationID: "EndpointAssociationDelete",
+			Method:      http.MethodPut,
+			Path:        "/endpoints/{id}/association",
+			Domain:      "endpoints",
+		},
+	}
+
+	result, err := auditLeg(context.Background(), io.Discard, "TEST", srv.URL+"/api", ops, time.Second)
+	if err != nil {
+		t.Fatalf("auditLeg() error = %v", err)
+	}
+	if len(result.Divergent) != 0 {
+		t.Errorf("auditLeg() Divergent = %+v, want empty: the path IS registered, just not for PUT", result.Divergent)
+	}
+	if len(result.WrongVerb) != 1 {
+		t.Fatalf("auditLeg() WrongVerb = %+v, want exactly one finding", result.WrongVerb)
+	}
+	got := result.WrongVerb[0]
+	if got.OperationID != "EndpointAssociationDelete" || got.Method != http.MethodPut {
+		t.Errorf("auditLeg() WrongVerb[0] = %+v, want the documented operation and its documented verb", got)
+	}
+	if len(got.ServedBy) != 1 || got.ServedBy[0] != http.MethodDelete {
+		t.Errorf("auditLeg() WrongVerb[0].ServedBy = %v, want [DELETE]: naming the verb that does work is the point", got.ServedBy)
+	}
+}
+
+// TestUnit_AuditLeg_OperationServedUnderItsOwnVerb_IsNotAWrongVerbFinding is
+// the negative control: the same fixture, probed with the verb the router
+// accepts, must produce no finding of either kind.
+func TestUnit_AuditLeg_OperationServedUnderItsOwnVerb_IsNotAWrongVerbFinding(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(verbRestrictedMux("/api/endpoints/1/association", http.MethodDelete))
+	defer srv.Close()
+
+	ops := map[string]specOperation{
+		"EndpointAssociationDelete": {
+			OperationID: "EndpointAssociationDelete",
+			Method:      http.MethodDelete,
+			Path:        "/endpoints/{id}/association",
+			Domain:      "endpoints",
+		},
+	}
+
+	result, err := auditLeg(context.Background(), io.Discard, "TEST", srv.URL+"/api", ops, time.Second)
+	if err != nil {
+		t.Fatalf("auditLeg() error = %v", err)
+	}
+	if len(result.WrongVerb) != 0 || len(result.Divergent) != 0 {
+		t.Errorf("auditLeg() WrongVerb = %+v, Divergent = %+v, want both empty", result.WrongVerb, result.Divergent)
+	}
+}
+
+// TestUnit_AuditLeg_PublicRouteUnderTheWrongVerb_IsReportedButNeverSwept
+// holds the safety restriction in place.
+//
+// A PublicAccess route has no credential check, so the argument that makes
+// probing an arbitrary verb harmless — Portainer rejects the sentinel before
+// any handler runs — does not cover it (see verbsServing's doc comment). The
+// finding is still reported, because observing the 405 costs nothing beyond
+// the probe the audit already makes; what must not happen is the follow-up
+// sweep. ServedBy staying empty is how that is visible.
+func TestUnit_AuditLeg_PublicRouteUnderTheWrongVerb_IsReportedButNeverSwept(t *testing.T) {
+	t.Parallel()
+	var methods []string
+	var mu sync.Mutex
+	// A ServeMux, not a bare handler: every path this test does not register
+	// must reach Go's own not-found fallback, which is what auditLeg's
+	// self-test canary probes before it will report anything at all.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/users/admin/init", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		// What an already-initialized Portainer answers this route: its own
+		// refusal, not an absent route. See this command's package doc.
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	mux.HandleFunc("/api"+adminCheckPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ops := map[string]specOperation{
+		"UserAdminInit": {
+			OperationID: "UserAdminInit",
+			Method:      http.MethodPut,
+			Path:        "/users/admin/init",
+			Domain:      "users",
+			Public:      true,
+		},
+	}
+
+	result, err := auditLeg(context.Background(), io.Discard, "TEST", srv.URL+"/api", ops, time.Second)
+	if err != nil {
+		t.Fatalf("auditLeg() error = %v", err)
+	}
+	if len(result.WrongVerb) != 1 {
+		t.Fatalf("auditLeg() WrongVerb = %+v, want the finding to be reported", result.WrongVerb)
+	}
+	if got := result.WrongVerb[0].ServedBy; len(got) != 0 {
+		t.Errorf("auditLeg() swept verbs on a PublicAccess route (ServedBy = %v); it must never do that", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Only the route under test records anything, so this counts probes of
+	// that route alone: the one PUT is the operation's own probe, and any
+	// POST, PATCH or DELETE beside it would be the sweep that must not run.
+	if len(methods) != 1 || methods[0] != http.MethodPut {
+		t.Errorf("the route under test saw methods %v; want exactly one PUT (the probe itself) and no sweep", methods)
+	}
+}

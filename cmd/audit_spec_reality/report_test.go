@@ -84,15 +84,64 @@ func TestUnit_BuildReport_SkippedPublicRoutesReportedAsUnmeasured(t *testing.T) 
 	}
 }
 
-// TestUnit_BuildReport_TotalAcrossLegs_SumsCorrectly proves the closing
+// TestUnit_BuildReport_TotalAcrossLegs_SumsCorrectly proves each closing
 // total is a real sum, not a copy of one leg's count.
+//
+// There are two totals rather than one, and they are asserted separately on
+// purpose. "Not served at all" and "documented under the wrong verb" are
+// different facts about the document — the first says the route does not
+// exist, the second says it does and the specification names the wrong way
+// to reach it — and a single combined number would let a run with one of
+// each read identically to a run with two of either. The wording of the
+// first line changed when the second was added, for exactly that reason;
+// the property this test was written to hold did not.
 func TestUnit_BuildReport_TotalAcrossLegs_SumsCorrectly(t *testing.T) {
 	t.Parallel()
 	report := buildReport([]legResult{
-		{Leg: "CE", Total: 5, Divergent: []legDivergence{{OperationID: "A"}, {OperationID: "B"}}},
-		{Leg: "EE", Total: 5, Divergent: []legDivergence{{OperationID: "C"}}},
+		{
+			Leg: "CE", Total: 5,
+			Divergent: []legDivergence{{OperationID: "A"}, {OperationID: "B"}},
+			WrongVerb: []legWrongVerb{{OperationID: "W"}},
+		},
+		{
+			Leg: "EE", Total: 5,
+			Divergent: []legDivergence{{OperationID: "C"}},
+			WrongVerb: []legWrongVerb{{OperationID: "X"}, {OperationID: "Y"}},
+		},
 	})
-	if !strings.Contains(report, "Total divergent operations across all probed legs: 3") {
-		t.Errorf("buildReport() = %q, want the combined total (2+1=3) stated", report)
+	if !strings.Contains(report, "Total operations not served at all, across all probed legs: 3") {
+		t.Errorf("buildReport() = %q, want the combined absent-route total (2+1=3) stated", report)
+	}
+	if !strings.Contains(report, "Total operations documented under the wrong verb:            3") {
+		t.Errorf("buildReport() = %q, want the combined wrong-verb total (1+2=3) stated", report)
+	}
+}
+
+// TestUnit_BuildReport_WrongVerbAndAbsentRoute_AreNeverConflated is the
+// discriminating half of the test above: equal totals must still describe
+// different findings, or the two lines are decoration.
+func TestUnit_BuildReport_WrongVerbAndAbsentRoute_AreNeverConflated(t *testing.T) {
+	t.Parallel()
+	report := buildReport([]legResult{{
+		Leg: "EE", Total: 2,
+		WrongVerb: []legWrongVerb{{
+			OperationID: "EndpointAssociationDelete",
+			Method:      "PUT",
+			Path:        "/endpoints/{id}/association",
+			Domain:      "endpoints",
+			ServedBy:    []string{"DELETE"},
+		}},
+	}})
+	if strings.Contains(report, "NOT served") {
+		t.Errorf("buildReport() called a wrong-verb finding \"NOT served\", which is the opposite of what was measured: %q", report)
+	}
+	for _, want := range []string{
+		"EndpointAssociationDelete",
+		"documents PUT /endpoints/{id}/association",
+		"served by DELETE",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("buildReport() = %q, want it to state %q", report, want)
+		}
 	}
 }
