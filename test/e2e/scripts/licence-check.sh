@@ -42,4 +42,20 @@ PORTAINER_E2E_RECOVER_URL="http://127.0.0.1:${port}" \
 PORTAINER_E2E_LICENCE="$licence" \
     go run ./harness/cmd/provision -recover-licence
 
+# A stale lock is the other half of the same accident this script already
+# recovers from: a run that crashed mid-suite can leave both a stranded
+# licence AND a lock naming a leg that is no longer running. Clearing only
+# the licence would leave the next `make e2e-up` refusing for a licence that
+# the round trip above just confirmed is free. Removed directly here, rather
+# than through release_licence_lock's holder-match check, because this
+# script -- unlike take_licence_lock's own refusal path -- has just proven
+# by a live attach-then-release that nothing genuinely holds the licence any
+# more, which is the one condition under which deleting a lock outright is
+# safe.
+lock_path=$(licence_lock_path "$repo_root")
+if [[ -f "$lock_path" ]]; then
+    rm -f "$lock_path"
+    echo "cleared the stale licence lock at $lock_path" >&2
+fi
+
 echo "licence recovery complete: safe to run make e2e-up again" >&2

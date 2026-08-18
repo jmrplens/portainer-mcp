@@ -41,6 +41,14 @@ if [[ -z "$licence" ]]; then
     echo "no PORTAINER_LICENSE in .env: provisioning Community Edition only" >&2
 fi
 
+# The lock is taken only when a licence is actually in play -- a
+# Community-only run reads none above and must neither be blocked by a lock
+# nor create one. Taken here, before docker compose ever runs, so a refusal
+# costs nothing: nothing has been created yet for this leg to have to undo.
+if [[ -n "$licence" ]]; then
+    take_licence_lock "$repo_root" compose
+fi
+
 # A GPU on the Docker host is an optional capability, discovered the same way
 # the licence is: absent means the GPU suites skip, never that the estate
 # fails. When present, the dind needs two things — the card itself, and a CDI

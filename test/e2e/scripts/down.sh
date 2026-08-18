@@ -96,6 +96,11 @@ if [[ -n "$licence" && -f "$estate_file" ]]; then
     PORTAINER_E2E_LICENCE="$licence" \
         go run ./harness/cmd/provision -release-licence \
         || echo "warning: could not release the business edition licence; continuing teardown" >&2
+    # Released on this path even when the call above warned rather than
+    # succeeded: a licence that failed to release still leaves nothing for
+    # the lock to protect, and leaving the lock in place would only block
+    # the OTHER leg from a licence this one no longer holds.
+    release_licence_lock "$repo_root" compose
 fi
 
 # --profile edge: the edge agent only ever runs under that profile (up.sh

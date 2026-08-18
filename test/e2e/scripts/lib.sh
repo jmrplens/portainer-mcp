@@ -17,6 +17,136 @@ read_licence() {
     read_env_var "$1" PORTAINER_LICENSE
 }
 
+# licence_lock_path echoes the path to the licence lock: the artefact that
+# records which leg (compose or kubernetes) currently holds the single-use
+# Business Edition licence, so a second leg refuses to activate the same key
+# instead of colliding with the first. Rooted at repo_root, like
+# read_licence's own .env, rather than $PWD -- take_licence_lock and
+# release_licence_lock are called from both up.sh (cwd test/e2e) and
+# k3d-up.sh/k3d-down.sh (also cwd test/e2e today, but nothing here should
+# depend on that staying true), and a path anchored on the one thing every
+# caller already resolved identically avoids yet another place the two
+# legs could quietly disagree.
+licence_lock_path() {
+    local repo_root="$1"
+    echo "$repo_root/test/e2e/.licence.lock"
+}
+
+# licence_lock_holder_running reports, via exit status only, whether the leg
+# named in an existing lock is actually still running right now -- separate
+# from anything the lock file itself claims. This is the one check standing
+# between "report a stale lock" and "auto-delete a lock that merely looks
+# stale", which take_licence_lock deliberately never does on its own: the
+# check below can itself be wrong (a slow-starting cluster, a `docker ps`
+# against the wrong host), and being wrong in the direction of "silently
+# clear it" is how two live instances happen again.
+#
+# The compose leg is matched on the compose project label rather than a
+# container name substring: `docker ps --filter name=portainer-mcp-e2e`
+# (what docs/domain-wave-checklist.md uses for a human-read report) also
+# matches the Kubernetes leg's own node containers, which k3d names
+# k3d-portainer-mcp-e2e-server-0 -- a substring match here would report the
+# compose leg as running because the OTHER leg is up, which is exactly
+# backwards for a check whose only job is telling the two apart.
+licence_lock_holder_running() {
+    local leg="$1"
+    case "$leg" in
+        compose)
+            docker ps --filter "label=com.docker.compose.project=portainer-mcp-e2e" \
+                --format '{{.Names}}' 2>/dev/null | grep -q .
+            ;;
+        kubernetes)
+            local cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
+            command -v k3d >/dev/null 2>&1 \
+                && k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"$cluster\""
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# licence_lock_resolve_command echoes the exact command that frees the named
+# leg's licence, so a refusal can tell the operator precisely what to run
+# instead of just what is wrong.
+licence_lock_resolve_command() {
+    local leg="$1"
+    case "$leg" in
+        kubernetes) echo "make e2e-k8s-down" ;;
+        *)          echo "make e2e-down" ;;
+    esac
+}
+
+# take_licence_lock refuses (returns 1, prints why to stderr) when the lock
+# already names a holder, otherwise records this leg as the new holder and
+# returns 0. Callers take it only when a licence is actually in play -- a
+# Community-only run reads none and must neither be blocked by a lock nor
+# create one -- and take it BEFORE activating anything, so a refusal costs
+# nothing.
+#
+# A held lock is never auto-cleared here, whether or not
+# licence_lock_holder_running says the holder looks gone: it only reports the
+# distinction, so the operator decides, and `make e2e-licence-release`
+# (licence-check.sh) is the one path allowed to actually remove a lock it did
+# not itself just take, because that path first confirms -- via a live
+# attach-then-release round trip -- that nothing genuinely holds the licence
+# any more, rather than inferring it from a process list that can be wrong.
+take_licence_lock() {
+    local repo_root="$1" leg="$2" lock_path
+    lock_path=$(licence_lock_path "$repo_root")
+
+    if [[ -f "$lock_path" ]]; then
+        local holder taken_at holder_estate resolve_cmd
+        holder=$(grep -E '^HOLDER=' "$lock_path" | head -n1 | cut -d= -f2-)
+        taken_at=$(grep -E '^TAKEN_AT=' "$lock_path" | head -n1 | cut -d= -f2-)
+        holder_estate=$(grep -E '^ESTATE=' "$lock_path" | head -n1 | cut -d= -f2-)
+        resolve_cmd=$(licence_lock_resolve_command "$holder")
+
+        if licence_lock_holder_running "$holder"; then
+            echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
+        else
+            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
+        fi
+        return 1
+    fi
+
+    local estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
+    {
+        echo "HOLDER=$leg"
+        echo "TAKEN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "ESTATE=$estate_file"
+    } > "$lock_path"
+}
+
+# release_licence_lock removes the lock this leg took, and is itself
+# tolerant of the two ways there can be nothing sensible to remove: no lock
+# file at all (nothing ever took it, or a run that never reached the point
+# of taking one -- e.g. a Community-only run, or a crash before the licence
+# was even read), or a lock recorded for a DIFFERENT leg (this leg's own
+# teardown must never remove a lock it does not own). Both are warned, never
+# failed: down.sh and k3d-down.sh call this on every path that reaches their
+# own licence release, including the path where that release itself failed,
+# and a teardown that aborts on a missing or foreign lock would leave the
+# estate it was tearing down still up.
+release_licence_lock() {
+    local repo_root="$1" leg="$2" lock_path
+    lock_path=$(licence_lock_path "$repo_root")
+
+    if [[ ! -f "$lock_path" ]]; then
+        echo "warning: no licence lock at $lock_path to release for '$leg'; continuing" >&2
+        return 0
+    fi
+
+    local holder
+    holder=$(grep -E '^HOLDER=' "$lock_path" | head -n1 | cut -d= -f2-)
+    if [[ "$holder" != "$leg" ]]; then
+        echo "warning: licence lock at $lock_path is held by '$holder', not '$leg'; leaving it in place" >&2
+        return 0
+    fi
+
+    rm -f "$lock_path"
+}
+
 # fetch_k8s_ca writes the Kubernetes leg's in-cluster Portainer certificate to
 # stdout as PEM.
 #

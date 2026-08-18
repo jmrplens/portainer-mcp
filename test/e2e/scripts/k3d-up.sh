@@ -68,6 +68,13 @@ if [[ -z "$licence" ]]; then
     echo "no PORTAINER_LICENSE in .env: Kubernetes leg will be Community Edition only" >&2
 fi
 
+# Same rule as up.sh: the lock is taken only when a licence is actually in
+# play, and taken here -- before k3d creates anything -- so a refusal costs
+# nothing.
+if [[ -n "$licence" ]]; then
+    take_licence_lock "$repo_root" kubernetes
+fi
+
 # --api-port is pinned rather than left to k3d because a remote cluster is
 # only reachable through an SSH tunnel (the k3s serving certificate covers
 # 127.0.0.1 and not the host's LAN address), and a tunnel cannot forward a

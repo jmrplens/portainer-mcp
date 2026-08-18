@@ -111,6 +111,30 @@ did not reach the remote daemon it should have — most often because the
 marker file was removed by hand before teardown ran, or because the estate
 was brought up by something other than the matching `-remote` target.
 
+## One Business Edition licence at a time
+
+`GET /api/licenses` on this estate's key reports `nodes: 3` and
+`multiuseInstancesCount: 0` — a single-use licence good for three nodes at
+once. The estate's own provisioning already spends two of those on the
+compose leg alone (`agents: 1`, `edgeAgents: 1`), leaving exactly one node of
+headroom. Both the compose leg (`up.sh`) and the Kubernetes leg (`k3d-up.sh`)
+read the SAME key out of the same gitignored `.env`, and both give it back on
+teardown (`down.sh`, `k3d-down.sh`). Two failure modes both happened for real
+on 2026-08-18: activating the licence on both legs at once, and tearing one
+leg down — releasing the licence — while the other leg was still using it.
+
+The rule: **bring one leg down before bringing the other up.** `test/e2e/
+scripts/lib.sh`'s `take_licence_lock`/`release_licence_lock` enforce this —
+`up.sh` and `k3d-up.sh` take a lock (`test/e2e/.licence.lock`) before
+activating anything, and a second leg's `up` refuses, naming the leg already
+holding it, when it was taken, and the exact command (`make e2e-down` or
+`make e2e-k8s-down`) that frees it. A lock that names a leg no longer running
+is reported as stale, never auto-removed; `make e2e-licence-release`
+(`licence-check.sh`) clears both the stranded licence and the stale lock
+together. The lock is only a guard, though — the licence's own one-instance
+limit is the real constraint underneath it, and holds regardless of whether
+the lock is in place.
+
 ## The model, in one paragraph
 
 A domain is scaffolded once, from the vendored specification, by

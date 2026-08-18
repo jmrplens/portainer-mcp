@@ -52,6 +52,13 @@ if [[ -n "$licence" && -f "$estate_file" ]]; then
     else
         echo "warning: could not read the portainer certificate to release the licence; continuing teardown" >&2
     fi
+    # Released on every path that reaches here, including the two warning
+    # paths above (a failed -release-licence call, or no readable
+    # certificate at all): a licence that never made it back to Portainer
+    # still leaves nothing for the lock to protect, and leaving the lock in
+    # place would only block the compose leg from a licence this one no
+    # longer holds.
+    release_licence_lock "$repo_root" kubernetes
 fi
 
 k3d cluster delete "$cluster" 2>/dev/null || true
