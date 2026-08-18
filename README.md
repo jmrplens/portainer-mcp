@@ -2,218 +2,116 @@
 
 # Portainer MCP Server
 
-**Manage your entire Portainer infrastructure through AI assistants using the Model Context Protocol**
+**Manage Portainer through AI assistants, over the Model Context Protocol**
 
 ![Go Version](https://img.shields.io/github/go-mod/go-version/jmrplens/portainer-mcp)
 ![License](https://img.shields.io/github/license/jmrplens/portainer-mcp)
-![Portainer](https://img.shields.io/badge/Portainer-2.39.1-blue)
-![MCP Tools](https://img.shields.io/badge/MCP_Tools-98-green)
+![Portainer](https://img.shields.io/badge/Portainer-2.44.0-blue)
+![Status](https://img.shields.io/badge/status-in%20development-orange)
 
-[Documentation](https://jmrplens.github.io/portainer-mcp-enhanced/) · [Quickstart](#quickstart) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
+[Quickstart](#quickstart) · [Configuration](#configuration) · [Tool surfaces](#tool-surfaces) · [Development](#development)
 
 </div>
 
 ---
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction) server that connects AI assistants to [Portainer](https://www.portainer.io/) — exposing **98 tools** covering the complete Portainer API. Manage environments, stacks, users, teams, registries, Kubernetes, Helm, Docker, edge computing, backups, and more through natural language.
+A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server that connects AI assistants to [Portainer](https://www.portainer.io/). Every action is generated from Portainer's own OpenAPI documents and verified against a real server, so what the tool publishes is what the API actually accepts — not what its documentation claims.
 
-<details open>
-<summary><b>🖥️ System & Docker Dashboard</b></summary>
+## Status
 
-![System & Docker Dashboard demo](docs/src/assets/demo-1-system-docker.gif)
-</details>
+**In development.** The server runs, but it is being built domain by domain and does not yet cover the whole API.
 
-<details>
-<summary><b>👥 Users, Teams & Stacks</b></summary>
+| | Covered | Total |
+|---|---|---|
+| Business Edition operations | **35** | 441 |
+| Community Edition operations | **27** | 251 |
 
-![Users, Teams & Stacks demo](docs/src/assets/demo-2-users-stacks.gif)
-</details>
+Five domains are live: `system`, `tags`, `registries`, `docker` and `custom_templates` — 36 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
 
-<details>
-<summary><b>🌐 Edge & Kubernetes</b></summary>
-
-![Edge & Kubernetes demo](docs/src/assets/demo-3-edge-helm.gif)
-</details>
-
-<details>
-<summary><b>💾 Backup & Docker Proxy</b></summary>
-
-![Backup & Docker Proxy demo](docs/src/assets/demo-4-backup-proxy.gif)
-</details>
+There are no releases, no published container image and no pre-built binaries yet. Build from source.
 
 ## Quickstart
 
-### 1. Install
+### 1. Build
 
-**Go install**:
 ```bash
-go install github.com/jmrplens/portainer-mcp-enhanced/cmd/portainer-mcp-enhanced@latest
+git clone https://github.com/jmrplens/portainer-mcp.git
+cd portainer-mcp
+make build          # → dist/portainer-mcp
 ```
 
-**Docker**:
-```bash
-docker pull ghcr.io/jmrplens/portainer-mcp-enhanced:latest
-```
+Go 1.26.6 or newer.
 
-**From source**:
-```bash
-git clone https://github.com/jmrplens/portainer-mcp-enhanced.git
-cd portainer-mcp-enhanced
-make build    # → dist/portainer-mcp-enhanced
-```
+### 2. Get a Portainer API token
 
-Or download a pre-built binary from [Releases](https://github.com/jmrplens/portainer-mcp-enhanced/releases/latest) (Linux, macOS, Windows — amd64/arm64, with SHA256 checksums).
+In Portainer: **My account → Access tokens → Add access token**. The token carries the permissions of the user that created it, so create it as a user with only the access the assistant should have.
 
-### 2. Get a Portainer API Token
+### 3. Configure your assistant
 
-1. Log in to your Portainer instance → **My Account** → **API Keys**
-2. Create a new key and copy the token
-
-### 3. Configure your AI assistant
-
-<details open>
-<summary><b>Claude Desktop</b></summary>
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Claude Desktop (`claude_desktop_config.json`), and the same shape for any other MCP client:
 
 ```json
 {
   "mcpServers": {
     "portainer": {
-      "command": "/path/to/portainer-mcp-enhanced",
-      "args": [
-        "-server", "https://your-portainer:9443",
-        "-token", "ptr_your_api_token"
-      ]
+      "command": "/path/to/dist/portainer-mcp",
+      "env": {
+        "PORTAINER_URL": "https://portainer.example.com",
+        "PORTAINER_TOKEN": "ptr_..."
+      }
     }
   }
 }
 ```
-</details>
-
-<details>
-<summary><b>VS Code (GitHub Copilot)</b></summary>
-
-Create `.vscode/mcp.json` in your workspace:
-
-```json
-{
-  "servers": {
-    "portainer": {
-      "type": "stdio",
-      "command": "/path/to/portainer-mcp-enhanced",
-      "args": [
-        "-server", "https://your-portainer:9443",
-        "-token", "ptr_your_api_token"
-      ]
-    }
-  }
-}
-```
-</details>
-
-<details>
-<summary><b>Cursor</b></summary>
-
-Go to **Cursor Settings → MCP** and add:
-
-```json
-{
-  "mcpServers": {
-    "portainer": {
-      "command": "/path/to/portainer-mcp-enhanced",
-      "args": [
-        "-server", "https://your-portainer:9443",
-        "-token", "ptr_your_api_token"
-      ]
-    }
-  }
-}
-```
-</details>
-
-### 4. Start asking
-
-> "List all environments and their status"  
-> "Create a new nginx stack from this compose file"  
-> "Show me the Kubernetes dashboard for environment 3"
 
 ## Configuration
 
-| Flag | Description | Required | Default |
-|------|-------------|----------|---------|
-| `-server` | Portainer server URL | **Yes** | — |
-| `-token` | Portainer API token | **Yes** | — |
-| `-tools` | Path to custom tools.yaml | No | Embedded |
-| `-read-only` | Disable all write/delete operations | No | `false` |
-| `-granular-tools` | Register all 98 individual tools instead of 15 grouped meta-tools | No | `false` |
-| `-disable-version-check` | Skip Portainer version validation | No | `false` |
-| `-skip-tls-verify` | Skip TLS certificate verification | No | `false` |
+Flags override environment variables, which override a `.env` file in the working directory.
 
-### Meta-Tools (Default Mode)
+| Environment variable | Flag | Default | Meaning |
+|---|---|---|---|
+| `PORTAINER_URL` | `-server` | — | Portainer server URL (required) |
+| `PORTAINER_TOKEN` | `-token` | — | API token (required) |
+| `PORTAINER_SKIP_TLS_VERIFY` | `-skip-tls-verify` | `false` | Skip TLS verification, for self-signed certificates |
+| `TOOL_SURFACE` | `-tool-surface` | `dynamic` | `dynamic`, `meta` or `individual` |
+| `PORTAINER_READ_ONLY` | `-read-only` | `false` | Disable every mutating action |
+| `PORTAINER_SAFE_MODE` | `-safe-mode` | `false` | Intercept mutating actions and return a preview instead of calling |
+| `LOG_LEVEL` | — | `info` | `debug`, `info`, `warn` or `error` |
 
-By default the server registers **15 grouped meta-tools** instead of the 98 individual granular tools. Each meta-tool covers a functional domain and exposes an `action` parameter (enum) that routes to the appropriate handler.
+`-version` prints the build metadata and exits.
 
-This dramatically reduces the tool-selection surface for LLMs while preserving 100% of the underlying functionality.
+**Read-only mode** removes every mutating action from the catalog, so the assistant cannot call one even by mistake. **Safe mode** keeps them callable but answers with a preview of what would be sent — it reports field *names* only, never values, so a credential in a request body is not echoed back to the model.
 
-| Meta-Tool | Actions | Description |
-|-----------|---------|-------------|
-| `manage_environments` | 16 | Environments, environment groups, tags |
-| `manage_stacks` | 13 | Regular and compose stacks |
-| `manage_access_groups` | 7 | Access group CRUD and user/team access policies |
-| `manage_users` | 5 | User CRUD and role management |
-| `manage_teams` | 6 | Teams and team membership |
-| `manage_docker` | 2 | Docker proxy and dashboard |
-| `manage_kubernetes` | 5 | Kubernetes proxy, namespaces, config, dashboard |
-| `manage_helm` | 8 | Helm repos, charts, releases |
-| `manage_registries` | 5 | Container registry management |
-| `manage_templates` | 7 | Custom and app templates |
-| `manage_backups` | 5 | Backup, restore, S3 settings |
-| `manage_webhooks` | 3 | Webhook CRUD |
-| `manage_edge` | 6 | Edge jobs and update schedules |
-| `manage_settings` | 5 | Server settings and SSL |
-| `manage_system` | 5 | Version, status, MOTD, roles, auth |
+## Tool surfaces
 
-To use the original 98 individual tools, pass `--granular-tools`. See the [Meta-Tools Guide](https://jmrplens.github.io/portainer-mcp-enhanced/guides/meta-tools/) for the full action reference.
+One action catalog, projected three ways. The default suits most clients; the others exist because tool-count limits and discovery behaviour differ between them.
 
-### Read-Only Mode
-
-Run with `-read-only` to restrict to read-only operations. All write, update, and delete actions are disabled — ideal for monitoring and observation. Works with both meta-tools and granular tools modes.
-
-### Version Compatibility
-
-| MCP Server | Supported Portainer |
-|------------|-------------------|
-| v0.7.x | 2.39.1 |
-| v0.6.x | 2.31.2 |
-| v0.5.x | 2.30.0 |
-| v0.4.x | 2.27.4 |
-
-## Documentation
-
-📖 **[Full Documentation](https://jmrplens.github.io/portainer-mcp-enhanced/)** — Installation, configuration, meta-tools guide, architecture, security, and API reference.
-
-| Page | Description |
-|------|-------------|
-| [Getting Started](https://jmrplens.github.io/portainer-mcp-enhanced/getting-started/) | Prerequisites, installation, AI assistant setup |
-| [Configuration](https://jmrplens.github.io/portainer-mcp-enhanced/configuration/) | CLI flags, tool modes, version compatibility |
-| [Meta-Tools Guide](https://jmrplens.github.io/portainer-mcp-enhanced/guides/meta-tools/) | All 15 meta-tools with complete action reference |
-| [Tools Reference](https://jmrplens.github.io/portainer-mcp-enhanced/reference/api-reference/) | All 98 granular tools with parameters |
-| [Architecture](https://jmrplens.github.io/portainer-mcp-enhanced/reference/architecture/) | Server layers, client model, project structure |
-| [Security](https://jmrplens.github.io/portainer-mcp-enhanced/guides/security/) | Authentication, TLS, read-only mode, proxy safety |
-| [Contributing](https://jmrplens.github.io/portainer-mcp-enhanced/development/contributing/) | Development setup, code style, adding new tools |
+| Surface | Tools published | Use when |
+|---|---|---|
+| `dynamic` *(default)* | 2 — `portainer_find_action`, `portainer_execute_action` | Almost always. The model searches the catalog, then calls what it found, so the tool list stays small however far coverage grows. |
+| `meta` | one per domain (`portainer_docker`, `portainer_custom_templates`, …), each taking an `action` parameter | A client that discovers tools poorly but handles a modest, fixed list well. |
+| `individual` | one per action (`portainer_tags_list`, …) | A client that needs every action visible as its own tool. Grows with the catalog. |
 
 ## Development
 
 ```bash
-make build                    # Build binary
-make test                     # Unit tests
-make test-integration         # Integration tests (requires Docker)
-make test-all                 # All tests
-make inspector                # Launch MCP Inspector UI
+make build     # → dist/portainer-mcp
+make test      # unit tests
+make check     # format, lint, vulncheck, test — what CI runs
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines. The [Developer Documentation](https://jmrplens.github.io/portainer-mcp-enhanced/development/contributing/) covers project structure, adding tools, testing, dependencies, and CI/CD in detail.
+Everything written to stdout is the MCP transport itself, so a stray `fmt.Println` corrupts the protocol; CI enforces this and logging goes to stderr through `internal/logging`.
+
+The catalog is generated rather than hand-maintained, and a set of audits keeps it honest:
+
+```bash
+make audit-1to1           # which API operations the catalog covers
+make audit-spec-drift     # has any action drifted from the vendored specification?
+make audit-e2e-gaps       # which actions no e2e test touches
+make audit-spec-reality   # does the vendored specification match a live server?
+```
+
+Divergences between Portainer's documents and its actual behaviour are recorded, with the measurement that established each one, in [`docs/api-divergences.md`](docs/api-divergences.md).
 
 ### End-to-end (e2e) testing
 
