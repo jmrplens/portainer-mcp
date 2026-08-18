@@ -971,9 +971,10 @@ declaration still stands.
 `POST /custom_templates/create/file` was probed in the same pass and also
 answers `200` for `Type: 3`, which matches the enum it already declares.
 
-### 6.6 An enum value with a leading space, overriding a clean `$ref`
+### 6.6 An enum value with a leading space, overriding a clean `$ref` — trimmed in the generator, and by hand in the six values already emitted
 
-**Evidence: vendored spec**, verified 2026-08-14 (wave 1 stage B, task 6).
+**Evidence: vendored spec**, verified 2026-08-14 (wave 1 stage B, task 6);
+**fixed** 2026-08-18.
 
 `portaineree.CustomTemplateRelativePathSettings` declares both
 `PerDeviceConfigsMatchType` and `PerDeviceConfigsGroupMatchType` as a
@@ -993,34 +994,119 @@ sibling of that `allOf`:
 The second value carries a **leading space**. This is the same class of
 defect as §6.1's content type, in a different keyword.
 
-The malformed value is the one that survives resolution, not the clean one:
-`cmd/gen_action_inputs/schema.go`'s `resolve()` merges every `allOf` branch
-first and then overlays the node's own directly-declared keywords over the
-result (`if e, ok := raw["enum"].([]any); ok && len(e) > 0 { node.Enum = e }`),
-because a sibling keyword next to `$ref`/`allOf` is meant to take
-precedence. So the generated `EnumParams()` on all three nested
+The malformed value was the one that survived resolution, not the clean
+one: `cmd/gen_action_inputs/schema.go`'s `resolve()` merges every `allOf`
+branch first and then overlays the node's own directly-declared keywords
+over the result, because a sibling keyword next to `$ref`/`allOf` is meant
+to take precedence. So the generated `EnumParams()` on all three nested
 `...EdgeSettingsRelativePathSettings` structs in
-`internal/tools/custom_templates/inputs.go` reads `{"file", " dir"}`,
+`internal/tools/custom_templates/inputs.go` read `{"file", " dir"}`,
 verbatim from the document.
+
+**The server does not validate this field at all** — measured 2026-08-18
+against a live 2.44.0 Business Edition, by creating four custom templates
+through `POST /custom_templates/create/string` that differed only in
+`EdgeSettings.RelativePathSettings.PerDeviceConfigsMatchType`:
+
+| Sent | Response | Stored |
+|---|---|---|
+| `"dir"` | `200` | `dir` |
+| `" dir"` | `200` | ` dir` |
+| `"file"` | `200` | `file` |
+| `"zzz-not-a-value"` | `200` | `zzz-not-a-value` |
+
+So the enum is a **client-side constraint only**: `toolutil.ActionSpec.ValidateInput`
+enforces it before the request leaves, and nothing on the server would
+catch a wrong value afterwards. That is the real argument for trimming, and
+it is stronger than "the server rejects the space" would have been — since
+the server catches nothing here, the published enum is the only thing
+steering a model, and steering it toward a value with a leading space is
+steering it wrong for no benefit. An earlier draft of this section asserted
+the server "accepts `dir`, never ` dir`"; the second half of that is false,
+and it was written from the document rather than from a server.
 
 Only the Business Edition document defines this schema; Community Edition
 has neither it nor `portainer.PerDevConfigsFilterType`.
 
-Not corrected in the generator, and not hand-edited out of the generated
-file, for two reasons. First, the generated value is a faithful transcript
-of what the document says, and silently trimming it in `resolve()` would
-put the generator in the business of guessing which of a spec's two
-disagreeing declarations is the intended one. A trimming rule belongs in
-`cmd/fetch_spec/normalise.go` alongside the duplicate-enum and `*/*`
-rules — the same place §6.1 says a content-type rule belongs — so that the
-correction is visible in the vendored document rather than applied
-invisibly at generation. Second, and the reason this is not urgent: the
-value never reaches a model at all today, for the unrelated reason recorded
-in §9.5 below.
+**What is true now.** `resolve()` no longer transcribes the typo. Every
+enum value entering the generator passes through `normaliseEnumValues`
+(`cmd/gen_action_inputs/schema.go`), which strips leading and trailing
+whitespace off every string value as it is read — the single place enum
+values enter this generator, so every published enum is built from what it
+returns. The rule is general rather than a carve-out for this one schema:
+surrounding whitespace on an enum value is never intentional, and this
+occurrence proves it by contradicting the very component the same node
+references. Two outcomes are deliberate rather than silent:
 
-**To settle it:** add a whitespace-trimming rule for enum values to
-`cmd/fetch_spec/normalise.go`, with its test, when a domain that publishes
-these fields needs them — which cannot happen before §9.5 is fixed.
+- **An empty string is preserved untouched.** It is a real member in both
+  vendored documents — `portaineree.EndpointOperationStatus` spells its
+  "done" state as `""`, named `EndpointOperationStatusDone` by that
+  schema's own `x-enum-varnames`, and `portainer.UserThemeSettings.color`
+  offers `""` for "no theme chosen". Only a value that is non-empty in the
+  document and becomes empty once trimmed (a single space, a tab) is
+  refused, as an ordinary resolution error that reports and skips the
+  operation carrying it: emitting `""` there would invent the one string
+  that already means something else in this very specification. Neither
+  vendored document contains such a value today, so that half is a guard,
+  not a repair.
+- **A value colliding with an earlier one after trimming is dropped**,
+  first-occurrence order preserved — the same repair `cmd/fetch_spec`'s
+  `deduplicateEnums` already applies to values that were exact duplicates
+  as published, one stray space later.
+
+The six values already emitted into
+`internal/tools/custom_templates/inputs.go` were corrected **by hand**, not
+by regenerating: that file carries wave 1 stage B's measured hand edits
+(`Platform` made non-pointer and `SourceID` optional on the two JSON create
+routes, against the vendored `required` arrays — see §3.7), and a
+regeneration silently discards them. Confirmed rather than assumed: a
+scratch `-allow-overwrite` run into a copied tools tree re-emits
+`CustomTemplateCreateRepository`'s `Platform` as an optional pointer again.
+That same scratch run is how the generator half was proven — it emits
+`{"file", "dir"}` at all three sites, with no ` dir` anywhere in the
+emitted tree — and the run itself was thrown away rather than committed.
+
+**Why the generator and not `cmd/fetch_spec/normalise.go`**, which is where
+this section previously said such a rule belonged, alongside the
+duplicate-enum and `*/*` rules and next to §6.1's content type. Two
+reasons. `normalise` runs at *fetch* time, so a rule added there changes
+nothing about the document already vendored: the correction would not exist
+until somebody re-fetched 2.44.0, and the six emitted values would stay
+wrong in the meantime. And reading is where every consumer converges —
+`resolve()` is the only place an enum keyword becomes a published
+constraint, whatever route the document arrived by, so a rule there cannot
+be bypassed by a spec that was hand-patched or vendored some other way.
+The old objection — that trimming would put the generator "in the business
+of guessing which of a spec's two disagreeing declarations is the intended
+one" — does not apply: the trim does not adjudicate between the `$ref`'s
+enum and the sibling's on the merits. The `allOf` precedence rule is
+untouched and the sibling still wins; it is simply no longer malformed when
+it does. Adding the same rule to `normalise.go` remains harmless and is now
+redundant.
+
+**No spec-drift allow-list entry accompanies this**, deliberately.
+`cmd/audit_spec_drift` compares only an operation's *top-level* properties:
+`internal/specdiff.ShapeFromCatalog` reads `schema["properties"]` one level
+deep, and its spec-side counterpart does the same, so a nested object's own
+fields are outside the audit's field set entirely, in both directions.
+Measured, not inferred: a probe entry for
+(`CustomTemplateCreateRepository`, `perDeviceConfigsMatchType`) added to
+`api/spec-drift-allowlist.yaml` produced `0 gating finding(s), 1 stale
+allow-list entr(y/ies)` and exit status 2 — itself a build error, which is
+exactly why §6.5's enum-widening entry could be added and this one cannot.
+The probe was removed. Should the drift audit ever learn to recurse into
+nested objects, this divergence will need an entry then, citing this
+section.
+
+Guarded by `TestUnit_Resolve_EnumValueWithSurroundingWhitespace_IsTrimmed`,
+`TestUnit_Resolve_WhitespaceOnlyEnumValue_IsRefused`,
+`TestUnit_Resolve_EnumValuesCollidingAfterTrim_AreDeduplicated` and
+`TestUnit_AssembleOperationFields_CustomTemplateRelativePathSettings_PublishesCleanDir`
+(`cmd/gen_action_inputs/enum_trim_test.go`) for the generator, and by
+`TestUnit_RegisteredSpecs_NoPublishedEnumValueCarriesWhitespace`
+(`internal/wiring/nested_enum_test.go`), which sweeps every registered
+action's published schema at every depth rather than only these six values.
+Each was confirmed failing with its fix reverted before being kept.
 
 ### 6.7 `CustomTemplateList.type` is declared `explode: false`, and the server cannot parse what that produces — fixed by a hand-written handler
 
@@ -1358,58 +1444,105 @@ accepting it as satisfying `checkCredentialRedaction`. Either is a
 generator/toolchain change large enough to deserve its own review, not a
 line-item inside this one.
 
-### 9.5 A nested struct's `EnumParams`/`MinimumParams` is never called
+### 9.5 A nested struct's `EnumParams`/`MinimumParams` was never called
+
+**Measured** 2026-08-14; **fixed** 2026-08-18.
 
 `toolutil.ActionSpec.InputSchema` (`internal/toolutil/schema.go`) reflects
 the Input type into a JSON Schema and then applies the two constraint
-interfaces the reflector cannot express as struct tags, by asserting on the
-**top-level Input value only**:
+interfaces the reflector cannot express as struct tags. It used to do that
+by asserting on the **top-level Input value only**:
 
 ```go
 if enumer, ok := s.Input.(EnumParams); ok { ... }
 if minimums, ok := s.Input.(MinimumParams); ok { ... }
 ```
 
-`applyEnumParams` then writes each entry into the schema's own
-`properties`. A *nested* struct type's `EnumParams()` is therefore never
-consulted, however faithfully `cmd/gen_action_inputs` generated it: no
-enum is published for any field of a nested object, and the same holds for
-`MinimumParams`, which is reached by the identical assertion two lines
-later. This is §9.3's shape — a generated per-field annotation that is
-correct in the source and inert at runtime — for enums and minimums rather
-than for edition tags.
+`applyEnumParams` writes each entry into the schema's own `properties`, so
+a *nested* struct type's `EnumParams()` was never consulted, however
+faithfully `cmd/gen_action_inputs` had generated it: no enum was published
+for any field of a nested object, and the same held for `MinimumParams`,
+reached by the identical assertion two lines later. This was §9.3's shape —
+a generated per-field annotation that is correct in the source and inert at
+runtime — for enums and minimums rather than for edition tags.
 
-**Measured** 2026-08-14 by calling `InputSchema()` on the registered
+**The measurement**, taken by calling `InputSchema()` on the registered
 `custom_templates.create_repository` spec and reading the result: the
-top-level `platform` publishes `"enum": [1, 2]`, while
+top-level `platform` published `"enum": [1, 2]`, while
 `edgeSettings.relativePathSettings.perDeviceConfigsMatchType` — whose
-generated nested `EnumParams()` returns `{"file", " dir"}` — publishes
+generated nested `EnumParams()` returns `{"file", "dir"}` — published
 `{"description": "Per device configs match type", "type": ["null",
-"string"]}` and no `enum` keyword at all.
-
-Six generated nested `EnumParams()` methods exist today, all in
+"string"]}` and no `enum` keyword at all. Six generated nested
+`EnumParams()` methods exist, all in
 `internal/tools/custom_templates/inputs.go`: an
 `...EdgeSettingsRelativePathSettings` and an `...EdgeSettingsStaggerConfig`
 for each of `CustomTemplateCreateRepository`, `CustomTemplateCreateString`
 and `CustomTemplateUpdate`. Between them they declare 15 field-level enum
-constraints that no surface publishes and no `ValidateInput` enforces. No
-nested `MinimumParams()` has been generated yet — every one in the tree
-today is on a top-level `...Input` type — so that half of the gap is
-mechanical rather than observed.
+constraints that no surface published and no `ValidateInput` enforced.
 
-Two consequences worth stating plainly, because they point in opposite
-directions. It is why §6.6's malformed `" dir"` is harmless today: a value
-that is never published cannot mislead anybody. It is equally why a caller
-gets no help filling `staggerOption` or `perDeviceConfigsMatchType`
-correctly, and why a wrong value there is refused by Portainer rather than
-by this catalog.
+**What is true now.** `InputSchema` calls `applyTypeConstraints`
+(`internal/toolutil/schema.go`), which walks the Go type tree alongside the
+reflected schema and applies the constraints declared by *every* struct
+type it reaches. The walk has to match google/jsonschema-go v0.4.3's own
+rendering exactly, or a constraint lands on the wrong node or on nothing:
+the library inlines everything, with no `$defs` or `$ref` to follow, and
+renders a pointer as its element's schema with `"null"` added to `"type"`,
+a slice or array through `items`, a string-keyed map through
+`additionalProperties`, and an *embedded* struct's fields flattened into
+the embedding struct's own `properties`. That last one is why an embedded
+type's constraints are applied to the embedding node rather than to a
+sub-schema of their own: there is no sub-schema for an embedded struct to
+own. `reflect.VisibleFields` already reports every level of embedding as an
+anonymous field of the outermost struct, so a struct embedded inside an
+embedded struct is reached without recursing through it. Property names are
+computed the way the library's own `fieldJSONInfo` computes them, and a
+constraint declared on a pointer receiver is honoured as well as one on a
+value receiver. The top-level refusal travels down with the constraint: a
+nested entry naming a property its own struct does not have is an error,
+named together with the property path that led to it, not a silent skip.
 
-Not fixed here, for the same reason §9.3 was not: `applyEnumParams` walks
-one level of `properties` and refuses an entry naming a property it cannot
-find, so recursing means walking the schema tree and the Go type in
-lockstep through pointers, slices and maps — the same change §9.3 needs,
-and reviewable on its own. Whichever change closes it must also fix §6.6
-first, or registering the fix will start publishing `" dir"` to models.
+So `custom_templates.create_repository` now publishes
+`"enum": ["file", "dir"]` for
+`edgeSettings.relativePathSettings.perDeviceConfigsMatchType`, and
+`ValidateInput` — which resolves the same map — refuses a value outside it
+before any handler runs. Both consequences this section used to state have
+reversed: a caller now gets help filling `staggerOption` and
+`perDeviceConfigsMatchType`, and §6.6's malformed `" dir"` is no longer
+harmless-by-invisibility. That is precisely why §6.6 had to be, and was,
+fixed first: registering this change over the untrimmed values would have
+started publishing ` dir` to models as the only spelling this catalog
+admits.
+
+`MinimumParams` is fixed by the same walk, but that half is **currently
+unexercised by any real type**: every `MinimumParams()` in the tree today
+is on a top-level `...Input` type, so no generated nested one exists to
+exercise it. It is covered by fixture types in
+`internal/toolutil/nested_constraints_test.go` and by nothing else.
+
+Guarded by
+`TestUnit_InputSchema_NestedStructConstraints_ArePublishedAtEveryShape`
+(a bare struct, a pointer, two pointer levels, a slice of structs, a slice
+of pointers, an array, a map value, an embedded struct and a
+doubly-embedded struct),
+`TestUnit_InputSchema_NestedConstraintNamingAnUnknownProperty_IsRefused`,
+`TestUnit_InputSchema_NestedConstraintOnAPointerReceiver_IsStillApplied`,
+`TestUnit_InputSchema_NestedStructWithNoConstraints_PublishesNone` and
+`TestUnit_ValidateInput_NestedEnum_RefusesAnOutOfEnumValue`
+(`internal/toolutil/nested_constraints_test.go`), plus
+`TestUnit_RegisteredSpec_NestedEnumConstraints_ArePublishedAndTrimmed`
+(`internal/wiring/nested_enum_test.go`), which asserts the measured
+observable on the registered specs themselves. Reverting the fix to the old
+top-level-only assertion was confirmed to fail all of them except the two
+embedded cases, which pass either way because Go promotes an embedded
+type's methods onto the embedding type; those two are kept as guards on the
+opposite mistake, a walk that looks for a sub-schema an embedded struct
+does not have.
+
+§9.3's nested *edition* pruning remains open. It needs the same kind of
+lockstep walk, over `toolutil.FieldEditions` and `actioncatalog.Build`
+rather than over these two constraint interfaces, and none of wave 1's
+domains is affected by it — so it was left alone here rather than folded
+into a change that is already two coupled defects wide.
 
 ---
 

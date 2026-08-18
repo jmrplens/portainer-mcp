@@ -127,10 +127,31 @@ type customTemplateCreateRepositoryInputEdgeSettingsRelativePathSettings struct 
 	SupportRelativePath *bool `json:"supportRelativePath,omitempty" jsonschema:"Whether the stack supports relative path volume" edition:"EE"`
 }
 
+// EnumParams publishes "dir", not the vendored " dir".
+//
+// portaineree.CustomTemplateRelativePathSettings declares both these fields
+// as an allOf $ref to portainer.PerDevConfigsFilterType — whose own enum is
+// the clean ["file", "dir"] — while attaching an inline ["file", " dir"] of
+// its own beside that $ref. A sibling keyword beats the $ref it sits next to,
+// deliberately, in cmd/gen_action_inputs's resolver, so the leading space was
+// what this method returned when the file was first scaffolded. Portainer's
+// " dir" is a typo in the document, contradicted by the very component the
+// same node references. The server was measured accepting "dir", " dir" and
+// even "zzz-not-a-value" here, storing each verbatim, so it validates this
+// field not at all: the published enum is a client-side constraint only, and
+// therefore the only thing steering a model away from the typo.
+//
+// The generator no longer emits it: normaliseEnumValues
+// (cmd/gen_action_inputs/schema.go) trims every enum value as it is read out
+// of the document, so a regeneration produces exactly what is written here.
+// See docs/api-divergences.md §6.6, and the identically-corrected methods on
+// customTemplateCreateStringInputEdgeSettingsRelativePathSettings and
+// customTemplateUpdateInputEdgeSettingsRelativePathSettings below, which the
+// same schema feeds.
 func (customTemplateCreateRepositoryInputEdgeSettingsRelativePathSettings) EnumParams() map[string][]any {
 	return map[string][]any{
-		"perDeviceConfigsGroupMatchType": {"file", " dir"},
-		"perDeviceConfigsMatchType":      {"file", " dir"},
+		"perDeviceConfigsGroupMatchType": {"file", "dir"},
+		"perDeviceConfigsMatchType":      {"file", "dir"},
 	}
 }
 
@@ -242,10 +263,13 @@ type customTemplateCreateStringInputEdgeSettingsRelativePathSettings struct {
 	SupportRelativePath *bool `json:"supportRelativePath,omitempty" jsonschema:"Whether the stack supports relative path volume" edition:"EE"`
 }
 
+// EnumParams publishes "dir", not the vendored " dir"; see
+// customTemplateCreateRepositoryInputEdgeSettingsRelativePathSettings's own
+// EnumParams above for why, and docs/api-divergences.md §6.6.
 func (customTemplateCreateStringInputEdgeSettingsRelativePathSettings) EnumParams() map[string][]any {
 	return map[string][]any{
-		"perDeviceConfigsGroupMatchType": {"file", " dir"},
-		"perDeviceConfigsMatchType":      {"file", " dir"},
+		"perDeviceConfigsGroupMatchType": {"file", "dir"},
+		"perDeviceConfigsMatchType":      {"file", "dir"},
 	}
 }
 
@@ -429,10 +453,13 @@ type customTemplateUpdateInputEdgeSettingsRelativePathSettings struct {
 	SupportRelativePath *bool `json:"supportRelativePath,omitempty" jsonschema:"Whether the stack supports relative path volume" edition:"EE"`
 }
 
+// EnumParams publishes "dir", not the vendored " dir"; see
+// customTemplateCreateRepositoryInputEdgeSettingsRelativePathSettings's own
+// EnumParams above for why, and docs/api-divergences.md §6.6.
 func (customTemplateUpdateInputEdgeSettingsRelativePathSettings) EnumParams() map[string][]any {
 	return map[string][]any{
-		"perDeviceConfigsGroupMatchType": {"file", " dir"},
-		"perDeviceConfigsMatchType":      {"file", " dir"},
+		"perDeviceConfigsGroupMatchType": {"file", "dir"},
+		"perDeviceConfigsMatchType":      {"file", "dir"},
 	}
 }
 

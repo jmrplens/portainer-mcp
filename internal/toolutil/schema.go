@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -90,15 +91,8 @@ func (s ActionSpec) InputSchema() (map[string]any, error) {
 		return nil, fmt.Errorf("input schema for %s: decode %s: %w", describeAction(s), t, err)
 	}
 
-	if enumer, ok := s.Input.(EnumParams); ok {
-		if err := applyEnumParams(asMap, enumer.EnumParams()); err != nil {
-			return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
-		}
-	}
-	if minimums, ok := s.Input.(MinimumParams); ok {
-		if err := applyMinimumParams(asMap, minimums.MinimumParams()); err != nil {
-			return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
-		}
+	if err := applyTypeConstraints(t, asMap, map[reflect.Type]bool{}); err != nil {
+		return nil, fmt.Errorf("input schema for %s: %w", describeAction(s), err)
 	}
 
 	schemaCacheMu.Lock()
@@ -221,6 +215,193 @@ func applyMinimumParams(schema map[string]any, minimums map[string]int) error {
 		propSchema["minimum"] = minimum
 	}
 	return nil
+}
+
+// enumParamsInterface and minimumParamsInterface are the two constraint
+// interfaces applyTypeConstraints looks for on every struct type it reaches,
+// resolved once rather than per node.
+var (
+	enumParamsInterface    = reflect.TypeFor[EnumParams]()
+	minimumParamsInterface = reflect.TypeFor[MinimumParams]()
+)
+
+// applyTypeConstraints walks the Go type tree of an Input alongside the JSON
+// Schema jsonschema.ForType reflected from it, applying the EnumParams and
+// MinimumParams constraints declared by *every* struct type it reaches — not
+// only the top-level Input type.
+//
+// InputSchema used to assert both interfaces on the top-level Input value
+// alone:
+//
+//	if enumer, ok := s.Input.(EnumParams); ok { ... }
+//
+// which meant a nested struct type's generated EnumParams()/MinimumParams()
+// was never consulted, however faithfully cmd/gen_action_inputs had emitted
+// it. The measured consequence (docs/api-divergences.md §9.5) was that
+// custom_templates.create_repository published no "enum" at all for
+// edgeSettings.relativePathSettings.perDeviceConfigsMatchType, and
+// ValidateInput — which resolves the same map — enforced none either, so a
+// model got no help filling a field whose legal values the specification
+// states, and a wrong value came back as a Portainer error rather than a
+// catalog refusal.
+//
+// # What the walk has to match
+//
+// The shape of the reflected schema, exactly, or a constraint lands on the
+// wrong node or on nothing. google/jsonschema-go v0.4.3 inlines everything —
+// there are no $defs or $ref to follow — and renders:
+//
+//   - a struct as an object with "properties";
+//   - a pointer as its element's schema with "null" added to "type", so a
+//     *T property and a T property carry the same "properties" map;
+//   - a slice or array as an array with the element's schema under "items";
+//   - a map with string keys as an object with the value's schema under
+//     "additionalProperties";
+//   - an *embedded* struct's fields flattened into the embedding struct's own
+//     "properties" (its forType loop skips every anonymous field and emits the
+//     promoted leaves reflect.VisibleFields hands it).
+//
+// The last of those is why an embedded type's own constraints are applied to
+// the *embedding* node rather than to a sub-schema: there is no sub-schema for
+// an embedded struct to own. reflect.VisibleFields already reports every level
+// of embedding as an anonymous field of the outermost struct, so a struct
+// embedded inside an embedded struct is reached without recursing through it.
+//
+// seen guards against a type cycle. jsonschema.ForType refuses a cyclic type
+// outright, so a cycle cannot reach this walk today through InputSchema; the
+// guard is there so that this function cannot be the thing that hangs if that
+// ever changes.
+func applyTypeConstraints(t reflect.Type, node map[string]any, seen map[reflect.Type]bool) error {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		items, ok := node["items"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		return applyTypeConstraints(t.Elem(), items, seen)
+	case reflect.Map:
+		// A struct node's "additionalProperties" is the JSON literal false, not
+		// an object, so this type assertion is also what keeps a struct's own
+		// "no unknown properties" marker from being walked as a map value.
+		values, ok := node["additionalProperties"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		return applyTypeConstraints(t.Elem(), values, seen)
+	case reflect.Struct:
+		return applyStructConstraints(t, node, seen)
+	default:
+		return nil
+	}
+}
+
+// applyStructConstraints applies t's own declared constraints to node, then
+// walks t's fields into node's matching sub-schemas.
+func applyStructConstraints(t reflect.Type, node map[string]any, seen map[reflect.Type]bool) error {
+	if t.Name() != "" {
+		if seen[t] {
+			return nil
+		}
+		seen[t] = true
+		defer delete(seen, t)
+	}
+	if err := applyDeclaredConstraints(t, node); err != nil {
+		return err
+	}
+
+	props, _ := node["properties"].(map[string]any)
+	for _, field := range reflect.VisibleFields(t) {
+		if field.Anonymous {
+			embedded := field.Type
+			for embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() != reflect.Struct {
+				continue
+			}
+			// An embedded struct's fields are this node's own properties, so
+			// its constraints are applied here. Its fields are not walked
+			// again: VisibleFields lists them, and any struct they embed in
+			// turn, as further entries of this same loop.
+			if err := applyDeclaredConstraints(embedded, node); err != nil {
+				return err
+			}
+			continue
+		}
+		name, ok := jsonPropertyName(field)
+		if !ok {
+			continue
+		}
+		child, ok := props[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := applyTypeConstraints(field.Type, child, seen); err != nil {
+			return fmt.Errorf("property %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// applyDeclaredConstraints applies whichever of the two constraint interfaces
+// t implements to node, which must be the schema node standing for t's own
+// properties.
+//
+// Both a value receiver and a pointer receiver are honoured: the generated
+// methods use value receivers, but a hand-written Input declaring one on *T
+// would otherwise be silently ignored — the same class of silence this whole
+// function exists to end.
+func applyDeclaredConstraints(t reflect.Type, node map[string]any) error {
+	if v, ok := valueImplementing(t, enumParamsInterface); ok {
+		if err := applyEnumParams(node, v.(EnumParams).EnumParams()); err != nil {
+			return err
+		}
+	}
+	if v, ok := valueImplementing(t, minimumParamsInterface); ok {
+		if err := applyMinimumParams(node, v.(MinimumParams).MinimumParams()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// valueImplementing returns a value satisfying iface, built from t or from *t,
+// or reports that neither does.
+func valueImplementing(t, iface reflect.Type) (any, bool) {
+	if t.Implements(iface) {
+		return reflect.Zero(t).Interface(), true
+	}
+	if pointer := reflect.PointerTo(t); pointer.Implements(iface) {
+		return reflect.New(t).Interface(), true
+	}
+	return nil, false
+}
+
+// jsonPropertyName returns the JSON property name field is reflected under,
+// mirroring google/jsonschema-go's own fieldJSONInfo: an unexported field and
+// a `json:"-"` field have no property, a tag name overrides the Go field name,
+// and `json:",omitempty"` (an empty name with options) keeps the Go field
+// name. A name computed any other way would look up a property that the
+// reflected schema does not have, and silently skip the constraint.
+func jsonPropertyName(field reflect.StructField) (string, bool) {
+	if !field.IsExported() {
+		return "", false
+	}
+	tag, ok := field.Tag.Lookup("json")
+	if !ok {
+		return field.Name, true
+	}
+	name, _, hasOptions := strings.Cut(tag, ",")
+	if name == "-" && !hasOptions {
+		return "", false
+	}
+	if name == "" {
+		return field.Name, true
+	}
+	return name, true
 }
 
 // resolvedSchemaCache holds the *jsonschema.Resolved used to validate raw call
