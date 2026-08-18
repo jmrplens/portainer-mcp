@@ -775,6 +775,15 @@ var actionNameOverrides = map[string]actionNameOverride{
 		Name:   "cloud.generate_ssh_key",
 		Reason: "operationId is the bare verb \"Generate\" with no object (POST /sshkeygen); ActionName succeeds and returns \"cloud.generate\", which is grammatically valid but names nothing a model could act on without reading the description first",
 	},
+	"StackCreateKubernetesFile": {
+		Domain: "stacks",
+		Name:   "stacks.create_kubernetes_string",
+		Reason: "the operationId is wrong about its own route: POST /stacks/create/kubernetes/string takes a Kubernetes manifest as the JSON property stackFileContent and declares no multipart form at all, so ActionName's mechanical \"stacks.create_kubernetes_file\" names a file upload that does not exist. " +
+			"This is the third kind of entry this table holds, after \"operationId equals its own domain prefix\" and \"operationId names nothing actionable\": a mechanical name that is not merely uninformative but false. " +
+			"It is also a collision in meaning rather than in text — the stacks domain has two genuine multipart uploads, StackCreateDockerStandaloneFile and StackCreateDockerSwarmFile, whose hand-written actions are named create_docker_standalone_file and create_docker_swarm_file, so \"create_kubernetes_file\" would sit beside them claiming a shape it does not have. " +
+			"Renamed to the \"_string\" form its two Docker siblings already use for the same inline-content shape. " +
+			"Its neighbour StackCreateKubernetesGit is deliberately left alone: \"stacks.create_kubernetes_git\" is inconsistent with create_docker_standalone_repository for the same /repository route shape, but it is not false, and this table is for names that mislead",
+	},
 }
 
 // ResolveActionName is what Task 2 and Task 3's domain packages call instead

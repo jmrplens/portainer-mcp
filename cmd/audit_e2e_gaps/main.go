@@ -47,6 +47,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -95,10 +96,11 @@ func run(w io.Writer, dir string) error {
 // OperationID resolves only in Community Edition's applicability index, so
 // building with Options{Edition: EE} filters it OUT — the opposite of "every
 // action that could ever be registered" this audit's denominator is required
-// to be. Measured: allSpecs() declares 19 actions; a Build with Edition: EE
-// alone keeps only 18. Building once per edition and taking the union of both
-// is what makes the count exhaustive regardless of which edition a given
-// action is exclusive to.
+// to be. Measured over the domains registered today: allSpecs() declares 61
+// actions, a Build with Edition: EE alone keeps 60, and one with Edition: CE
+// keeps 48. Building once per edition and taking the union of both is what
+// makes the count exhaustive regardless of which edition a given action is
+// exclusive to.
 func allCatalogActionNames() ([]string, error) {
 	seen := map[string]bool{}
 	for _, ed := range []edition.Edition{edition.CE, edition.EE} {
@@ -127,6 +129,7 @@ func allSpecs() []toolutil.ActionSpec {
 	specs = append(specs, registries.Specs()...)
 	specs = append(specs, docker.Specs()...)
 	specs = append(specs, custom_templates.Specs()...)
+	specs = append(specs, stacks.Specs()...)
 	return specs
 }
 

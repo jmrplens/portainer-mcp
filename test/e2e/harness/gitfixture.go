@@ -63,16 +63,28 @@ const (
 	// Portainer really cloned this repository rather than merely answering
 	// 200. The compose file writes it with a heredoc; the drift guard in
 	// gitfixture_test.go is what keeps the two in step.
+	//
+	// Its service sleeps rather than exiting, and that is a measured
+	// requirement of wave 1 stage C rather than a stylistic choice. Stage B
+	// only ever cloned this file into a custom template, which deploys
+	// nothing. stacks.create_docker_swarm_repository deploys it as a real
+	// Swarm service, and a Swarm task that exits is restarted forever, so
+	// the service never converges: measured against this estate, the stack
+	// sat at StackStatusDeploying indefinitely while holding Portainer's own
+	// stack lock, and every concurrent stack operation queued behind it
+	// until it timed out. See docs/api-divergences.md section 2.9 and the
+	// note beside the `git` service in test/e2e/docker-compose.yml.
 	GitFixtureStackFile = "services:\n" +
 		"  hello:\n" +
 		"    image: busybox:1.36\n" +
-		"    command: [\"echo\", \"portainer-mcp e2e git fixture revision one\"]\n"
+		"    command: [\"sh\", \"-c\", \"echo portainer-mcp e2e git fixture revision one; sleep 86400\"]\n"
 
 	// GitFixtureMutableStackFile is the same for the mutable repository's
-	// initial commit — the content a template created from it carries until
-	// something pushes over it.
+	// initial commit — the content a template or stack created from it
+	// carries until something pushes over it. It is written the same way as
+	// GitFixtureStackFile above, for the reason stated there.
 	GitFixtureMutableStackFile = "services:\n" +
 		"  hello:\n" +
 		"    image: busybox:1.36\n" +
-		"    command: [\"echo\", \"portainer-mcp e2e mutable fixture, initial revision\"]\n"
+		"    command: [\"sh\", \"-c\", \"echo portainer-mcp e2e mutable fixture, initial revision; sleep 86400\"]\n"
 )

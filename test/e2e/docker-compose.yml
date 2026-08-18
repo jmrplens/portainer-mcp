@@ -203,6 +203,22 @@ services:
   # fetch, and a push into the shared repository would change what every
   # concurrently running clone sees.
   #
+  # Both seeded stack files run a long-lived command rather than a bare
+  # `echo`, and that is a measured requirement rather than a stylistic
+  # choice. Wave 1 stage B only ever CLONED this repository into a custom
+  # template, which deploys nothing, so a container that exited immediately
+  # cost nothing. Stage C deploys it: stacks.create_docker_swarm_repository
+  # turns this file into a real Swarm service, and a Swarm task that exits is
+  # restarted forever, so the service never converges and Portainer reports
+  # the stack as StackStatusDeploying indefinitely — measured against this
+  # estate, still 3 after thirty seconds, with the deploy holding Portainer's
+  # own stack lock and every concurrent stack operation queueing behind it
+  # until it timed out. A Docker Compose stack whose container exits settles
+  # to StackStatusActive within a few seconds, so only Swarm is affected, but
+  # both files are written the same way: the next person to deploy the
+  # mutable one should not have to rediscover this. See
+  # docs/api-divergences.md section 2.9.
+  #
   # /commit.sh is what the suite execs to make that commit: it reads a new
   # stack file on stdin, commits it and pushes it into mutable.git — never
   # into repo.git, so no argument decides which repository is written to.
@@ -228,7 +244,7 @@ services:
         services:
           hello:
             image: busybox:1.36
-            command: ["echo", "portainer-mcp e2e git fixture revision one"]
+            command: ["sh", "-c", "echo portainer-mcp e2e git fixture revision one; sleep 86400"]
         YAML
         git add -A
         git commit -q -m "seed the read-only fixture repository"
@@ -239,7 +255,7 @@ services:
         services:
           hello:
             image: busybox:1.36
-            command: ["echo", "portainer-mcp e2e mutable fixture, initial revision"]
+            command: ["sh", "-c", "echo portainer-mcp e2e mutable fixture, initial revision; sleep 86400"]
         YAML
         git add -A
         git commit -q -m "seed the mutable fixture repository"

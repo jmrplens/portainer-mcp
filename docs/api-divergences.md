@@ -471,6 +471,172 @@ Consequence for a caller: to change a git-backed template's stack file, push
 to the repository and call `custom_templates.git_fetch`. Sending different
 content through `update` is accepted and lost.
 
+### 2.7 `GET /stacks`'s `filters` parameter: `EndpointID` must be a number, it matches Compose stacks only, and two keys union rather than intersect
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-18 (wave 1 stage C, task 7). Pinned
+by `TestStacks_List_FiltersComposeByEnvironmentAndSwarmBySwarmIdSeparately`
+in `test/e2e/suite/stacks_test.go`.
+
+This is the question §6.7 answered for `custom_templates.list`, asked of the
+other list route in this catalog, and the answer is different in kind. There
+is no encoding defect here: `StackList.filters` is a single
+`string` query parameter holding a JSON document, so nothing is comma-joined
+and the generated client sends what the caller wrote. What is wrong is the
+documented **usage**, in two independent ways.
+
+The vendored description is the whole of what either document says:
+
+> Filters to process on the stack list. Encoded as JSON (a map[string]string).
+> For example, {'SwarmID': 'jpofkc0i9uo9wtx1zesuk649w'} will only return
+> stacks that are part of the specified Swarm cluster. Available filters:
+> EndpointID, SwarmID.
+
+**First: it is not a `map[string]string`.** `SwarmID` is a string and
+`EndpointID` is an integer, and sending the latter as the document's own type
+is refused:
+
+```text
+GET /api/stacks?filters={"EndpointID":1}      → 200 [...]
+GET /api/stacks?filters={"EndpointID":"1"}    → 400
+  {"message":"Invalid query parameter: filters",
+   "details":"Json: cannot unmarshal \"\\\"1\\\"}\" into Go struct field
+              stacks.stackListOperationFilters.EndpointID of type int"}
+GET /api/stacks?filters=notjson               → 400
+  {"message":"Invalid query parameter: filters",
+   "details":"Json: expected 'null' but found invalid token: notjson"}
+```
+
+`stacks.list`'s own narrative in `internal/tools/stacks/stacks.go` carried
+the quoted form as its worked example — `"{\"EndpointID\":\"3\"}"` — which
+is the shape the server refuses. Corrected in the same change that recorded
+this.
+
+**Second: each key matches one stack type, and two keys union.** Measured
+against a server holding four stacks — two Compose (ids 3 and 5, environment
+1), one Swarm in environment 1 (id 6), one Swarm in environment 2 (id 2):
+
+```text
+GET /api/stacks                                          → ids 2, 3, 5, 6
+GET /api/stacks?filters={}                               → ids 2, 3, 5, 6
+GET /api/stacks?filters={"EndpointID":1}                 → ids 3, 5        (both Compose)
+GET /api/stacks?filters={"EndpointID":2}                 → []              (id 2 is Swarm)
+GET /api/stacks?filters={"SwarmID":"1h87bd0ie5u4p1..."}  → id 6            (Swarm only)
+GET /api/stacks?filters={"EndpointID":1,"SwarmID":"1h87bd0ie5u4p1..."}
+                                                         → ids 3, 5, 6     (the UNION)
+```
+
+So `EndpointID` never returns a Swarm stack, however plainly that stack is
+deployed in that environment, and `SwarmID` never returns a Compose one.
+Sending both keys widens the answer rather than narrowing it. Nothing in the
+document suggests either.
+
+Consequence for a caller, and for this repository's own code: a sweep that
+has to see every stack must send **no filter at all**. `listAllStacks` in
+`test/e2e/suite/stacks_test.go` does exactly that, with a comment pointing
+here, because a filtered sweep would be silently blind to half the stacks it
+is meant to find — including the orphan-cleanup sweep, whose whole job is to
+find what a dead run left behind.
+
+### 2.8 An Edge stack targeting a Docker edge environment is accepted as `DeploymentType: 1` (kubernetes) and refused as `0` (compose)
+
+**Evidence: measured** against a live Portainer Business Edition 2.44.0,
+2026-08-18 (wave 1 stage C, task 7), against the estate's own edge
+environment (`Type: 7`, EdgeAgentOnDockerEnvironment) with the edge agent
+enrolled.
+
+This route belongs to the future `edge_stacks` domain, not to this one; it
+is recorded here because `stacks.edge_stack_webhook_invoke` — the single
+`/edge_stacks/` operation the vendored document tags `stacks` — cannot be
+exercised without an edge stack to invoke, and the obvious way to create one
+does not work:
+
+```text
+POST /api/edge_stacks/create/string
+{"name":"probe-edge-str","edgeGroups":[1],"deploymentType":0,
+ "stackFileContent":"services:\n  hello:\n    image: busybox:1.36\n ..."}
+→ 500 {"message":"Unable to create Edge stack",
+       "details":"Unable to store manifest: edge stack with config do not match the environment type"}
+
+POST /api/edge_stacks/create/string            (same edge group, deploymentType 1)
+{"name":"probe-edge-str2","edgeGroups":[1],"deploymentType":1,
+ "stackFileContent":"apiVersion: v1\nkind: ConfigMap\n ..."}
+→ 200 {"Id":1,...,"DeploymentType":1,"ManifestPath":"k8s-deployment.yml", ...}
+
+POST /api/edge_stacks/create/string            (deploymentType 2)
+→ 400 {"message":"Invalid payload","details":"Invalid deployment type"}
+```
+
+That is the opposite of what the environment type suggests: the group's only
+member is a **Docker** edge environment, and it is the Docker deployment type
+that is refused. The cause was not isolated — the agent had not yet reported
+a snapshot (`LastCheckInDate: 0`, `Snapshots: []`) when this was measured, so
+"Portainer cannot yet tell what the environment runs" is a live hypothesis —
+and this is recorded as the measurement it is, not as an explanation.
+
+What depends on it: `createEdgeStackFixture` in
+`test/e2e/suite/stacks_test.go` passes `deploymentType: 1` with a comment
+pointing here. Nothing in the webhook test needs the edge agent to actually
+apply the manifest; what is under test is Portainer's own reaction to the
+webhook. A future `edge_stacks` domain must measure this properly before
+publishing any guidance about `DeploymentType`.
+
+### 2.9 A Swarm stack whose task exits is reported `StackStatusDeploying` for ever, and holds up every other stack operation
+
+**Evidence: measured** against a live Portainer 2.44.0 Community Edition,
+2026-08-18 (wave 1 stage C, task 7).
+
+Not a divergence from the vendored document — `portainer.StackStatus` says 3
+means "deployment in progress", and by Swarm's own reckoning it never stops
+being in progress — but a live behaviour with a large enough blast radius to
+be worth a section, because it consumed a full debugging cycle of this task
+and it is invisible from the API alone.
+
+A Swarm stack deployed from a stack file whose service exits immediately
+(`command: ["echo", "..."]`) never leaves status 3. Swarm restarts the task,
+the task exits, and the service never converges:
+
+```text
+POST /api/stacks/create/swarm/repository?endpointId=1
+{"name":"probe-swgit","swarmId":"1h87bd0ie5u4p1cqqzvos4zqw",
+ "repositoryUrl":"http://git:8080/cgi-bin/git/repo.git","composeFile":"docker-compose.yml"}
+→ 200  (returns immediately)
+
+GET /api/stacks/38   at +5s, +10s, +15s, +20s, +25s, +30s → "Status": 3 every time
+GET /api/endpoints/1/docker/tasks → 6 tasks: {complete: 4, running: 1, ready: 1}
+```
+
+The same file deployed as a Docker **Compose** stack settles normally —
+status 3 at +3s, status 1 at +6s — so this is Swarm's convergence rule, not
+Portainer's status bookkeeping.
+
+The blast radius is the part that matters. Portainer serialises stack work,
+so a stack stuck deploying blocks the rest: with twelve such deployments in
+flight, unrelated `DELETE /api/stacks/{id}` calls on the same server exceeded
+a 60-second client deadline, and unrelated stacks reported status 3 past 90
+seconds. From the outside that reads as an overloaded estate or a Portainer
+defect; it is neither.
+
+What depends on it: the estate's git fixture (`test/e2e/docker-compose.yml`'s
+`git` service, and `GitFixtureStackFile` /`GitFixtureMutableStackFile` in
+`test/e2e/harness/gitfixture.go`) now seeds a stack file whose service
+sleeps. Wave 1 stage B only ever cloned that file into a custom template,
+which deploys nothing, so a bare `echo` cost nothing then and costs a
+debugging session now.
+
+**Related, and the reason `stacks.git_redeploy` needs a commit to prove
+anything:** re-issuing the redeploy with no new commit in the remote answers
+200 and leaves the stored file exactly as it was —
+
+```text
+PUT /api/stacks/3/git/redeploy?endpointId=1  {}   → 200   (after a commit; file changes)
+PUT /api/stacks/3/git/redeploy?endpointId=1  {}   → 200   (no new commit; file unchanged)
+```
+
+— so a redeploy test against an unchanged repository passes identically
+against an implementation that fetches nothing at all. The same is true of
+both webhook routes, which answer `204` with no body either way.
+
 ---
 
 ## 3. Requirements the documents understate or omit
@@ -760,9 +926,58 @@ and both parties had skipped it. Separate "the server is not there" from
 "the client refuses" before writing either down, and name the edition every
 time the two legs have not both been run.
 
----
+### 3.9 `DELETE /stacks/name/{name}` requires a `namespace` query parameter neither document declares
 
-## 4. Responses that leak secrets
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-18 (wave 1 stage C, task 7). Pinned
+by
+`TestStacks_DeleteKubernetesByName_SucceedsWithTheUndocumentedNamespaceParameter`
+(live) and
+`TestUnit_DeleteKubernetesByName_SendsTheUndocumentedNamespaceParameter`
+(the query string this handler emits).
+
+`StackDeleteKubernetesByName` declares exactly three parameters, and both
+vendored documents declare the same three, byte for byte: `name` (path,
+required), `external` (query) and `endpointId` (query, required). The server
+requires a fourth:
+
+```text
+DELETE /api/stacks/name/probe-k8s?endpointId=1                    (CE)
+→ 400 {"message":"Invalid query parameter: namespace","details":"Missing query parameter"}
+
+DELETE /api/stacks/name/probe-k8s?endpointId=1                    (EE)
+→ 400 {"message":"Invalid query parameter: namespace","details":"Missing query parameter"}
+
+DELETE /api/stacks/name/probe-k8s?endpointId=1&namespace=default  (CE)
+→ 204
+DELETE /api/stacks/name/probe-k8s?endpointId=1&namespace=default  (EE)
+→ 204
+```
+
+The check runs before the endpoint is resolved: with `namespace` supplied and
+`endpointId` omitted the failure moves on to
+`404 … (bucket=endpoints, key=0)`, so `namespace` is genuinely required and
+not merely required in some Kubernetes-specific branch.
+
+**Consequence, and how it was closed.** When this was first measured the
+action was generated from the document, so its input carried no `namespace`
+field and had no way to acquire one: every call it could make failed with the
+400 above. The generated client cannot help either — its own
+`StackDeleteKubernetesByNameParams` carries only `External` and `EndpointId`,
+both derived from the same document.
+
+`stacks.delete_kubernetes_by_name` is therefore hand-written. It publishes
+`namespace` as a required field and appends it through the `RequestEditorFn`
+hook the generated client already offers, which keeps the typed call and its
+response handling intact and confines the divergence to one line rather than
+bypassing the client the way `docker`'s three string-identifier handlers must.
+The added field is a deliberate divergence from both documents and carries a
+dated entry in `api/spec-drift-allowlist.yaml`.
+
+Proven against a live estate rather than reasoned about: removing the line
+that writes the parameter makes the end-to-end test fail on both editions
+with Portainer's own `400 Invalid query parameter: namespace`, and restoring
+it makes the call answer 204.
 
 ### 4.1 `GET /api/licenses` returns the full licence key and the holder's name
 
@@ -799,7 +1014,7 @@ declared `redact<OperationID>` wrapper.
 ## 5. Edition asymmetry: Business Edition is not a superset of Community
 
 **Evidence: vendored spec**, measured across both committed documents during
-the P2 pre-scan, re-verified 2026-08-03.
+the P2 pre-scan, re-verified 2026-08-18.
 
 The client is generated from the Business Edition document alone. That is a
 deliberate decision, but it is only sound because the gaps are known and
@@ -807,12 +1022,49 @@ shimmed by hand.
 
 | Measurement | Value |
 |---|---|
-| Operations that exist only in Community Edition | 2 |
+| Community-only `operationId`s, compared as the documents spell them | 4 |
+| Community-only `operationId`s, compared as this project keys them | 3 |
+| Community-only **routes** — served by CE, absent from the EE document | 2 |
 | Shared schemas that differ between editions | 42 |
 | Paths that differ between editions | 118 |
 | Shared schemas that **lose** Community fields under the Business shape | 4 |
 
-The two Community-only operations have **no generated method at all**:
+Three counts rather than one, because the raw set difference over the two
+documents' `operationId` values overstates the asymmetry twice over, and both
+overstatements matter to code that is already written.
+
+A raw set difference returns four: `GetAllKubernetesApplicationsCount`,
+`GetKubernetesConfig`, `WebhookInvoke` and `systemUpgrade`. Two of the four
+are not Community-only operations at all.
+
+**`GetAllKubernetesApplicationsCount` differs from its Business Edition
+counterpart only in the case of its first letter.** Community Edition declares
+`GetAllKubernetesApplicationsCount` and Business Edition declares
+`getAllKubernetesApplicationsCount`, on the same route `GET
+/kubernetes/{id}/applications/count`. Every mechanism in this project compares
+operationIds in the exported Go form oapi-codegen derives (upper-casing the
+first rune — `exportedName` in `cmd/audit_1to1`, the identical transform in
+`cmd/gen_applicability`, and what `toolutil.ActionSpec.OperationID` holds), so
+the two are one name everywhere it counts. The generated client has
+`GetAllKubernetesApplicationsCountWithResponse`, generated from the Business
+Edition document, under exactly the name the Community Edition document uses.
+There is nothing to shim.
+
+**`WebhookInvoke` is one route under two names.** `POST
+/stacks/webhooks/{webhookID}` is served by both editions; Business Edition
+calls the operation `StacksWebhookInvoke` and Community Edition calls it
+`WebhookInvoke`. The catalog is generated from the Business Edition document,
+so the action `stacks.webhook_invoke` carries the Business Edition spelling and
+a Community Edition user reaches the same route through the same action name.
+Only the coverage audit, which keys strictly by operationId, could see a gap
+here — and `cmd/audit_1to1`'s alias table (`alias.go`) is what closes it:
+covering either name covers both, and the entry fails the build if the two ids
+ever stop naming one route. An allow-list entry would have been the wrong
+instrument, since that file is for operations that will never be exposed, and
+this one is.
+
+That leaves **two** genuinely Community-only routes, and these are the ones
+with **no generated method at all**:
 
 | Operation ID | Route |
 |---|---|

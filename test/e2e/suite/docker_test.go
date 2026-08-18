@@ -197,6 +197,16 @@ const fabricatedContainerID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 // server" assertions, via actionCallParams and a direct CallTool (callTool
 // itself cannot be reused here: it fails the test on any IsError result,
 // which is exactly the outcome this assertion wants to see).
+//
+// Its failure message names only the action and says the call succeeded. It
+// used to say "against a fabricated identifier", which was true of its two
+// original call sites and is not true of the ones stacks_test.go added: an
+// input the server refuses on its type, a Kubernetes create aimed at a Docker
+// environment, and a read-back proving a delete really deleted are all "this
+// must fail" assertions with no fabricated identifier anywhere. A message
+// that names a cause the caller did not have sends whoever reads the failure
+// looking in the wrong place, so the cause is left to the subtest name, which
+// every call site already carries.
 func assertActionFails(t *testing.T, s *mcp.ClientSession, surface, action string, in map[string]any) {
 	t.Helper()
 	toolName, args := actionCallParams(t, surface, action, in)
@@ -205,7 +215,7 @@ func assertActionFails(t *testing.T, s *mcp.ClientSession, surface, action strin
 		t.Fatalf("CallTool(%s): %v", toolName, err)
 	}
 	if !res.IsError {
-		t.Errorf("%s against a fabricated identifier succeeded, want a failure: %s", action, toolResultText(res))
+		t.Errorf("%s succeeded against the live server, want a failure: %s", action, toolResultText(res))
 	}
 }
 

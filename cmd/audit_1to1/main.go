@@ -9,7 +9,7 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 18 of 441 Business-Edition actions declared, plain run (what `make
+// With 60 of 441 Business-Edition operations covered, plain run (what `make
 // audit-1to1` calls, and what a human asking "are we done" wants) fails
 // today and keeps failing for most of P3 — that is correct, not a bug to
 // work around.
@@ -49,6 +49,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -56,7 +57,11 @@ import (
 
 // Default locations of this audit's inputs. Parameterised on run rather than
 // hardcoded there, so tests can point every one of them at a temporary
-// fixture without touching the working directory.
+// fixture without touching the working directory. operationAliases (alias.go)
+// is passed the same way and for the same reason: it is checked against the
+// documents actually loaded, so a run over a two-operation fixture spec must
+// be able to supply the aliases that fixture declares — none — rather than
+// the ones the real vendored documents do.
 const (
 	specsDir       = "api/specs"
 	defaultSpecVer = "2.44.0"
@@ -78,9 +83,9 @@ func main() {
 
 	var err error
 	if *baseline {
-		err = runRatchet(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile)
+		err = runRatchet(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile, operationAliases)
 	} else {
-		err = run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile)
+		err = run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, operationAliases)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit_1to1: %v\n", err)
@@ -93,7 +98,7 @@ func main() {
 // build must fail: a malformed input, an allow-list or catalog entry naming
 // an operation that resolves in neither spec, or any operation left
 // uncovered.
-func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile string) error {
+func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile string, aliases []operationAlias) error {
 	ceData, err := readFileIn(specsDir, ceSpecFile)
 	if err != nil {
 		return err
@@ -120,7 +125,7 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 		return fmt.Errorf("%s/%s: %w", allowListDir, allowListFile, err)
 	}
 
-	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList)
+	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList, aliases)
 	if err != nil {
 		return err
 	}
@@ -158,7 +163,7 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 // should be updated in the same commit that improved it, which is also what
 // makes the improvement visible in the diff). It cannot go backwards, it is
 // green today, and it tightens automatically as P3 lands each domain.
-func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile string) error {
+func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile string, aliases []operationAlias) error {
 	ceData, err := readFileIn(specsDir, ceSpecFile)
 	if err != nil {
 		return err
@@ -193,7 +198,7 @@ func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, all
 		return fmt.Errorf("%s/%s: %w", baselineDir, baselineFile, err)
 	}
 
-	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList)
+	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList, aliases)
 	if err != nil {
 		return err
 	}
@@ -221,6 +226,7 @@ func allCatalogSpecs() []toolutil.ActionSpec {
 	specs = append(specs, registries.Specs()...)
 	specs = append(specs, docker.Specs()...)
 	specs = append(specs, custom_templates.Specs()...)
+	specs = append(specs, stacks.Specs()...)
 	return specs
 }
 

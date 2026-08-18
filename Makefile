@@ -79,8 +79,16 @@ e2e-k8s-down:
 e2e-licence-release:
 	./test/e2e/scripts/licence-check.sh
 
+# The timeout is sized from a measurement, not a guess: with wave 1 stage C's
+# stacks suite landed, a full local run against a freshly provisioned estate
+# takes 706 seconds (2026-08-18, 12-core host, no Kubernetes leg). Almost all
+# of it is real work — every stack action deploys, redeploys or removes
+# something inside the estate's own Docker daemon, and several wait for a
+# Swarm service or an asynchronous webhook to converge. 15m left under three
+# minutes of headroom on the machine the suite was written on, which is not
+# enough for a slower or busier CI runner.
 test-e2e:
-	go test -tags e2e -timeout 15m -count=1 ./test/e2e/suite/...
+	go test -tags e2e -timeout 30m -count=1 ./test/e2e/suite/...
 
 # audit-e2e-gaps reports which catalog actions no e2e test references. It is
 # informational, not a CI gate, until P7: with the catalog in early phases of
