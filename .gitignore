@@ -23,3 +23,6 @@ test/e2e/.kubeconfig
 # Derived from the estate by the provisioner: EDGE_ID/EDGE_KEY for docker
 # compose --env-file, carries a live edge enrolment key.
 test/e2e/.edge.env
+
+# Harness scratch: isolated worktrees created for subagents.
+.claude/worktrees/
