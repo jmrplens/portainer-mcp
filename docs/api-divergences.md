@@ -1350,10 +1350,44 @@ invisible one is not.
 
 The measured effect on the audit, 2026-08-18: the denominators rose from 251
 to **252** (CE) and from 441 to **442** (EE) as `EndpointGroupInspect`
-entered both; covered stayed at 71 and 93, so the ratchet baseline is
-unchanged and the operation is reported as an uncovered gap (`endpoint_groups`
-ships the action separately). The remaining 13 Community routes are now
-listed by name in the report instead of vanishing from it.
+entered both; covered stayed at 71 and 93 at that point, so the ratchet
+baseline was unchanged and the operation was reported as an uncovered gap.
+The remaining 13 Community routes are now listed by name in the report
+instead of vanishing from it.
+
+**And then it was covered** (task 9, the same day). `endpoint_groups.inspect`
+now declares the route under that synthetic name, with a hand-written handler
+(`internal/tools/endpoint_groups/handlers.go`) because `oapi-codegen` emits no
+method at all for an operation without an `operationId` — there is no
+generated client call to make, not merely one under an unexpected name.
+Covered rose 71 → **72** (CE) and 93 → **94** (EE) and
+`api/coverage-baseline.yaml` moved with it.
+
+One further seam had to learn the same rule to let that happen, and it is
+worth recording because it was the *third* place the name had to be
+understood, after `cmd/audit_1to1` and `cmd/gen_applicability`.
+`cmd/audit_spec_drift`'s own `parseSpecOperations` also skipped operations
+with no `operationId`, so the moment the catalog declared the action the
+drift audit refused outright — `action "endpoint_groups.inspect": OperationID
+"EndpointGroupInspect" resolves in neither vendored spec` — for an operation
+both documents describe *completely* apart from its name: summary,
+description, both parameters (`id` path, `size` query) and a response schema
+are all there. It consults `internal/specnaming` first now, and the audit
+compares the action's two published parameters against the document exactly
+as it does the six generated siblings'. `internal/specdiff.LoadSpecOperation`
+was taught the same rule for the same reason, so this package and the audits
+that share its inputs cannot disagree about what one document declares. The
+alternative — an `api/spec-drift-allowlist.yaml` entry, or dropping the
+`OperationID` from the `ActionSpec` — would have restored precisely the
+invisibility this section exists to end.
+
+Measured against a live server of each edition (2026-08-18, task 9):
+`GET /endpoint_groups/{id}` also honours `size` exactly as
+`GET /endpoint_groups` does. Against a group holding one environment,
+`Total` reads `0` without the parameter and `1` with `size=true`, on both
+editions. An unknown identifier answers **404** (`"Unable to find an
+environment group with the specified identifier inside the database"`) and a
+non-numeric one **400**, on both.
 
 ### 6.3 Five identifiers declared `integer` that Portainer never treats as a number
 

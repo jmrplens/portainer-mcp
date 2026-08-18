@@ -295,6 +295,93 @@ func TestEndpointGroups_List_ReflectsAGroupCreatedDirectly(t *testing.T) {
 	}
 }
 
+// TestEndpointGroups_Inspect_ReturnsTheGroupItWasAskedFor exercises
+// endpoint_groups.inspect, the seventh action of this domain and the one for
+// a route neither vendored document names (internal/specnaming supplies the
+// operationId EndpointGroupInspect; see this domain's package comment).
+//
+// The group is a fixture created directly against the Portainer API
+// (createEndpointGroupFixture), never through endpoint_groups.create: the
+// action under test here is inspect, and building its subject through a
+// sibling action would let one defect mask the other, the same reasoning
+// that helper's own doc comment gives.
+//
+// Three assertions, in increasing strength:
+//
+//  1. The answer is THIS group -- Id and Name both, not merely a 200. An
+//     inspect that ignored its id parameter and always answered group 1
+//     ("Unassigned", present on every estate) would satisfy a bare
+//     success check and fail this one on both fields.
+//  2. Without size, Total reads 0 even once the group really holds an
+//     environment. That is the server's documented default and this
+//     domain's measured behaviour, identical to endpoint_groups.list's.
+//  3. With size true, Total reads 1 for that same group at that same
+//     moment. This is the pair that proves the handler actually sends the
+//     query parameter: a handler that dropped size would report 0 twice, and
+//     one that hard-coded it would report 1 twice. Neither passes both rows.
+//
+// Policies is deliberately never touched: Business Edition returns it and
+// Community Edition omits it entirely (docs/api-divergences.md 5.3), so an
+// assertion on it would fail on CE -- the same restraint
+// TestEndpointGroups_List_ReflectsAGroupCreatedDirectly already exercises.
+//
+// Deliberately NOT parallel across its own ed/surface subtests, for exactly
+// the reason TestEndpointGroups_Update_AssociatedEndpointsReplacesMembership
+// records below: it registers a real environment per subtest, and six
+// concurrent registrations (three surfaces x CE and EE) push this package's
+// peak Business Edition node usage past what the licence carries alongside
+// endpoints_test.go's and stacks_test.go's own concurrent fixtures. Running
+// serially caps this test's peak at one environment while still covering
+// every surface and edition.
+func TestEndpointGroups_Inspect_ReturnsTheGroupItWasAskedFor(t *testing.T) {
+	for _, ed := range sessions.Editions() {
+		for _, surface := range surfaceNames {
+			t.Run(ed+"/"+surface, func(t *testing.T) {
+				session := sessions.For(t, surface, ed)
+
+				groupName := uniqueName("endpoint-group-inspect")
+				groupID := createEndpointGroupFixture(t, ed, groupName)
+
+				empty := callAction[map[string]any](t, session, surface, "endpoint_groups.inspect", map[string]any{
+					"id": groupID,
+				})
+				if got, _ := empty["Id"].(float64); int(got) != groupID {
+					t.Errorf("endpoint_groups.inspect(%d) returned Id %v, want %d: it answered about a different group", groupID, got, groupID)
+				}
+				if got, _ := empty["Name"].(string); got != groupName {
+					t.Errorf("endpoint_groups.inspect(%d) returned Name %q, want %q: it answered about a different group", groupID, got, groupName)
+				}
+
+				// A real member, moved in through the raw Portainer API
+				// rather than endpoint_groups.add_endpoint, so a defect in
+				// that action cannot be mistaken for one in inspect
+				// (rawAddEndpointToGroup's own doc comment).
+				envID := createEnvironmentThroughSurface(t, surface, ed, uniqueName("env-groups-inspect"))
+				rawAddEndpointToGroup(t, ed, groupID, envID)
+
+				unsized := callAction[map[string]any](t, session, surface, "endpoint_groups.inspect", map[string]any{
+					"id": groupID,
+				})
+				if got, ok := unsized["Total"].(float64); !ok || got != 0 {
+					t.Errorf("endpoint_groups.inspect(%d) without size returned Total %v (present=%v), want 0 even though the group now holds environment %d",
+						groupID, unsized["Total"], ok, envID)
+				}
+
+				sized := callAction[map[string]any](t, session, surface, "endpoint_groups.inspect", map[string]any{
+					"id": groupID, "size": true,
+				})
+				if got, _ := sized["Id"].(float64); int(got) != groupID {
+					t.Errorf("endpoint_groups.inspect(%d, size:true) returned Id %v, want %d", groupID, got, groupID)
+				}
+				if got, ok := sized["Total"].(float64); !ok || got != 1 {
+					t.Errorf("endpoint_groups.inspect(%d, size:true) returned Total %v (present=%v), want 1: the group holds exactly environment %d, so size was not sent or not honoured",
+						groupID, sized["Total"], ok, envID)
+				}
+			})
+		}
+	}
+}
+
 // TestEndpointGroups_Update_AssociatedEndpointsReplacesMembership exercises
 // endpoint_groups.update against the measured behaviour its own narrative
 // warns about: associatedEndpoints, when supplied, REPLACES the group's

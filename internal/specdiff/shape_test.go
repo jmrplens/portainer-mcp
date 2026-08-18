@@ -1,11 +1,13 @@
 package specdiff
 
 import (
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -278,6 +280,74 @@ func TestUnit_ShapeFromSpec_RefusesNonObjectRequestBody(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "is not an object") {
 		t.Errorf("ShapeFromSpec(DeleteKubernetesNamespace) error = %q, want it to say the top-level type is not an object", err)
+	}
+}
+
+// TestUnit_LoadSpecOperation_ResolvesASyntheticName_AgainstBothVendoredDocuments
+// proves this package resolves a route by the name internal/specnaming's
+// table gives it, not only by an operationId a document publishes.
+//
+// GET /endpoint_groups/{id} is the one such route: neither vendored
+// document names it, both describe it fully, and both editions serve it.
+// Before this, LoadSpecOperation matched strictly on op.OperationID and
+// returned "operation not found" for EndpointGroupInspect — leaving this
+// package disagreeing with cmd/audit_spec_drift, which shares its inputs,
+// about what the very same document declares.
+//
+// Both documents are checked, not one: the point of the table living in
+// internal/specnaming is that every derivation agrees, and a rule that
+// happened to work against Business only would be exactly the half-applied
+// fix this whole sub-thread exists to end. Remove the specnaming lookup in
+// LoadSpecOperation and both rows fail on the error check.
+func TestUnit_LoadSpecOperation_ResolvesASyntheticName_AgainstBothVendoredDocuments(t *testing.T) {
+	t.Parallel()
+
+	want, named := specnaming.SyntheticOperationID(http.MethodGet, "/endpoint_groups/{id}")
+	if !named {
+		t.Fatal("internal/specnaming no longer names GET /endpoint_groups/{id}; this test and LoadSpecOperation's lookup both assume it does")
+	}
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"Community", "../../api/specs/ce-2.44.0.json"},
+		{"Business", "../../api/specs/ee-2.44.0.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.path, err)
+			}
+
+			op, err := LoadSpecOperation(data, want)
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(%s, %q) error = %v, want the route internal/specnaming names", tc.path, want, err)
+			}
+			if op.OperationID != want {
+				t.Errorf("OperationID = %q, want %q: the synthetic name must be carried on the returned operation", op.OperationID, want)
+			}
+			if op.Method != http.MethodGet || op.Path != "/endpoint_groups/{id}" {
+				t.Errorf("Method=%q Path=%q, want GET /endpoint_groups/{id}", op.Method, op.Path)
+			}
+
+			// Resolving the name is only useful if a real shape comes back
+			// with it. An operation found but empty would satisfy every
+			// check above and compare nothing.
+			shape, err := ShapeFromSpec(op)
+			if err != nil {
+				t.Fatalf("ShapeFromSpec(%s) error = %v", want, err)
+			}
+			names := make([]string, 0, len(shape.Fields))
+			for _, f := range shape.Fields {
+				names = append(names, f.JSONName)
+			}
+			sort.Strings(names)
+			if len(names) != 2 || names[0] != "id" || names[1] != "size" {
+				t.Errorf("ShapeFromSpec(%s) fields = %v, want exactly [id size]", want, names)
+			}
+		})
 	}
 }
 

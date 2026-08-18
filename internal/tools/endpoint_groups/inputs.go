@@ -59,6 +59,28 @@ func (endpointGroupDeleteEndpointInput) MinimumParams() map[string]int {
 	}
 }
 
+// endpointGroupInspectInput is the parameter shape for operation EndpointGroupInspect (GET /endpoint_groups/{id}).
+//
+// Hand-written, not scaffolded: cmd/gen_action_inputs keys every struct it
+// emits off an operationId, and this route carries none in either vendored
+// document — internal/specnaming's table is what names it EndpointGroupInspect
+// (see handlers.go and this domain's package comment). The two parameters
+// below are the two the documents do declare for GET /endpoint_groups/{id},
+// with their own descriptions verbatim, so cmd/audit_spec_drift compares this
+// shape against the specification exactly as it does the six generated ones.
+type endpointGroupInspectInput struct {
+	// ID Environment(Endpoint) group identifier
+	ID int `json:"id" jsonschema:"Environment(Endpoint) group identifier"`
+	// Size If true, include the number of environments and breakdown by type
+	Size *bool `json:"size,omitempty" jsonschema:"If true, include the number of environments and breakdown by type"`
+}
+
+func (endpointGroupInspectInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
+}
+
 // endpointGroupListInput is the parameter shape for operation EndpointGroupList (GET /endpoint_groups).
 type endpointGroupListInput struct {
 	// Size If true, each environment(endpoint) group will include the number of environments(endpoints) associated to it and breakdown by type

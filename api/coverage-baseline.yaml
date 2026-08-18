@@ -25,5 +25,9 @@
 # 441 -> 442 — while these two numbers did not, because the newly visible
 # route is uncovered, not covered. A ratchet keyed on totals would have gone
 # red for a change that only made the real surface visible.
-ce_covered: 71
-ee_covered: 93
+#
+# Later the same day, endpoint_groups.inspect covered that very route on both
+# editions: CE 71 -> 72, EE 93 -> 94. That is the pair of numbers moving for
+# the reason this file exists — one route made visible, then actually served.
+ce_covered: 72
+ee_covered: 94

@@ -1,18 +1,77 @@
 // Package endpoint_groups declares the Portainer environment-group actions.
 //
-// Six actions for seven routes. GET /endpoint_groups/{id} — inspect one
-// group — carries no operationId in either vendored specification, the one
-// case of docs/api-divergences.md §6.2's fourteen that cross-edition
-// borrowing cannot repair, because there is no name in either document to
-// borrow. It is not declared here and cannot be; a model wanting one group
-// reads it out of endpoint_groups.list.
+// Seven actions for seven routes. Six are generated (actions.go); the
+// seventh, endpoint_groups.inspect, is hand-written in handlers.go and is
+// the interesting one.
+//
+// GET /endpoint_groups/{id} carries no operationId in either vendored
+// specification — the one case of docs/api-divergences.md §6.2's fourteen
+// that cross-edition borrowing cannot repair, because there is no name in
+// either document to borrow. The route is otherwise fully documented in
+// both (summary, description, both parameters, a response schema) and, as
+// measured against a live server of each edition, answers 200 on both. Only
+// the name was missing.
+//
+// This domain shipped without it, on the strength of a static audit that
+// could see no name for it. That was wrong twice over: it lost Community
+// Edition functionality the server plainly serves, and it did so invisibly,
+// because an operation nothing names is counted in no coverage figure and
+// reported in no gap list. internal/specnaming's explicit table now names
+// the route EndpointGroupInspect — the same name cmd/gen_applicability
+// writes into internal/apiversion's operationIDs index for BOTH editions,
+// which is what lets actioncatalog resolve this action's edition at all —
+// and this package declares the action under it.
+//
+// A model wanting one group therefore reads it here rather than filtering
+// endpoint_groups.list, and gets the group's own record whether or not the
+// caller can see the whole list.
 package endpoint_groups
 
-import "github.com/jmrplens/portainer-mcp/internal/toolutil"
+import (
+	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/toolutil"
+)
 
-// Specs declares every environment-group action. All six are generated;
-// this domain has no hand-written handler and no redaction wrapper.
-func Specs() []toolutil.ActionSpec { return generatedSpecs() }
+// Specs declares every environment-group action: generatedSpecs()'s six
+// entries (see actions.go) plus the one kept hand-written in handlers.go.
+// This domain has no redaction wrapper — no operation here returns a
+// credential-shaped field.
+//
+// All seven route through toolutil.WithNarrative rather than assigning
+// Title/Description directly in an ActionSpec literal, the way
+// internal/tools/endpoints/endpoints.go's own Specs() does and for the same
+// reason: it is what lets cmd/audit_spec_drift recognise each deliberate
+// improvement on the vendored specification's own wording as deliberate
+// instead of gating on it as accidental drift.
+func Specs() []toolutil.ActionSpec {
+	return append(generatedSpecs(),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "endpoint_groups.inspect", Domain: "endpoint_groups", OperationID: "EndpointGroupInspect",
+			// Verbatim from the Business document's own summary and
+			// description for GET /endpoint_groups/{id} (its access-policy
+			// line stripped, as cmd/gen_action_inputs strips it), so this
+			// action's spec-derived wording is what the audit compares
+			// against, exactly as for the six generated siblings. The
+			// Community document says the same thing with a typo ("abont");
+			// cmd/audit_spec_drift resolves an operationId against the
+			// Business document first, so this follows Business.
+			Title:       "Inspect an Environment(Endpoint) group",
+			Description: "Retrieve details about an environment(endpoint) group.",
+			// CE, and this line is the whole point of the action. Neither
+			// vendored document names this route, so nothing could be
+			// borrowed across editions the way EndpointGroupCreate's
+			// comment above describes; internal/specnaming's table supplies
+			// the name instead, and cmd/gen_applicability writes it into
+			// internal/apiversion's operationIDs index for both editions
+			// after proving from each edition's own spans table that each
+			// serves GET /endpoint_groups/{id}. Measured directly besides:
+			// both editions answer 200 (see the narrative).
+			Edition: edition.CE,
+			Handler: endpointGroupInspect,
+			Input:   endpointGroupInspectInput{},
+		}, narrative("EndpointGroupInspect")),
+	)
+}
 
 // narrative supplies every action's ActionSpec narrative fields. Every
 // operationId this domain declares appears here, routed through
@@ -24,6 +83,11 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		return toolutil.ActionNarrative{
 			Title:       "List environment groups",
 			Description: "Returns every environment group on this Portainer server, without the environments each holds: Total and the TypeInfo breakdown are both 0 for every group unless size is passed true, which asks the server to compute them (measured: Community reports Total 0 for the sole group without size, Total 2 with it — no group's membership is ever returned by name or id, on either edition). A group is how access policies and tags are applied to several environments at once; every environment belongs to exactly one, and one that ends up in none lands in group 1, the built-in \"Unassigned\" group.",
+		}
+	case "EndpointGroupInspect":
+		return toolutil.ActionNarrative{
+			Title:       "Inspect one environment group",
+			Description: "Returns one environment group by id: Id, Name, Description, the tag ids attached to it when it has any, Total and the TypeInfo breakdown — plus a Policies array on Business Edition, which Community omits entirely, so do not depend on it. Membership is NOT returned: no environment is named or numbered here, on either edition. Total and TypeInfo behave exactly as they do on endpoint_groups.list — both read 0 unless size is passed true, which asks the server to count (measured on both editions: without size a group holding one environment reports Total 0; with it, Total 1 and TypeInfo.Docker 1). An unknown id answers 404 rather than an empty group, which makes this the cheapest way to ask whether a group still exists.",
 		}
 	case "EndpointGroupCreate":
 		return toolutil.ActionNarrative{
