@@ -1620,13 +1620,40 @@ and the operation never appears in the divergence list. `make
 audit-spec-reality` reported 21 divergences on the run that found this, none
 of them in `endpoints`.
 
-A wrong verb is therefore visible only by calling the action end to end,
-which is what `test/e2e/suite/endpoints_test.go` does. Whoever scaffolds a
-future domain should assume the same class of defect can exist there and is
-not covered by either gate. Widening `audit_spec_reality` to treat `405` as
-a divergence is the obvious follow-up and was not done here: it needs a
-verb-by-verb probe of every documented path, which is a different shape of
-audit from the one that command performs today.
+A wrong verb was therefore visible only by calling the action end to end,
+which is what `test/e2e/suite/endpoints_test.go` does.
+
+**`audit_spec_reality` now catches this class**, and it turned out to need
+no verb-by-verb sweep of the whole specification to do it. The command
+already probes each operation with *its own documented method*, so the `405`
+was being observed and thrown away; only the classification was missing.
+`isWrongVerb` (`cmd/audit_spec_reality/probe.go`) records it, and the
+finding is reported apart from "not served" because it is the opposite
+claim — the route exists. A follow-up sweep then names the verb that does
+serve it, run only for the handful of operations that answered `405`, and
+**never for a `PublicAccess` route**: this command's safety argument is that
+Portainer rejects the sentinel credential before any handler runs, which
+covers any verb at a path that has a credential check and says nothing
+about one that does not.
+
+Measured 2026-08-18 that the mechanism survives the sentinel credential,
+which is the thing that could have made it inert — the router answers before
+auth does:
+
+| Request to `/endpoints/1/association` with the sentinel credential | Answer |
+|---|---|
+| `PUT` (the documented verb) | `405` — no such verb |
+| `DELETE` (the real verb) | `401` — route exists, auth refused |
+| `GET /endpoints` (control) | `401` — route exists, auth refused |
+
+**A second instance surfaced on the first run, in a domain no wave has
+written yet.** `EdgeUpdateScheduleUpdate` is documented `POST
+/edge_update_schedules/{id}` and the server serves `PUT` there, answering
+`405` to `POST` — confirmed independently against the vendored document
+(which declares `GET`, `POST` and `DELETE` on that path, and whose `GET` and
+`DELETE` both answer `401`) and against a live 2.44.0. Business Edition
+only. Whoever scaffolds `edge_update_schedules` inherits it, and inherits it
+knowing.
 
 ### 6.9 `GET /docker/{environmentId}/snapshot/containers` answers an array, declared as one object
 

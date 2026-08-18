@@ -44,6 +44,18 @@ type legDivergence struct {
 	StatusCode  int
 }
 
+// legWrongVerb is one operation whose path is registered but not for the
+// verb the specification documents.
+type legWrongVerb struct {
+	OperationID string
+	Method      string
+	Path        string
+	Domain      string
+	// ServedBy names the verbs the router does accept at this path, empty
+	// when the sweep found none or could not run.
+	ServedBy []string
+}
+
 // legResult is what probing every operation in one vendored spec against one
 // live server found.
 type legResult struct {
@@ -59,6 +71,13 @@ type legResult struct {
 	// counting it as "served" would silently understate the divergence
 	// total.
 	SkippedPublic []string
+	// WrongVerb lists every operation whose documented method answered 405:
+	// the path is registered, the verb is not. Reported apart from Divergent
+	// because it is a different fact about the document — the route exists
+	// and the specification names the wrong way to reach it — and because
+	// folding it into "not served" would say the opposite of what was
+	// measured.
+	WrongVerb []legWrongVerb
 	// ProbeErrors lists operations whose probe could not complete at all
 	// (a transport failure — a closed connection, a timeout). These are
 	// reported distinctly from Divergent: a probe that never got an answer
@@ -152,7 +171,8 @@ func auditLeg(ctx context.Context, warnings io.Writer, legName, baseURL string, 
 					fmt.Sprintf("%s (%s %s): %v", op.OperationID, op.Method, op.Path, err))
 				return
 			}
-			if res.RouteAbsent {
+			switch {
+			case res.RouteAbsent:
 				result.Divergent = append(result.Divergent, legDivergence{
 					OperationID: op.OperationID,
 					Method:      op.Method,
@@ -160,11 +180,43 @@ func auditLeg(ctx context.Context, warnings io.Writer, legName, baseURL string, 
 					Domain:      op.Domain,
 					StatusCode:  res.StatusCode,
 				})
+			case res.WrongVerb:
+				result.WrongVerb = append(result.WrongVerb, legWrongVerb{
+					OperationID: op.OperationID,
+					Method:      op.Method,
+					Path:        op.Path,
+					Domain:      op.Domain,
+				})
 			}
 		}(op)
 	}
 	wg.Wait()
 
+	// Name the verb that does serve each 405'd path. Run after the
+	// concurrent pass and sequentially: there are a handful of these at
+	// most (one on a 441-operation specification, when this was written),
+	// and the whole point is a precise answer rather than a fast one.
+	//
+	// A PublicAccess route is never swept — see verbsServing's own doc
+	// comment for why that restriction is the load-bearing part of this
+	// command's safety argument rather than caution for its own sake.
+	for i := range result.WrongVerb {
+		w := &result.WrongVerb[i]
+		if ops[w.OperationID].Public {
+			continue
+		}
+		served, err := verbsServing(ctx, client, timeout, baseURL, resolvePath(w.Path), w.Method)
+		if err != nil {
+			_, _ = fmt.Fprintf(warnings, "%s: WARNING: could not establish which verb serves %s %s: %v\n",
+				legName, w.Method, w.Path, err)
+			continue
+		}
+		w.ServedBy = served
+	}
+
+	sort.Slice(result.WrongVerb, func(i, j int) bool {
+		return result.WrongVerb[i].OperationID < result.WrongVerb[j].OperationID
+	})
 	sort.Slice(result.Divergent, func(i, j int) bool {
 		return result.Divergent[i].OperationID < result.Divergent[j].OperationID
 	})
