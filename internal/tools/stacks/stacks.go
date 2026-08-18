@@ -93,16 +93,18 @@
 // declarations of one name in one package do not compile, so it had to be
 // deleted before the scaffolder ran. Its keep-alive block went with it —
 // every wrapper it held live now has a real call site in a generated
-// handler, which is the only reason it existed. handWrittenSpecs is still a
-// stub, and its own three keep-alive references still matter: they hold live
-// the wrappers whose call sites will be the hand-written handlers, and they
-// disappear when those handlers land. No redaction wrapper in this file may
+// handler, which is the only reason it existed. handWrittenSpecs is no
+// longer a stub either: two of its three actions are declared, their
+// handlers are in handlers.go, and the keep-alive references that stood in
+// for those call sites are gone. One remains, for redactStackMigrate, and it
+// disappears when that handler lands. No redaction wrapper in this file may
 // ever be held live by a lint directive instead: `unused` is the one linter
 // that reports a redaction wrapper losing its call site, and a lost call
 // site is a silent credential exposure.
 package stacks
 
 import (
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/redact"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -117,48 +119,83 @@ func Specs() []toolutil.ActionSpec {
 // produce — StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
 // StackMigrate. See this file's package doc for why each refuses.
 //
-// Filled in by the hand-written-handler tasks; nil today so the package
-// compiles. The three assignments below hold live the wrappers whose call
-// site will be one of those hand-written handlers, and disappear with this
-// stub when the handlers land. Deliberately no ActionSpec literal and no
-// function named stackMigrate yet: scanHandOverrides reads both an
-// OperationID literal and a mechanically-named handler function as "already
-// hand-written" and would skip the operation, and the scaffold task expects
-// all three refusals to be reported.
+// Two of the three are declared below, over the handlers in handlers.go and
+// the shared multipart writer in internal/portainer. Those handlers are what
+// call redactStackCreateDockerStandaloneFile and
+// redactStackCreateDockerSwarmFile: both wrappers were declared before a call
+// site existed, held live only by a throwaway reference in this function's
+// earlier stub, and those references are gone now that real call sites do the
+// work. Nothing mechanical would have noticed their absence — golangci-lint's
+// unused check would simply have gone quiet — which is why the calls are
+// pinned by tests of their own (handlers_test.go) rather than left to review:
+// an uncalled redaction wrapper is a silent path for a credential to reach a
+// model.
 //
-// Two decisions the scaffold task made for the twenty-two generated actions
-// reach across to these three, and are recorded here so that whoever writes
-// them inherits the rulings rather than re-deriving them:
+// StackMigrate is still to come, and the one assignment left below is what
+// holds redactStackMigrate live until its handler lands. Deliberately still
+// no ActionSpec literal and no function named stackMigrate: scanHandOverrides
+// reads both an OperationID literal and a mechanically-named handler function
+// as "already hand-written", so either would make a regeneration skip the
+// operation rather than report the refusal.
 //
-//  1. StackMigrate is Destructive. The vendored description settles it —
-//     "It will re-create the stack inside the target environment(endpoint)
-//     before removing the original stack" — so the original is gone and no
-//     field of the payload describes what it held. That is the same
-//     criterion stacks.git_redeploy is flagged under (see actions.go), and
-//     it is the strongest case in this domain. StackCreateDockerStandaloneFile
-//     and StackCreateDockerSwarmFile are Mutating and NOT Destructive,
-//     matching the four JSON creates: each adds a stack at a new identifier
-//     and removes nothing. All three rulings are carried by pendingRulings
-//     in stacks_test.go rather than by this comment, and that is the point:
-//     the map skips an operation with no ActionSpec and starts asserting the
-//     moment one is declared, in whatever commit declares it. A ruling made
-//     in one task and needed by another has to activate itself; prose in a
-//     file the next author has no reason to open does not.
-//  2. Each of the three needs a case in narrative() below rather than a
-//     literal Title/Description on the ActionSpec declared here, exactly
-//     like the twenty-two. Both file creates arrive carrying the same
-//     seven-way-identical description as their JSON siblings ("Deploy a new
-//     stack into a Docker environment specified via the environment
-//     identifier."), so without a case they would collide with actions that
-//     already ship — TestUnit_Narrative_GivesEveryActionADistinctTitleAndDescription
-//     is what says so. All three must also be added to the
-//     generatedOperations roster in stacks_test.go and to the danger-flag
-//     table, which asserts its own length against that roster.
+// Both specs below are Mutating and NOT Destructive, matching the four JSON
+// creates: each adds a stack at a new identifier and removes nothing. Neither
+// is Idempotent. That agrees with the generator's own POST rule (dangerFlags
+// in cmd/gen_action_inputs treats POST as mutating, not destructive, not
+// idempotent), but nothing here inherits it — these two specs are written by
+// hand, so the flag was decided rather than defaulted, and the decision is the
+// one the four JSON creates already ship: repeating either call does not
+// converge on the state the first produced, it asks Portainer for a second
+// stack. The Swarm route's own vendored responses say as much, declaring 409
+// "Stack name or webhook id is not unique" — a refusal, not a no-op — and the
+// standalone route does not even declare that. Idempotent reaches clients as
+// IdempotentHint, which invites unattended retry; a create must not.
+// The rulings on Destructive were made by the
+// scaffold task while the whole domain was in view and were carried here by
+// pendingRulings in stacks_test.go, which starts asserting the moment an
+// ActionSpec exists; TestUnit_DangerFlags_MatchThisDomainsRulings now pins all
+// three flags for both, and the pendingRulings entries moved out with this
+// commit.
+//
+// Declared through toolutil.WithNarrative with the vendored summary and
+// description as the literal Title and Description, exactly like the
+// twenty-two in actions.go. The literals are what a regeneration would write
+// and what cmd/audit_spec_drift compares against; the narrative case is what a
+// model actually reads, and WithNarrative is what records the difference as a
+// deliberate override rather than as drift. Both routes arrive carrying the
+// seven-way-identical description their JSON siblings carry ("Deploy a new
+// stack into a Docker environment specified via the environment identifier."),
+// so without a case they would collide outright —
+// TestUnit_Narrative_GivesEveryActionADistinctTitleAndDescription is what says
+// so.
+//
+// Edition CE for both: /stacks/create/standalone/file and
+// /stacks/create/swarm/file are declared in api/specs/ce-2.44.0.json as well
+// as in the Business Edition document, with byte-identical multipart schemas
+// (internal/apiversion/applicability_gen.go carries both routes for both
+// editions, from 2.27.9 with no upper bound).
 func handWrittenSpecs() []toolutil.ActionSpec {
-	_ = redactStackCreateDockerStandaloneFile
-	_ = redactStackCreateDockerSwarmFile
 	_ = redactStackMigrate
-	return nil
+	return []toolutil.ActionSpec{
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "stacks.create_docker_standalone_file", Domain: "stacks", OperationID: "StackCreateDockerStandaloneFile",
+			Title:       "Deploy a new compose stack from a file",
+			Description: "Deploy a new stack into a Docker environment specified via the environment identifier.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Handler:     stackCreateDockerStandaloneFile,
+			Input:       stackCreateDockerStandaloneFileInput{},
+		}, narrative("StackCreateDockerStandaloneFile")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "stacks.create_docker_swarm_file", Domain: "stacks", OperationID: "StackCreateDockerSwarmFile",
+			Title:       "Deploy a new swarm stack from a file",
+			Description: "Deploy a new stack into a Docker environment specified via the environment identifier.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Handler:     stackCreateDockerSwarmFile,
+			Input:       stackCreateDockerSwarmFileInput{},
+		}, narrative("StackCreateDockerSwarmFile")),
+	}
 }
 
 // narrative supplies the Title and Description overrides for operations
@@ -220,13 +257,15 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // appear — the API-key probe recorded under StackImagesStatus — is quoted as
 // this wave's reconnaissance recorded it and labelled as such.
 //
-// The three operations cmd/gen_action_inputs refused have no case yet:
-// StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
-// StackMigrate have no ActionSpec to attach one to until their hand-written
-// handlers land, and a case for an operation with no action would be prose
-// nothing renders and no test can reach. The tasks that write those handlers
-// add their cases here, in this same hook, rather than assigning Title and
-// Description literals on the specs they declare.
+// Two of the three operations cmd/gen_action_inputs refused now have their
+// case here too — StackCreateDockerStandaloneFile and
+// StackCreateDockerSwarmFile, whose ActionSpecs handWrittenSpecs declares —
+// written in this same hook rather than as Title and Description literals on
+// those specs, exactly like the twenty-two. StackMigrate still has none: it
+// has no ActionSpec to attach one to until its hand-written handler lands,
+// and a case for an operation with no action would be prose nothing renders
+// and no test can reach. The task that writes that handler adds its case
+// here.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "StackList":
@@ -281,6 +320,16 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"The siblings take the file inline (stacks.create_docker_standalone_string) or from an upload. " +
 				"Answers with the created stack; the git credential you send here is stripped from that answer and cannot be read back through any action in this domain.",
 		}
+	case "StackCreateDockerStandaloneFile":
+		return toolutil.ActionNarrative{
+			Title: "Deploy a Compose stack from an uploaded file",
+			Description: "Creates and deploys a Docker Compose stack on a standalone Docker environment from a Compose file UPLOADED as multipart/form-data — the file's content travels in this call as the file string, and Portainer stores it as the stack's own file. " +
+				"This and stacks.create_docker_swarm_file are the only two actions in this domain that upload anything; the siblings pass the same content inline as JSON (stacks.create_docker_standalone_string) or clone it from a git repository (stacks.create_docker_standalone_repository), and a stack created here has no repository, so stacks.git_redeploy cannot refresh it. " +
+				"endpointId names the environment and name the stack. env carries deployment-time variables and, unlike the JSON siblings' list of name/value objects, is a JSON-encoded STRING on this route: send \"[{\\\"name\\\":\\\"KEY\\\",\\\"value\\\":\\\"v\\\"}]\", not an array. " +
+				"The vendored multipart schema lists only Name as required, so file is published optional although this is the upload route; send it. " +
+				"This route has none of the Business Edition extras its JSON siblings take — no registries and no webhook — so a stack that later needs stacks.webhook_invoke must be created by one of those instead. " +
+				"Answers with the created stack, git credentials stripped.",
+		}
 	case "StackCreateDockerSwarmString":
 		return toolutil.ActionNarrative{
 			Title: "Deploy a Swarm stack from inline content",
@@ -298,6 +347,16 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"composeFile is the path to the stack file inside the repository, additionalFiles names further files, and autoUpdate configures GitOps polling or a webhook. " +
 				"sourceId references a stored git source and supersedes the inline repository fields, which the specification marks deprecated in its favour. " +
 				"Answers with the created stack; the git credential you send here is stripped from that answer.",
+		}
+	case "StackCreateDockerSwarmFile":
+		return toolutil.ActionNarrative{
+			Title: "Deploy a Swarm stack from an uploaded file",
+			Description: "Creates and deploys a Docker Swarm stack from a stack file UPLOADED as multipart/form-data — the file's content travels in this call as the file string. " +
+				"Differs from stacks.create_docker_standalone_file in the orchestrator and in accepting swarmId, the Swarm cluster identifier, as a string. " +
+				"endpointId names the environment, name the stack, and env carries deployment-time variables as a JSON-encoded STRING rather than the list of name/value objects the JSON siblings take. " +
+				"This route's vendored multipart schema declares NO required fields at all — not even name — so nothing but endpointId is enforced before the call; that is the document's doing, not a statement that Portainer will accept a nameless stack, so send name anyway. A name already in use is answered 409 \"Stack name or webhook id is not unique\", which the standalone route does not even declare. " +
+				"A stack created here has no repository, so stacks.git_redeploy cannot refresh it, and the route takes none of the Business Edition extras (registries, webhook) its JSON siblings do. " +
+				"Answers with the created stack, git credentials stripped.",
 		}
 	case "StackCreateKubernetesFile":
 		return toolutil.ActionNarrative{

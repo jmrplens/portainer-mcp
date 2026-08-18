@@ -586,3 +586,100 @@ type stacksWebhookInvokeInput struct {
 	// WebhookID Stack identifier
 	WebhookID string `json:"webhookID" jsonschema:"Stack identifier"`
 }
+
+// The two types below are hand-written, not scaffolded. cmd/gen_action_inputs
+// never reaches StackCreateDockerStandaloneFile or StackCreateDockerSwarmFile:
+// both routes declare multipart/form-data as their only request body, so
+// oapi-codegen emitted only …WithBodyWithResponse for each and clientMethodFor
+// looks up the plain …WithResponse that does not exist (see stacks.go's
+// package doc). Their handlers live in handlers.go and render these fields
+// into a multipart body through portainer.MultipartForm; every field name,
+// type and required-ness below is transcribed from the "multipart/form-data"
+// schema of the route in api/specs/ee-2.44.0.json, which for both routes is
+// byte-identical to api/specs/ce-2.44.0.json's.
+//
+// Transcribed verbatim, required arrays included, and that is the decision
+// worth stating because both arrays are visibly thin:
+//
+//   - /stacks/create/standalone/file lists only Name, so file — the upload
+//     the route is named after — is published optional.
+//   - /stacks/create/swarm/file has no required array at all, so Name,
+//     SwarmID and file are all published optional, although its four JSON
+//     siblings require name (and swarmId) and Portainer plainly needs a
+//     Swarm cluster to deploy to.
+//
+// Publishing them any other way is a gating cmd/audit_spec_drift finding
+// (ChangeRequiredness), excusable only by a dated api/spec-drift-allowlist.yaml
+// entry, and an entry is a claim about what the server does — the kind
+// custom_templates' Note and Platform entries carry, each grounded in a
+// measurement against a live 2.44.0. No such measurement exists for these two
+// routes, so there is nothing to ground an override on and the document is
+// published as it stands. Should a later probe find the server rejecting a
+// body without Name or file, the correction is an allow-list entry plus a
+// pointer change here, not a silent tightening.
+//
+// Unexported and with the domain's ordinary "ID" capitalisation, like every
+// other Input struct in this file: golangci-lint's revive var-naming rule
+// applies to struct fields regardless of whether the struct itself is
+// exported.
+
+// stackCreateDockerStandaloneFileInput is the parameter shape for operation StackCreateDockerStandaloneFile (POST /stacks/create/standalone/file).
+type stackCreateDockerStandaloneFileInput struct {
+	// EndpointID Identifier of the environment that will be used to deploy the stack
+	//
+	// A query parameter, not a body property — the one field here that does
+	// not become a multipart part. It is also why these two routes can carry
+	// a generated-client call where StackMigrate cannot: no body property
+	// competes for the name, so internal/specnaming leaves it "endpointId"
+	// and apigen's Params struct, whose field is tagged `json:"endpointId"`,
+	// reads the caller's own value rather than a body property's.
+	EndpointID int `json:"endpointId" jsonschema:"Identifier of the environment that will be used to deploy the stack"`
+	// Env Environment variables passed during deployment, represented as a JSON array [{'name': 'name', 'value': 'value'}].
+	//
+	// A string holding a JSON document, not a real array: this route's
+	// multipart schema types it "string" where the four JSON create routes
+	// take a list of name/value objects. Marshalling a Go slice into the part
+	// here would hand Portainer a document it then fails to unmarshal, so the
+	// caller supplies the encoded array.
+	Env *string `json:"env,omitempty" jsonschema:"Environment variables passed during deployment, represented as a JSON array [{'name': 'name', 'value': 'value'}]."`
+	// File Stack file
+	//
+	// The uploaded stack file's content. The specification types it "string"
+	// with format "binary" — an upload — and a model has no way to name a
+	// path on the server this process runs on, so the content itself is what
+	// crosses the tool boundary and handlers.go writes it as the multipart
+	// file part. Text only, in consequence: a Compose file is, but a payload
+	// that is not valid UTF-8 cannot be expressed as a JSON string and so
+	// cannot be uploaded through this action.
+	File *string `json:"file,omitempty" jsonschema:"Stack file"`
+	// Name Name of the stack
+	Name string `json:"name" jsonschema:"Name of the stack"`
+}
+
+// stackCreateDockerSwarmFileInput is the parameter shape for operation StackCreateDockerSwarmFile (POST /stacks/create/swarm/file).
+type stackCreateDockerSwarmFileInput struct {
+	// EndpointID Identifier of the environment that will be used to deploy the stack
+	EndpointID int `json:"endpointId" jsonschema:"Identifier of the environment that will be used to deploy the stack"`
+	// Env Environment variables passed during deployment, represented as a JSON array [{'name': 'name', 'value': 'value'}]. Optional
+	//
+	// A JSON-encoded string for the same reason the standalone route's is.
+	// The trailing " Optional" is the vendored description's own — the two
+	// routes' texts differ by exactly those nine characters, and each is
+	// published as its own route states it, because cmd/audit_spec_drift
+	// compares a field's description per operation.
+	Env *string `json:"env,omitempty" jsonschema:"Environment variables passed during deployment, represented as a JSON array [{'name': 'name', 'value': 'value'}]. Optional"`
+	// File Stack file
+	File *string `json:"file,omitempty" jsonschema:"Stack file"`
+	// Name Name of the stack
+	//
+	// Optional here and required on the standalone route, which is the
+	// document's doing rather than this file's: /stacks/create/swarm/file
+	// declares no required array at all. See this block's own comment above.
+	Name *string `json:"name,omitempty" jsonschema:"Name of the stack"`
+	// SwarmID Swarm cluster identifier.
+	//
+	// A string, as on stacks.create_docker_swarm_string and everywhere else
+	// in this API except stacks.associate, which declares the same concept an
+	// integer on that one route.
+	SwarmID *string `json:"swarmId,omitempty" jsonschema:"Swarm cluster identifier."`
+}

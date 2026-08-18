@@ -378,17 +378,24 @@ func TestUnit_Specs_AreAllValid(t *testing.T) {
 	}
 }
 
-// generatedOperations is every operationId this domain ships today: the
-// twenty-two cmd/gen_action_inputs generated. The three it refused —
-// StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
-// StackMigrate — are absent on purpose; the tasks that hand-write them add
-// them here in the same commit as their ActionSpecs.
-var generatedOperations = []string{
+// shippedOperations is every operationId this domain ships today: the
+// twenty-two cmd/gen_action_inputs generated, plus the two multipart creates
+// it refused and handlers.go writes by hand. The roster was called
+// generatedOperations while every entry was in fact generated; the name
+// changed with the first hand-written entry rather than leaving a list that
+// quietly contradicts its own name.
+//
+// The one operation still absent is StackMigrate, on purpose: the task that
+// hand-writes it adds it here in the same commit as its ActionSpec, and
+// pendingRulings below is what makes that unmissable.
+var shippedOperations = []string{
 	"EdgeStackWebhookInvoke",
 	"StackAssociate",
 	"StackConvert",
+	"StackCreateDockerStandaloneFile",
 	"StackCreateDockerStandaloneRepository",
 	"StackCreateDockerStandaloneString",
+	"StackCreateDockerSwarmFile",
 	"StackCreateDockerSwarmRepository",
 	"StackCreateDockerSwarmString",
 	"StackCreateKubernetesFile",
@@ -419,7 +426,7 @@ func TestUnit_Specs_CoverExactlyTheOperationsThisDomainShips(t *testing.T) {
 		got = append(got, s.OperationID)
 	}
 	sort.Strings(got)
-	want := append([]string(nil), generatedOperations...)
+	want := append([]string(nil), shippedOperations...)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("Specs() covers\n  %v\nwant\n  %v", got, want)
@@ -443,7 +450,7 @@ func TestUnit_Specs_CoverExactlyTheOperationsThisDomainShips(t *testing.T) {
 // override disappearing.
 func TestUnit_Narrative_OverridesTitleAndDescriptionAwayFromTheSpecText(t *testing.T) {
 	t.Parallel()
-	for _, id := range generatedOperations {
+	for _, id := range shippedOperations {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 			spec := specByOperationID(t, id)
@@ -555,16 +562,23 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 
 		// Creates: they add a stack at a new identifier and remove nothing.
 		// None is idempotent — a second call makes a second stack.
+		// The two hand-written multipart creates are ruled the same way and
+		// for the same reason as the five generated ones around them; being
+		// hand-declared changes nothing about what the act is. Idempotent
+		// stays false on all seven: a repeat asks Portainer for a second
+		// stack rather than converging on the first one's state.
+		{name: "create_docker_standalone_file", action: "stacks.create_docker_standalone_file", mutating: true},
 		{name: "create_docker_standalone_repository", action: "stacks.create_docker_standalone_repository", mutating: true},
 		{name: "create_docker_standalone_string", action: "stacks.create_docker_standalone_string", mutating: true},
+		{name: "create_docker_swarm_file", action: "stacks.create_docker_swarm_file", mutating: true},
 		{name: "create_docker_swarm_repository", action: "stacks.create_docker_swarm_repository", mutating: true},
 		{name: "create_docker_swarm_string", action: "stacks.create_docker_swarm_string", mutating: true},
 		{name: "create_kubernetes_string", action: "stacks.create_kubernetes_string", mutating: true},
 		{name: "create_kubernetes_git", action: "stacks.create_kubernetes_git", mutating: true},
 		{name: "create_kubernetes_url", action: "stacks.create_kubernetes_url", mutating: true},
 	}
-	if len(tests) != len(generatedOperations) {
-		t.Fatalf("this table covers %d action(s) and the domain ships %d; every action must have a row", len(tests), len(generatedOperations))
+	if len(tests) != len(shippedOperations) {
+		t.Fatalf("this table covers %d action(s) and the domain ships %d; every action must have a row", len(tests), len(shippedOperations))
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -591,16 +605,20 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 // them were made while the whole domain was in view — the vendored
 // descriptions of all twenty-five side by side is the only place from which
 // "this one removes the original stack and the others do not" is visible —
-// but the file those rulings have to land in is one this task must not
-// write. A doc comment would be the obvious carrier and is the wrong one:
-// the person who needs it will be editing actions.go, not this package's
-// domain file, and nothing would make them read it.
+// but the files those rulings have to land in are ones the scaffold task
+// could not write. A doc comment would be the obvious carrier and is the
+// wrong one: the person who needs it will be editing actions.go or
+// stacks.go, not a file they have no reason to open.
 //
-// This map is the carrier instead. It asserts nothing today, because no spec
-// matches; it starts asserting the moment one does, in the same commit that
-// declares it, and it names the reasoning in its own failure message. A
-// ruling that activates itself when the code it rules on arrives is the only
-// kind that survives being handed between tasks.
+// This map is the carrier instead. It asserts nothing about an operation
+// with no spec; it starts asserting the moment one appears, in the same
+// commit that declares it, and it names the reasoning in its own failure
+// message. A ruling that activates itself when the code it rules on arrives
+// is the only kind that survives being handed between tasks — and it worked:
+// the two multipart creates' entries fired the moment their ActionSpecs
+// landed, and moved out of here into shippedOperations and the danger-flag
+// table in that same commit, which is exactly the exit this map prescribes.
+// StackMigrate's entry is the one left.
 var pendingRulings = map[string]struct {
 	destructive bool
 	because     string
@@ -612,25 +630,16 @@ var pendingRulings = map[string]struct {
 			"stacks.stackMigratePayload describes what it held. That is the same criterion stacks.git_redeploy is " +
 			"flagged under, and the clearest case in this domain",
 	},
-	"StackCreateDockerStandaloneFile": {
-		destructive: false,
-		because: "POST /stacks/create/standalone/file adds a stack at a new identifier and removes nothing, " +
-			"exactly like the four JSON creates that already ship non-destructive",
-	},
-	"StackCreateDockerSwarmFile": {
-		destructive: false,
-		because: "POST /stacks/create/swarm/file adds a stack at a new identifier and removes nothing, " +
-			"exactly like the four JSON creates that already ship non-destructive",
-	},
 }
 
 // TestUnit_PendingRulings_HoldWhenTheirActionsLand skips every operation
 // whose ActionSpec this domain does not declare yet, and enforces the ruling
 // on every one it does.
 //
-// Today it skips all three and asserts nothing — deliberately, since a
-// failing red test for work a later task owns is noise this task cannot
-// clear. It is a no-op with a trigger, not a check that is passing.
+// Today it skips StackMigrate, the only entry left, and so asserts nothing —
+// deliberately, since a failing red test for work a later task owns is noise
+// this task cannot clear. It is a no-op with a trigger, not a check that is
+// passing.
 func TestUnit_PendingRulings_HoldWhenTheirActionsLand(t *testing.T) {
 	t.Parallel()
 	declared := map[string]toolutil.ActionSpec{}
@@ -649,7 +658,7 @@ func TestUnit_PendingRulings_HoldWhenTheirActionsLand(t *testing.T) {
 			}
 			// An operation that has landed belongs in the domain's own
 			// roster and its danger-flag table, not here.
-			t.Errorf("%s now has an ActionSpec: move this entry out of pendingRulings into generatedOperations "+
+			t.Errorf("%s now has an ActionSpec: move this entry out of pendingRulings into shippedOperations "+
 				"and TestUnit_DangerFlags_MatchThisDomainsRulings, which pin every flag rather than Destructive alone", id)
 		})
 	}
@@ -725,7 +734,7 @@ func TestUnit_Editions_MatchTheVendoredSpecs(t *testing.T) {
 		"StackConvert":           true,
 		"StackImagesStatus":      true,
 	}
-	for _, id := range generatedOperations {
+	for _, id := range shippedOperations {
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 			want := edition.CE
