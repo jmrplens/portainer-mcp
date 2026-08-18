@@ -1001,8 +1001,29 @@ over the result, because a sibling keyword next to `$ref`/`allOf` is meant
 to take precedence. So the generated `EnumParams()` on all three nested
 `...EdgeSettingsRelativePathSettings` structs in
 `internal/tools/custom_templates/inputs.go` read `{"file", " dir"}`,
-verbatim from the document. Portainer's server accepts `dir`, never
-` dir`.
+verbatim from the document.
+
+**The server does not validate this field at all** — measured 2026-08-18
+against a live 2.44.0 Business Edition, by creating four custom templates
+through `POST /custom_templates/create/string` that differed only in
+`EdgeSettings.RelativePathSettings.PerDeviceConfigsMatchType`:
+
+| Sent | Response | Stored |
+|---|---|---|
+| `"dir"` | `200` | `dir` |
+| `" dir"` | `200` | ` dir` |
+| `"file"` | `200` | `file` |
+| `"zzz-not-a-value"` | `200` | `zzz-not-a-value` |
+
+So the enum is a **client-side constraint only**: `toolutil.ActionSpec.ValidateInput`
+enforces it before the request leaves, and nothing on the server would
+catch a wrong value afterwards. That is the real argument for trimming, and
+it is stronger than "the server rejects the space" would have been — since
+the server catches nothing here, the published enum is the only thing
+steering a model, and steering it toward a value with a leading space is
+steering it wrong for no benefit. An earlier draft of this section asserted
+the server "accepts `dir`, never ` dir`"; the second half of that is false,
+and it was written from the document rather than from a server.
 
 Only the Business Edition document defines this schema; Community Edition
 has neither it nor `portainer.PerDevConfigsFilterType`.

@@ -135,8 +135,11 @@ type customTemplateCreateRepositoryInputEdgeSettingsRelativePathSettings struct 
 // its own beside that $ref. A sibling keyword beats the $ref it sits next to,
 // deliberately, in cmd/gen_action_inputs's resolver, so the leading space was
 // what this method returned when the file was first scaffolded. Portainer's
-// server accepts "dir"; " dir" is a typo in the document, contradicted by the
-// very component the same node references.
+// " dir" is a typo in the document, contradicted by the very component the
+// same node references. The server was measured accepting "dir", " dir" and
+// even "zzz-not-a-value" here, storing each verbatim, so it validates this
+// field not at all: the published enum is a client-side constraint only, and
+// therefore the only thing steering a model away from the typo.
 //
 // The generator no longer emits it: normaliseEnumValues
 // (cmd/gen_action_inputs/schema.go) trims every enum value as it is read out
