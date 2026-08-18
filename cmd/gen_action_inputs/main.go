@@ -73,6 +73,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -285,11 +286,41 @@ func run(args []string) error {
 	// operations refused still generates everything else), only marked as
 	// still having a hand-written gap to fill.
 	domainsWithRefusals := map[string]bool{}
+
+	// Resolve every domain's operations BEFORE writing anything.
+	//
+	// domainOperations fails when a directory under -tools-dir has no
+	// toolutil.DomainTags entry. Resolving inside the write loop meant that
+	// failure aborted the run mid-way: domains sorting earlier already had
+	// their files on disk, the end-of-run report -- including the refusal
+	// list, the whole point of the run -- never printed, and the operator
+	// was left with a half-written tree and one line of explanation.
+	//
+	// It is not a hypothetical. Wave 1 stage B added internal/tools/redact,
+	// a shared helper rather than a domain, and this is exactly what
+	// happened. Any future non-domain directory reproduces it, so the guard
+	// belongs here rather than in a skip-list entry per accident.
+	//
+	// Every failure is collected rather than the first returned: told about
+	// one missing entry at a time, an operator adding two directories fixes
+	// one, reruns, and is told about the other.
+	opsByDomain := make(map[string][]operation, len(domains))
+	var resolveErrs []error
 	for _, domainName := range domains {
 		ops, err := domainOperations(domainName, toolutil.DomainTags, byTag)
 		if err != nil {
-			return err
+			resolveErrs = append(resolveErrs, err)
+			continue
 		}
+		opsByDomain[domainName] = ops
+	}
+	if len(resolveErrs) > 0 {
+		return fmt.Errorf("refusing to generate: %d of %d domain director(y/ies) under %s could not be resolved, and nothing was written: %w",
+			len(resolveErrs), len(domains), *toolsDir, errors.Join(resolveErrs...))
+	}
+
+	for _, domainName := range domains {
+		ops := opsByDomain[domainName]
 		if len(ops) == 0 {
 			continue
 		}
