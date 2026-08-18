@@ -775,6 +775,13 @@ var actionNameOverrides = map[string]actionNameOverride{
 		Name:   "cloud.generate_ssh_key",
 		Reason: "operationId is the bare verb \"Generate\" with no object (POST /sshkeygen); ActionName succeeds and returns \"cloud.generate\", which is grammatically valid but names nothing a model could act on without reading the description first",
 	},
+	"EndpointSnapshots": {
+		Domain: "endpoints",
+		Name:   "endpoints.snapshot_all",
+		Reason: "the mechanical name is \"endpoints.snapshots\", one letter away from \"endpoints.snapshot\" (POST /endpoints/{id}/snapshot, one environment) while this operation is POST /endpoints/snapshot and re-snapshots EVERY environment on the server. " +
+			"Same kind of entry as StackCreateKubernetesFile below — a mechanical name that is not merely uninformative but false about what it does — except that what it is false about is the operation's scope rather than its body shape: a model picking between \"snapshot\" and \"snapshots\" by name has nothing but an English plural to tell a single-environment refresh from a fleet-wide, mutating one, and gets no second chance because the wrong pick has already run. " +
+			"\"snapshot_all\" states the scope in the name. Its two read-only neighbours snapshot_inspect and snapshot_containers_list are deliberately left alone: they are also close in text, but both are reads, so a wrong pick costs nothing and their names already say what they fetch",
+	},
 	"StackCreateKubernetesFile": {
 		Domain: "stacks",
 		Name:   "stacks.create_kubernetes_string",

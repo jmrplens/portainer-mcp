@@ -8,10 +8,19 @@ design specification are being built phase by phase.
 
 ## Current state
 
-P0 (foundations) is complete: module, configuration, logging, MCP server
-skeleton over stdio, and CI. The Portainer client, action catalog and tool
-surfaces do not exist yet — do not assume any tool beyond
-`portainer_mcp_status`.
+Wave 1 of the action catalog is complete. Seven domains are declared —
+`system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks` and
+`endpoints` — for **88 actions**, covering 87 of Business Edition's 441
+operations and 66 of Community Edition's 251 (`api/coverage-baseline.yaml`
+is the ratchet, `make audit-1to1` the "are we done" report). All three tool
+surfaces (`dynamic`, `meta`, `individual`) are live and exercised end to end
+against a real estate.
+
+A domain is scaffolded once from the vendored specification and owned as
+ordinary Go source from then on; nothing regenerates it. See
+`docs/domain-wave-checklist.md` for the procedure and
+`docs/api-divergences.md` for every recorded disagreement between Portainer
+and the documents that describe it.
 
 ## Build & run
 
@@ -36,9 +45,16 @@ surfaces do not exist yet — do not assume any tool beyond
 ## Layout
 
     cmd/portainer-mcp/     entry point, flags, transport, tool files
+    cmd/gen_action_inputs/ scaffolds a domain from the vendored specification
+    cmd/audit_*/           the standing audits; CI gates on spec-drift and the 1:1 ratchet
     internal/config/       .env → environment → flags resolution
     internal/logging/      slog logger, stderr only
+    internal/portainer/    HTTP client; gen/ is the oapi-codegen client
+    internal/tools/        one package per domain, plus the three tool surfaces
+    internal/toolutil/     ActionSpec, schema, redaction, parameter guidance
+    internal/wiring/       builds the catalog and the MCP server
     internal/version/      ldflags-injected build metadata
+    test/e2e/              live-estate suite (build tag `e2e`) and its harness
 
 ## Configuration
 

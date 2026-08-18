@@ -16,5 +16,5 @@
 # the diff, rather than left for the ratchet to silently absorb. Never lower
 # either number to make a regression pass — that defeats the one thing this
 # file exists to catch.
-ce_covered: 49
-ee_covered: 60
+ce_covered: 66
+ee_covered: 87
