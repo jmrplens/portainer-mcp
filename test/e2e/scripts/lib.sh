@@ -32,14 +32,33 @@ licence_lock_path() {
     echo "$repo_root/test/e2e/.licence.lock"
 }
 
-# licence_lock_holder_running reports, via exit status only, whether the leg
-# named in an existing lock is actually still running right now -- separate
-# from anything the lock file itself claims. This is the one check standing
-# between "report a stale lock" and "auto-delete a lock that merely looks
-# stale", which take_licence_lock deliberately never does on its own: the
-# check below can itself be wrong (a slow-starting cluster, a `docker ps`
-# against the wrong host), and being wrong in the direction of "silently
-# clear it" is how two live instances happen again.
+# licence_lock_holder_running reports, via a THREE-way exit status, whether
+# the leg named in an existing lock is actually still running right now --
+# separate from anything the lock file itself claims:
+#
+#   0  running       the check ran cleanly and found the leg up
+#   1  not running   the check ran cleanly and found nothing
+#   2  unknown       the check itself could not run at all
+#
+# The distinction between 1 and 2 is the whole point, and callers MUST NOT
+# collapse it back into a plain zero/non-zero test. "Unknown" is genuinely
+# reachable, not a theoretical edge case: a Docker daemon that is briefly
+# unreachable, `DOCKER_HOST` pointed at a different machine than the one the
+# lock's holder is actually running on (see take_licence_lock's own callers
+# for exactly this scenario on the remote path), or `k3d` simply not being on
+# PATH, all make it impossible to tell "genuinely gone" apart from "cannot
+# see it from here" -- and those two must never read the same to a caller
+# deciding whether to delete something. Reported this way rather than, say,
+# writing to a global or a second output stream, because bash's own exit
+# status is already a first-class three-or-more-way channel every caller in
+# this file already knows how to read without a second mechanism to keep in
+# sync.
+#
+# take_licence_lock uses this only to choose which of three refusal messages
+# to print -- it never deletes anything regardless of the answer. But
+# licence-check.sh's cleanup (see its own comment) uses it to gate an actual
+# `rm -f`, so a caller that quietly treated 2 as "confirmed absent" would
+# turn "the check is unreliable right now" into "the check said clear it".
 #
 # The compose leg is matched on the compose project label rather than a
 # container name substring: `docker ps --filter name=portainer-mcp-e2e`
@@ -52,15 +71,39 @@ licence_lock_holder_running() {
     local leg="$1"
     case "$leg" in
         compose)
-            docker ps --filter "label=com.docker.compose.project=portainer-mcp-e2e" \
-                --format '{{.Names}}' 2>/dev/null | grep -q .
+            local out
+            # docker's own exit status is read directly, not folded into the
+            # grep below: a daemon that cannot be reached at all ("Cannot
+            # connect to the Docker daemon...") must report unknown (2), not
+            # be indistinguishable from a daemon that answered cleanly with
+            # an empty list (not running, 1).
+            if ! out=$(docker ps --filter "label=com.docker.compose.project=portainer-mcp-e2e" \
+                    --format '{{.Names}}' 2>/dev/null); then
+                return 2
+            fi
+            [[ -n "$out" ]] && return 0
+            return 1
             ;;
         kubernetes)
-            local cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}"
-            command -v k3d >/dev/null 2>&1 \
-                && k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"$cluster\""
+            local cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}" out
+            # k3d simply missing from PATH is unknown, not "not running": it
+            # says nothing about whether a cluster exists, only that this
+            # machine cannot ask. The original `command -v k3d && ...` chain
+            # folded that into the same false as an empty cluster list,
+            # which is exactly the collapse this rewrite exists to undo.
+            command -v k3d >/dev/null 2>&1 || return 2
+            if ! out=$(k3d cluster list -o json 2>/dev/null); then
+                return 2
+            fi
+            printf '%s\n' "$out" | grep -q "\"name\":\"$cluster\"" && return 0
+            return 1
             ;;
         *)
+            # An unrecognised leg (a blank or garbled HOLDER, reachable only
+            # via an interrupted write -- see take_licence_lock's own "|| true"
+            # comment) is not "unknown": no leg by that name is ever a
+            # candidate to be running, checked or not, so this can be
+            # answered with confidence rather than punting to 2.
             return 1
             ;;
     esac
@@ -135,11 +178,25 @@ take_licence_lock() {
     holder_estate=$(grep -E '^ESTATE=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
     resolve_cmd=$(licence_lock_resolve_command "$holder")
 
-    if licence_lock_holder_running "$holder"; then
-        echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
-    else
-        echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
-    fi
+    # Three-way, not if/else: licence_lock_holder_running's own doc names the
+    # exact accident collapsing 1 (confirmed not running) and 2 (could not
+    # tell) back into a plain truthy test would cause here -- this function
+    # never deletes anything either way, but it must not ASSERT staleness,
+    # or point at `make e2e-licence-release` as though the lock were known
+    # stale, on an answer that may mean nothing of the kind.
+    local holder_status=0
+    licence_lock_holder_running "$holder" || holder_status=$?
+    case "$holder_status" in
+        0)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
+            ;;
+        1)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
+            ;;
+        *)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate); whether '$holder' is still running could not be determined right now (the docker/k3d check itself failed -- check DOCKER_HOST and that docker/k3d are reachable from here). An unreliable check is not evidence the holder is gone, so this is treated as still held, not as stale: 'make e2e-licence-release' would delete this lock outright, so do not run it on this basis alone. Fix the check and retry, or confirm by hand that '$holder' is genuinely gone before clearing the lock yourself." >&2
+            ;;
+    esac
     return 1
 }
 

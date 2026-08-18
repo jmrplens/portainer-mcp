@@ -59,20 +59,34 @@ PORTAINER_E2E_LICENCE="$licence" \
 # like it is running -- the identical check take_licence_lock's own refusal
 # path uses, in the direction where being wrong is harmless (leaving a lock
 # in place costs an extra manual look; deleting a live leg's lock is the
-# accident this whole task exists to prevent). This also protects against
-# DOCKER_HOST pointing at the wrong daemon when this script happens to run
-# with a stale export from an unrelated remote session: if that made the
-# holder look absent when it is not, this still only warns rather than
-# deletes.
+# accident this whole task exists to prevent).
+#
+# licence_lock_holder_running answers one of THREE ways, and this is the one
+# caller that turns its answer into an actual `rm -f` -- so all three have to
+# be handled, not just running/not-running. "Could not determine" (its own
+# doc's status 2 -- docker/k3d unreachable, or DOCKER_HOST pointing at the
+# wrong daemon because this script happens to run with a stale export from
+# an unrelated remote session) must NOT read the same as "confirmed not
+# running": an unreliable check is not evidence the lock is stale, and
+# deleting on it is exactly the accident this task exists to prevent, only
+# reached through the recovery path instead of the ordinary one.
 lock_path=$(licence_lock_path "$repo_root")
 if [[ -f "$lock_path" ]]; then
     lock_holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
-    if licence_lock_holder_running "$lock_holder"; then
-        echo "warning: $lock_path still names '$lock_holder', and '$lock_holder' appears to be running right now; leaving the lock in place rather than risk clearing a leg that is genuinely still using the licence. If you are certain it is stale, remove it by hand: rm -f $lock_path" >&2
-    else
-        rm -f "$lock_path"
-        echo "cleared the stale licence lock at $lock_path" >&2
-    fi
+    lock_holder_status=0
+    licence_lock_holder_running "$lock_holder" || lock_holder_status=$?
+    case "$lock_holder_status" in
+        0)
+            echo "warning: $lock_path still names '$lock_holder', and '$lock_holder' appears to be running right now; leaving the lock in place rather than risk clearing a leg that is genuinely still using the licence. If you are certain it is stale, remove it by hand: rm -f $lock_path" >&2
+            ;;
+        1)
+            rm -f "$lock_path"
+            echo "cleared the stale licence lock at $lock_path" >&2
+            ;;
+        *)
+            echo "warning: could not determine whether '$lock_holder' (named in $lock_path) is still running -- the docker/k3d check itself failed, which is not the same as confirming it is gone. Leaving the lock in place rather than guessing: check DOCKER_HOST and that docker/k3d are reachable from here and re-run 'make e2e-licence-release', or confirm by hand that '$lock_holder' is genuinely not running and remove the lock yourself: rm -f $lock_path" >&2
+            ;;
+    esac
 fi
 
 echo "licence recovery complete: safe to run make e2e-up again" >&2
