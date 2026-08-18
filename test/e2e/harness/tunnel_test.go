@@ -305,6 +305,47 @@ if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; els
 	}
 }
 
+// TestUnit_TunnelAddForward_WhenThePollTimesOut_CancelsTheForwardItRequested
+// closes the gap a review of PR #10 raised, which was answered wrongly at
+// the time and merged: the reply argued teardown would release the forward,
+// and the reviewer traced the code and showed it does not.
+//
+// ssh accepted the `-O forward` request, so the master holds
+// 127.0.0.1:<port> whether or not anything ever answered on it. Nothing else
+// releases it on this path: every caller treats the non-zero return as fatal
+// and exits, and k3d-up.sh's only trap removes a temporary CA file — it has
+// no tunnel cleanup, so `tunnel_down` never runs. A retry before
+// `make e2e-k8s-down` then reaches the preflight probe at the top of
+// tunnel_add_forward, which finds the stale forward and reports "something
+// else is already listening there" — a diagnostic naming an unrelated cause
+// for a listener that is our own, on the failure path where a clear
+// diagnostic matters most.
+func TestUnit_TunnelAddForward_WhenThePollTimesOut_CancelsTheForwardItRequested(t *testing.T) {
+	t.Parallel()
+	port := reserveFreeTCPPort(t)
+
+	script := fmt.Sprintf(
+		`export PORTAINER_E2E_TUNNEL_FORWARD_RETRIES=2
+if tunnel_add_forward "somehost" %d "10.0.0.5" %d; then echo RESULT:success; else echo RESULT:failure; fi`,
+		port, port)
+	log, _, out, stderrOut := sourceRemoteCapturingResult(t, script)
+
+	if !strings.Contains(out, "RESULT:failure") {
+		t.Fatalf("precondition: this test needs the poll to time out, and it reported success instead; ssh log:\n%s", log)
+	}
+
+	want := fmt.Sprintf("-O cancel -L %d:10.0.0.5:%d", port, port)
+	if !strings.Contains(log, want) {
+		t.Errorf("tunnel_add_forward gave up without cancelling the forward it had already requested.\nwanted an ssh invocation containing %q\nssh log:\n%s", want, log)
+	}
+
+	// The cancel must not replace the diagnostic: a reader of a failed run
+	// needs to know the forward never came up, not that a cleanup ran.
+	if !strings.Contains(stderrOut, "could not confirm the forward") {
+		t.Errorf("the failure diagnostic went missing; stderr was %q", stderrOut)
+	}
+}
+
 // TestUnit_TunnelAddForward_FailsWhenSomethingAlreadyOccupiesTheLocalPort is
 // the direct regression test for a false positive a live review reproduced
 // against a real sshd: with an unrelated process already holding
