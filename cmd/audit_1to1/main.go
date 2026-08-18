@@ -9,7 +9,7 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 18 of 441 Business-Edition actions declared, plain run (what `make
+// With 60 of 441 Business-Edition operations covered, plain run (what `make
 // audit-1to1` calls, and what a human asking "are we done" wants) fails
 // today and keeps failing for most of P3 — that is correct, not a bug to
 // work around.
@@ -49,6 +49,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
@@ -225,6 +226,7 @@ func allCatalogSpecs() []toolutil.ActionSpec {
 	specs = append(specs, registries.Specs()...)
 	specs = append(specs, docker.Specs()...)
 	specs = append(specs, custom_templates.Specs()...)
+	specs = append(specs, stacks.Specs()...)
 	return specs
 }
 

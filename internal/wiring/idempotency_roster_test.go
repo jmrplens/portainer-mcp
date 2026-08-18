@@ -33,6 +33,8 @@ var destructiveAndIdempotent = map[string]string{
 	"custom_templates.delete":          "deleting an absent template leaves the same end state",
 	"registries.delete":                "deleting an absent registry leaves the same end state",
 	"registries.ecr_delete_repository": "deleting an absent ECR repository leaves the same end state",
+	"stacks.delete":                    "deleting an absent stack answers 404 and leaves the same end state",
+	"stacks.delete_kubernetes_by_name": "deleting absent Kubernetes stacks answers 404 and leaves the same end state; the request names them, so the end state it converges on is \"no stack by this name\"",
 	"tags.delete":                      "deleting an absent tag leaves the same end state",
 }
 
