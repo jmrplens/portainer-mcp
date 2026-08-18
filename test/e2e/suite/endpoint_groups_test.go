@@ -136,6 +136,33 @@ func deleteEndpointGroupIfPresent(ctx context.Context, ed string, id int) error 
 	return toolutil.Check(delResp)
 }
 
+// rawAddEndpointToGroup moves an environment into a group directly through
+// the Portainer API, bypassing endpoint_groups.add_endpoint -- the action
+// under test elsewhere in this file.
+//
+// It exists to build a genuine, observable starting condition for the
+// safe-mode delete_endpoint row below: that row's whole point is proving
+// delete_endpoint does not evict a real member, so the member has to be
+// real (and really in the group) before the safe-mode call runs. Using this
+// domain's own add_endpoint action to put it there would make a defect in
+// add_endpoint's handler indistinguishable from a defect in
+// delete_endpoint's interception -- exactly the kind of self-certifying
+// read-back this suite's own brief warns against.
+func rawAddEndpointToGroup(t *testing.T, ed string, groupID, endpointID int) {
+	t.Helper()
+	client := fixtureClient(t, ed)
+	ctx, cancel := context.WithTimeout(context.Background(), portainer.DefaultCallTimeout)
+	defer cancel()
+
+	resp, err := client.API.EndpointGroupAddEndpointWithResponse(ctx, groupID, endpointID)
+	if err != nil {
+		t.Fatalf("raw move environment %d into group %d: %v", endpointID, groupID, err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		t.Fatalf("raw move environment %d into group %d: %v", endpointID, groupID, err)
+	}
+}
+
 // TestEndpointGroups_CreateAddRemoveThenDelete_AcrossSurfacesAndEditions is
 // this domain's mutation template, following tags_test.go's: every mutating
 // call is followed by a read-back, and the two that matter most are read
@@ -279,11 +306,21 @@ func TestEndpointGroups_List_ReflectsAGroupCreatedDirectly(t *testing.T) {
 // file's own lifecycle test creates: this test exercises update in
 // isolation, on its own group, so a failure here cannot be confused with a
 // failure in create, add_endpoint or delete.
+//
+// Deliberately NOT parallel across its own ed/surface subtests, unlike every
+// other test in this file: it registers two fresh environments per subtest,
+// and six concurrent creates (three surfaces x CE and EE) push this
+// package's peak Business Edition node usage past what the licence already
+// carries from endpoints_test.go's and stacks_test.go's own concurrent
+// fixtures -- which is what made those PRE-EXISTING tests skip on "node
+// allowance" nondeterministically once this test was added. Running
+// serially caps this test's own peak at two environments while still
+// covering every surface and edition; do not restore t.Parallel() to "speed
+// it up" -- that is exactly the change that reintroduces the interference.
 func TestEndpointGroups_Update_AssociatedEndpointsReplacesMembership(t *testing.T) {
 	for _, ed := range sessions.Editions() {
 		for _, surface := range surfaceNames {
 			t.Run(ed+"/"+surface, func(t *testing.T) {
-				t.Parallel()
 				session := sessions.For(t, surface, ed)
 
 				groupID := createEndpointGroupFixture(t, ed, uniqueName("endpoint-group-update"))
@@ -354,11 +391,25 @@ var endpointGroupsSafeModeMutations = []struct {
 // executed it anyway would satisfy the first two identically.
 //
 // The victim group is a fixture this subtest owns (named uniquely per
-// subtest), and the victim environment is the one the estate provisions
-// (firstDockerEnvironmentID, reused rather than reimplemented, exactly as
-// the task brief for this suite requires): if safe mode let add_endpoint or
-// delete_endpoint through, that environment's real GroupId is what would
-// move, which is asserted unchanged below.
+// subtest, empty at the start). Four of the five rows target the
+// environment the estate provisions (firstDockerEnvironmentID, reused
+// rather than reimplemented, exactly as the task brief for this suite
+// requires): create/update/delete never reference an environment at all,
+// and add_endpoint's real effect -- moving that environment into the
+// fixture group -- would be a genuine, observable change, since the group
+// starts empty and that environment is not a member of it.
+//
+// delete_endpoint's row cannot reuse that setup. Nothing in provisioning
+// ever assigns the estate's own environment to any group (no EndpointGroup
+// reference anywhere in cmd/ provisioning or test/e2e/harness), so it
+// starts outside the fixture group -- and a real removal from a group the
+// environment was never in just sets GroupId to 1, the value it already
+// has: unobservable, and satisfied identically by a broken interception
+// that let the call through for real. That row is therefore given its own,
+// dedicated environment, moved into the fixture group directly through the
+// raw API (rawAddEndpointToGroup, not endpoint_groups.add_endpoint) before
+// the safe-mode call, so a leaked delete_endpoint has something real to
+// evict.
 //
 // Community Edition only, like TestSafeMode_Endpoints_...: safe-mode
 // interception has nothing to do with edition, so it is proven against the
@@ -376,8 +427,29 @@ func TestSafeMode_EndpointGroups_MutatingActionsArePreviewedAndNothingChanges(t 
 
 				groupName := uniqueName("endpoint-group-safe-existing")
 				groupID := createEndpointGroupFixture(t, "CE", groupName)
-				envID := firstDockerEnvironmentID(t, "CE")
-				beforeGroupID, _ := rawEnvironment(t, "CE", envID)["GroupId"].(float64)
+
+				// envID is the environment this row's input names, and
+				// beforeGroupID is the GroupId it must carry BEFORE the
+				// safe-mode call -- read again afterward and compared, this
+				// is what tells a genuine interception apart from a call
+				// that reached Portainer but produced no observable change.
+				// See this test's own doc comment for why delete_endpoint's
+				// row needs a dedicated environment rather than the shared
+				// one every other row uses.
+				var envID int
+				var beforeGroupID float64
+				if mutation.action == "endpoint_groups.delete_endpoint" {
+					envID = createEnvironmentThroughSurface(t, surface, "CE", uniqueName("env-groups-safe-victim"))
+					rawAddEndpointToGroup(t, "CE", groupID, envID)
+					beforeGroupID = float64(groupID)
+				} else {
+					envID = firstDockerEnvironmentID(t, "CE")
+					got, ok := rawEnvironment(t, "CE", envID)["GroupId"].(float64)
+					if !ok {
+						t.Fatalf("environment %d carries no GroupId before the safe-mode call", envID)
+					}
+					beforeGroupID = got
+				}
 
 				input := mutation.input(groupID, envID)
 				toolName, args := actionCallParams(t, surface, mutation.action, input)
@@ -419,9 +491,15 @@ func TestSafeMode_EndpointGroups_MutatingActionsArePreviewedAndNothingChanges(t 
 						t.Errorf("safe mode let %s through: group %q now exists as %d", mutation.action, name, got)
 					}
 				}
-				// The estate's own environment was never moved.
-				if got, _ := rawEnvironment(t, "CE", envID)["GroupId"].(float64); got != beforeGroupID {
-					t.Errorf("environment %d GroupId = %v, want %v: safe mode let %s through", envID, got, beforeGroupID, mutation.action)
+				// The target environment's GroupId is exactly what it was
+				// before the call: unmoved for add_endpoint, un-evicted for
+				// delete_endpoint.
+				afterGroupID, ok := rawEnvironment(t, "CE", envID)["GroupId"].(float64)
+				if !ok {
+					t.Fatalf("environment %d carries no GroupId after the safe-mode call", envID)
+				}
+				if afterGroupID != beforeGroupID {
+					t.Errorf("environment %d GroupId = %v, want %v: safe mode let %s through", envID, afterGroupID, beforeGroupID, mutation.action)
 				}
 			})
 		}
