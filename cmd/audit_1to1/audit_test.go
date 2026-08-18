@@ -35,7 +35,7 @@ func TestAudit_OperationWithNoAction_IsReportedAndFails(t *testing.T) {
 	}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil)
+	result, err := auditCoverage(ce, ee, actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v, want a result to report on", err)
 	}
@@ -72,7 +72,7 @@ func TestAudit_AllowListedOperation_IsExcludedButCounted(t *testing.T) {
 		{OperationID: "WebsocketExec", Reason: "MCP cannot carry a websocket upgrade.", Added: "2026-08-03"},
 	}
 
-	result, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList)
+	result, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAudit_AllowListEntryForAnUnknownOperation_IsAnError(t *testing.T) {
 		{OperationID: "LongRemovedOperation", Reason: "no longer exists", Added: "2026-08-03"},
 	}
 
-	_, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList)
+	_, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList, nil)
 	if err == nil {
 		t.Fatal("auditCoverage() = nil error, want an error for the stale allow-list entry")
 	}
@@ -135,7 +135,7 @@ func TestAudit_ActionNamingAnOperationNotInEitherSpec_IsAnError(t *testing.T) {
 		action("tags.typo", "TagLisst"),
 	}
 
-	_, err := auditCoverage(map[string]specOperation{}, ee, actions, nil)
+	_, err := auditCoverage(map[string]specOperation{}, ee, actions, nil, nil)
 	if err == nil {
 		t.Fatal("auditCoverage() = nil error, want an error for the action naming an unresolvable operation")
 	}
@@ -154,7 +154,7 @@ func TestAudit_EveryOperationCovered_NoGap(t *testing.T) {
 	ee := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil)
+	result, err := auditCoverage(ce, ee, actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -176,7 +176,7 @@ func TestAudit_ActionCoveringBothEditions_CountsInBoth(t *testing.T) {
 	ee := map[string]specOperation{"TagList": shared}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil)
+	result, err := auditCoverage(ce, ee, actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}

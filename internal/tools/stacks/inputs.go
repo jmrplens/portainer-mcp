@@ -683,3 +683,73 @@ type stackCreateDockerSwarmFileInput struct {
 	// integer on that one route.
 	SwarmID *string `json:"swarmId,omitempty" jsonschema:"Swarm cluster identifier."`
 }
+
+// The type below is hand-written for a different reason than the two above.
+// cmd/gen_action_inputs computes StackMigrate's fields perfectly well — the
+// shape here is exactly what assembleOperationFields produces — and then
+// buildHandlerSpec refuses the operation, so nothing is emitted at all (see
+// stacks.go's package doc, and cmd/gen_action_inputs's own
+// TestUnit_Run_RefusedOperationContributesNothing_CleanOperationStillContributesEverything).
+// The refusal is about the handler, not the fields, which is why this struct
+// is a transcription of the generator's own output rather than a judgement
+// call like the two required arrays above.
+//
+// endpointIdQuery is the whole reason the handler cannot be generated. POST
+// /stacks/{id}/migrate declares an optional query parameter "endpointId" and
+// a required body property "EndpointID", and both render to the wire name
+// "endpointId", so internal/specnaming leaves the body property the plain
+// name and publishes the query parameter as "endpointIdQuery" (see that
+// package's doc comment, which names this operation as the case its ruling
+// was decided on). A generated handler distributes query parameters by
+// unmarshalling the caller's raw input into apigen.StackMigrateParams, whose
+// only field is tagged `json:"endpointId,omitempty"` — an exact match for the
+// BODY property's key — so it would send the migration target as the
+// pre-1.18 fixup and drop whatever the caller put in endpointIdQuery.
+// handlers.go builds that one parameter by hand for exactly that reason.
+//
+// Five of the seven fields carry no jsonschema description, which is the
+// vendored Business Edition document's doing and not an omission here:
+// stacks.stackMigratePayload's properties declare "example" and nothing else
+// in api/specs/ee-2.44.0.json. (The Community Edition document describes
+// three of them, but the catalog is generated from the Business Edition one
+// and cmd/audit_spec_drift compares against it, so publishing Community
+// Edition's prose here would be a gating ChangeFieldDescription on every
+// field it touched.) What those fields mean is stated in this action's
+// narrative instead — the same place this domain already explains
+// create_docker_standalone_file's JSON-encoded env — which is prose
+// cmd/audit_spec_drift treats as a declared override rather than as drift.
+//
+// IsHelm and Namespace carry `edition:"EE"` because the Community Edition
+// document's copy of stacks.stackMigratePayload declares neither: they are a
+// Business Edition addition to a route both editions serve, which is exactly
+// what applyFieldEditionGate stamps that tag for.
+
+// stackMigrateInput is the parameter shape for operation StackMigrate (POST /stacks/{id}/migrate).
+type stackMigrateInput struct {
+	// EndpointID is the environment the stack is migrating TO — a required
+	// body property, and not to be confused with EndpointIDQuery below.
+	EndpointID int `json:"endpointId"`
+	// EndpointIDQuery Stacks created before version 1.18.0 might not have an associated environment(endpoint) identifier. Use this optional parameter to set the environment(endpoint) identifier used by the stack.
+	//
+	// The query parameter, origin-qualified by internal/specnaming because
+	// the body property above already occupies "endpointId". It repairs a
+	// pre-1.18 stack record that never recorded which environment it was
+	// deployed to; it does not name the migration target.
+	EndpointIDQuery *int `json:"endpointIdQuery,omitempty" jsonschema:"Stacks created before version 1.18.0 might not have an associated environment(endpoint) identifier. Use this optional parameter to set the environment(endpoint) identifier used by the stack."`
+	// ID Stack identifier
+	ID int `json:"id" jsonschema:"Stack identifier"`
+	// IsHelm is a Business Edition body property.
+	IsHelm *bool `json:"isHelm,omitempty" edition:"EE"`
+	// Name renames the stack as it is re-created in the target environment.
+	Name *string `json:"name,omitempty"`
+	// Namespace is a Business Edition body property.
+	Namespace *string `json:"namespace,omitempty" edition:"EE"`
+	// SwarmID is the target Swarm cluster's identifier.
+	SwarmID *string `json:"swarmId,omitempty"`
+}
+
+func (stackMigrateInput) MinimumParams() map[string]int {
+	return map[string]int{
+		"id": 1,
+	}
+}

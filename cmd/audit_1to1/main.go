@@ -56,7 +56,11 @@ import (
 
 // Default locations of this audit's inputs. Parameterised on run rather than
 // hardcoded there, so tests can point every one of them at a temporary
-// fixture without touching the working directory.
+// fixture without touching the working directory. operationAliases (alias.go)
+// is passed the same way and for the same reason: it is checked against the
+// documents actually loaded, so a run over a two-operation fixture spec must
+// be able to supply the aliases that fixture declares — none — rather than
+// the ones the real vendored documents do.
 const (
 	specsDir       = "api/specs"
 	defaultSpecVer = "2.44.0"
@@ -78,9 +82,9 @@ func main() {
 
 	var err error
 	if *baseline {
-		err = runRatchet(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile)
+		err = runRatchet(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile, operationAliases)
 	} else {
-		err = run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile)
+		err = run(os.Stderr, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, operationAliases)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit_1to1: %v\n", err)
@@ -93,7 +97,7 @@ func main() {
 // build must fail: a malformed input, an allow-list or catalog entry naming
 // an operation that resolves in neither spec, or any operation left
 // uncovered.
-func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile string) error {
+func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile string, aliases []operationAlias) error {
 	ceData, err := readFileIn(specsDir, ceSpecFile)
 	if err != nil {
 		return err
@@ -120,7 +124,7 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 		return fmt.Errorf("%s/%s: %w", allowListDir, allowListFile, err)
 	}
 
-	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList)
+	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList, aliases)
 	if err != nil {
 		return err
 	}
@@ -158,7 +162,7 @@ func run(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListF
 // should be updated in the same commit that improved it, which is also what
 // makes the improvement visible in the diff). It cannot go backwards, it is
 // green today, and it tightens automatically as P3 lands each domain.
-func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile string) error {
+func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, allowListFile, baselineDir, baselineFile string, aliases []operationAlias) error {
 	ceData, err := readFileIn(specsDir, ceSpecFile)
 	if err != nil {
 		return err
@@ -193,7 +197,7 @@ func runRatchet(w io.Writer, specsDir, ceSpecFile, eeSpecFile, allowListDir, all
 		return fmt.Errorf("%s/%s: %w", baselineDir, baselineFile, err)
 	}
 
-	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList)
+	result, err := auditCoverage(ceOps, eeOps, allCatalogSpecs(), allowList, aliases)
 	if err != nil {
 		return err
 	}

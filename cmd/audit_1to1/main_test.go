@@ -91,7 +91,7 @@ func TestUnit_Run_UncoveredOperation_ReturnsNonNilError(t *testing.T) {
 	writeFixture(t, dir, "allowlist.yaml", "[]\n")
 
 	var out strings.Builder
-	err := run(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml")
+	err := run(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", nil)
 	if err == nil {
 		t.Fatal("run() = nil error, want an error: WebsocketExec has no catalog action and is not allow-listed")
 	}
@@ -116,7 +116,7 @@ func TestUnit_Run_EveryOperationCoveredOrAllowListed_ReturnsNil(t *testing.T) {
 `)
 
 	var out strings.Builder
-	if err := run(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml"); err != nil {
+	if err := run(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", nil); err != nil {
 		t.Fatalf("run() error = %v, want nil: every operation is covered or allow-listed\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "Allow-list entries: 1") {
@@ -131,7 +131,7 @@ func TestUnit_Run_MissingSpecFile_ReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	var out strings.Builder
-	err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml")
+	err := run(&out, dir, "does-not-exist.json", "does-not-exist.json", dir, "allowlist.yaml", nil)
 	if err == nil {
 		t.Fatal("run() = nil error, want an error for a missing spec file")
 	}

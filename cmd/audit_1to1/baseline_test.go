@@ -162,7 +162,7 @@ func TestUnit_RunRatchet_CoverageBelowBaseline_ReturnsError(t *testing.T) {
 	writeFixture(t, dir, "baseline.yaml", fmt.Sprintf("ce_covered: 0\nee_covered: %d\n", len(ids)+1))
 
 	var out strings.Builder
-	err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml")
+	err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml", nil)
 	if err == nil {
 		t.Fatal("runRatchet() = nil error, want one: current EE coverage is below the inflated baseline")
 	}
@@ -183,7 +183,7 @@ func TestUnit_RunRatchet_CoverageMeetsBaseline_ReturnsNil(t *testing.T) {
 	writeFixture(t, dir, "baseline.yaml", fmt.Sprintf("ce_covered: 0\nee_covered: %d\n", len(ids)))
 
 	var out strings.Builder
-	if err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml"); err != nil {
+	if err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml", nil); err != nil {
 		t.Fatalf("runRatchet() error = %v, want nil: coverage exactly meets the baseline\n%s", err, out.String())
 	}
 }
@@ -201,7 +201,7 @@ func TestUnit_RunRatchet_CoverageAboveBaseline_ReturnsNilButReportsStale(t *test
 	writeFixture(t, dir, "baseline.yaml", "ce_covered: 0\nee_covered: 0\n")
 
 	var out strings.Builder
-	if err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml"); err != nil {
+	if err := runRatchet(&out, dir, "ce.json", "ee.json", dir, "allowlist.yaml", dir, "baseline.yaml", nil); err != nil {
 		t.Fatalf("runRatchet() error = %v, want nil: coverage exceeds the baseline\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "stale") {

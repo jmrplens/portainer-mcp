@@ -378,16 +378,15 @@ func TestUnit_Specs_AreAllValid(t *testing.T) {
 	}
 }
 
-// shippedOperations is every operationId this domain ships today: the
-// twenty-two cmd/gen_action_inputs generated, plus the two multipart creates
-// it refused and handlers.go writes by hand. The roster was called
-// generatedOperations while every entry was in fact generated; the name
+// shippedOperations is every operationId this domain ships: the twenty-two
+// cmd/gen_action_inputs generated, plus the three it refused and handlers.go
+// writes by hand — the two multipart creates and StackMigrate. The roster was
+// called generatedOperations while every entry was in fact generated; the name
 // changed with the first hand-written entry rather than leaving a list that
 // quietly contradicts its own name.
 //
-// The one operation still absent is StackMigrate, on purpose: the task that
-// hand-writes it adds it here in the same commit as its ActionSpec, and
-// pendingRulings below is what makes that unmissable.
+// It is now the whole domain: all twenty-five operations carrying the "stacks"
+// tag in api/specs/ee-2.44.0.json have an action.
 var shippedOperations = []string{
 	"EdgeStackWebhookInvoke",
 	"StackAssociate",
@@ -408,6 +407,7 @@ var shippedOperations = []string{
 	"StackImagesStatus",
 	"StackInspect",
 	"StackList",
+	"StackMigrate",
 	"StackStart",
 	"StackStop",
 	"StackUpdate",
@@ -510,10 +510,21 @@ func TestUnit_Narrative_GivesEveryActionADistinctTitleAndDescription(t *testing.
 // gives every PUT here Idempotent — see actions.go for why that one is
 // cleared and why the other three PUTs keep it.
 //
-// Three of the five Destructive rows are hand rulings the generator did not
+// Four of the six Destructive rows are hand rulings the generator did not
 // prompt: suspectDangerMismatch's keyword list matches nothing in this
 // domain, so the scaffold run printed no verb-mismatch warning for stacks at
-// all. See actions.go for the reasoning behind each.
+// all. See actions.go for the reasoning behind three of them and stacks.go's
+// handWrittenSpecs for stacks.migrate's.
+//
+// This table is also where the rulings that used to be carried by a
+// pendingRulings map ended up. That map held a Destructive decision for each
+// hand-written operation whose ActionSpec did not exist yet, skipped while
+// there was no spec to assert against, and failed the moment one appeared —
+// telling its reader to move the entry here, where all three flags are pinned
+// rather than Destructive alone. All three entries have now made that trip
+// (the two multipart creates, then StackMigrate), so the map itself is gone:
+// an empty carrier with no ruling left to deliver is a test that can no longer
+// fail.
 func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -549,6 +560,15 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 		// preview and changes nothing, so the name is the only thing about
 		// it that sounds irreversible.
 		{name: "convert only previews", action: "stacks.convert", mutating: true},
+
+		// Hand ruling: migrate re-creates the stack in the target environment
+		// and then removes the original, so the act is a delete as much as a
+		// create and nothing records what the original held. Idempotent is
+		// false and was decided rather than defaulted — a second call finds the
+		// stack already migrated and is answered 409, and IdempotentHint on a
+		// destructive action is an invitation to retry the one thing here that
+		// cannot be taken back. See stacks.go's handWrittenSpecs.
+		{name: "migrate destroys the original stack", action: "stacks.migrate", mutating: true, destructive: true, idempotent: false},
 
 		// Writes that are not destructive: every field they overwrite the
 		// caller supplies in the same request, or they are reversible.
@@ -593,73 +613,6 @@ func TestUnit_DangerFlags_MatchThisDomainsRulings(t *testing.T) {
 			if spec.Idempotent != tt.idempotent {
 				t.Errorf("%s: Idempotent = %v, want %v (it reaches clients as IdempotentHint, which invites unattended retry)", tt.action, spec.Idempotent, tt.idempotent)
 			}
-		})
-	}
-}
-
-// pendingRulings carries a danger-flag decision this domain has made for an
-// operation whose ActionSpec does not exist yet.
-//
-// Three of this domain's twenty-five operations were refused by
-// cmd/gen_action_inputs and are hand-written by later tasks. Rulings about
-// them were made while the whole domain was in view — the vendored
-// descriptions of all twenty-five side by side is the only place from which
-// "this one removes the original stack and the others do not" is visible —
-// but the files those rulings have to land in are ones the scaffold task
-// could not write. A doc comment would be the obvious carrier and is the
-// wrong one: the person who needs it will be editing actions.go or
-// stacks.go, not a file they have no reason to open.
-//
-// This map is the carrier instead. It asserts nothing about an operation
-// with no spec; it starts asserting the moment one appears, in the same
-// commit that declares it, and it names the reasoning in its own failure
-// message. A ruling that activates itself when the code it rules on arrives
-// is the only kind that survives being handed between tasks — and it worked:
-// the two multipart creates' entries fired the moment their ActionSpecs
-// landed, and moved out of here into shippedOperations and the danger-flag
-// table in that same commit, which is exactly the exit this map prescribes.
-// StackMigrate's entry is the one left.
-var pendingRulings = map[string]struct {
-	destructive bool
-	because     string
-}{
-	"StackMigrate": {
-		destructive: true,
-		because: "POST /stacks/{id}/migrate is described in the vendored specification as re-creating the stack " +
-			"in the target environment \"before removing the original stack\": the original is gone, and no field of " +
-			"stacks.stackMigratePayload describes what it held. That is the same criterion stacks.git_redeploy is " +
-			"flagged under, and the clearest case in this domain",
-	},
-}
-
-// TestUnit_PendingRulings_HoldWhenTheirActionsLand skips every operation
-// whose ActionSpec this domain does not declare yet, and enforces the ruling
-// on every one it does.
-//
-// Today it skips StackMigrate, the only entry left, and so asserts nothing —
-// deliberately, since a failing red test for work a later task owns is noise
-// this task cannot clear. It is a no-op with a trigger, not a check that is
-// passing.
-func TestUnit_PendingRulings_HoldWhenTheirActionsLand(t *testing.T) {
-	t.Parallel()
-	declared := map[string]toolutil.ActionSpec{}
-	for _, s := range Specs() {
-		declared[s.OperationID] = s
-	}
-	for id, ruling := range pendingRulings {
-		t.Run(id, func(t *testing.T) {
-			t.Parallel()
-			spec, ok := declared[id]
-			if !ok {
-				t.Skipf("%s has no ActionSpec yet; this ruling activates when its hand-written handler lands", id)
-			}
-			if spec.Destructive != ruling.destructive {
-				t.Errorf("%s: Destructive = %v, want %v — %s", id, spec.Destructive, ruling.destructive, ruling.because)
-			}
-			// An operation that has landed belongs in the domain's own
-			// roster and its danger-flag table, not here.
-			t.Errorf("%s now has an ActionSpec: move this entry out of pendingRulings into shippedOperations "+
-				"and TestUnit_DangerFlags_MatchThisDomainsRulings, which pin every flag rather than Destructive alone", id)
 		})
 	}
 }
@@ -721,11 +674,14 @@ func TestUnit_ActionNames_MatchThisDomainsRulings(t *testing.T) {
 // POST /stacks/webhooks/{webhookID} is served by both editions, but the
 // Community Edition document names the operation WebhookInvoke, and the
 // catalog is built from the Business Edition document alone. That is a
-// catalogue artefact rather than a real edition boundary, and resolving it —
-// a second hand-declared ActionSpec, a coverage allow-list entry, or an
-// accepted gap recorded in docs/api-divergences.md — belongs to the task
-// that registers this domain. Pinned here so that resolution is a deliberate
-// change to this line rather than a silent one.
+// catalogue artefact rather than a real edition boundary, and it stays
+// edition.EE: the resolution landed in cmd/audit_1to1's alias table
+// (alias.go), which records the two operationIds as one route so that
+// covering either covers both, rather than in anything this domain declares.
+// A second ActionSpec named stacks.webhook_invoke_ce was rejected — see
+// stacks.go's package doc — and so was a coverage allow-list entry, which
+// would have claimed the route is never exposed. Pinned here so that a later
+// change to this line is a deliberate one.
 func TestUnit_Editions_MatchTheVendoredSpecs(t *testing.T) {
 	t.Parallel()
 	businessEditionOnly := map[string]bool{

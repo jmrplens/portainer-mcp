@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -18,25 +20,33 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/specdiff"
 )
 
-// capturedRequest is what a server saw: the parsed multipart form plus the
-// header and query values that decide whether it can be read at all.
+// capturedRequest is what a server saw: the parsed multipart form (or, for a
+// JSON route, the raw body bytes) plus the header and query values that
+// decide whether it can be read at all.
 type capturedRequest struct {
 	method      string
 	path        string
 	rawQuery    string
 	contentType string
 	form        *multipart.Form
+	// body is the request body as read off the wire, populated only for a
+	// request that is not multipart. The two are exclusive on purpose: see
+	// capturingClient for why a multipart body is never buffered here.
+	body []byte
 }
 
 // capturingClient answers every request with body and records the request
 // itself, parsed the way net/http parses a multipart upload.
 //
 // Deliberately not clientFor from stacks_test.go: that helper discards the
-// request, which is exactly what this file needs to inspect. The parse is
-// done inside the server because http.Request.MultipartReader consumes the
-// body — a test that kept the raw bytes and parsed them afterwards would be
-// asserting against its own copy rather than against what a server can
-// actually read off the wire.
+// request, which is exactly what this file needs to inspect. The multipart
+// parse is done inside the server because http.Request.MultipartReader
+// consumes the body — a test that kept the raw bytes and parsed them
+// afterwards would be asserting against its own copy rather than against what
+// a server can actually read off the wire. A body that is not multipart is
+// simply read whole into captured.body: StackMigrate sends JSON, and the
+// assertions on it are about which key carries which value, not about whether
+// a streaming parser can find them.
 func capturingClient(t *testing.T, status int, body []byte) (*portainer.Client, *capturedRequest) {
 	t.Helper()
 	captured := &capturedRequest{}
@@ -51,6 +61,8 @@ func capturingClient(t *testing.T, status int, body []byte) (*portainer.Client, 
 				captured.form = form
 				t.Cleanup(func() { _ = form.RemoveAll() })
 			}
+		} else {
+			captured.body, _ = io.ReadAll(r.Body)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -531,12 +543,12 @@ func TestUnit_FileCreateWithUnparseableInput_ReturnsAWrappedError(t *testing.T) 
 	}
 }
 
-// TestUnit_FileCreateSpecs_MatchTheDomainsGeneratedNeighbours pins the
+// TestUnit_HandWrittenSpecs_MatchTheDomainsGeneratedNeighbours pins the
 // declarations themselves. handWrittenSpecs is written by hand, so nothing
 // regenerates it and nothing else checks that it names the operation, the
 // Input type and the redaction-bearing handler the rest of this domain
 // assumes.
-func TestUnit_FileCreateSpecs_MatchTheDomainsGeneratedNeighbours(t *testing.T) {
+func TestUnit_HandWrittenSpecs_MatchTheDomainsGeneratedNeighbours(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -556,6 +568,12 @@ func TestUnit_FileCreateSpecs_MatchTheDomainsGeneratedNeighbours(t *testing.T) {
 			action:      "stacks.create_docker_swarm_file",
 			operationID: "StackCreateDockerSwarmFile",
 			input:       stackCreateDockerSwarmFileInput{},
+		},
+		{
+			name:        "migrate",
+			action:      "stacks.migrate",
+			operationID: "StackMigrate",
+			input:       stackMigrateInput{},
 		},
 	}
 
@@ -597,8 +615,8 @@ func TestUnit_FileCreateSpecs_MatchTheDomainsGeneratedNeighbours(t *testing.T) {
 // two routes are byte-identical — is never reached.
 const vendoredSpec = "../../../api/specs/ee-2.44.0.json"
 
-// TestUnit_FileCreateInputs_PublishTheShapeTheSpecificationDeclares runs the
-// real drift comparison over these two hand-written actions, here, because
+// TestUnit_HandWrittenInputs_PublishTheShapeTheSpecificationDeclares runs the
+// real drift comparison over all three hand-written actions, here, because
 // nothing else will until this domain is registered.
 //
 // cmd/audit_spec_drift audits the catalog, and stacks is not in it yet: a
@@ -621,7 +639,20 @@ const vendoredSpec = "../../../api/specs/ee-2.44.0.json"
 // argues for: file optional on both routes, and Name and SwarmID optional on
 // the Swarm route, because neither vendored multipart schema says otherwise.
 // Tightening any of them without an allow-list entry fails right here.
-func TestUnit_FileCreateInputs_PublishTheShapeTheSpecificationDeclares(t *testing.T) {
+//
+// For stacks.migrate it pins something else again, and something no other
+// test in this package can see: that the published field is called
+// "endpointIdQuery" and not "endpointId". internal/specdiff derives the
+// vendored side's names through the same internal/specnaming rule
+// cmd/gen_action_inputs uses, so publishing the query parameter under its raw
+// name would land here as one field added and another removed — and it is the
+// only mechanism that would notice, since the request the handler builds is
+// identical either way (the value would simply come from the wrong field).
+// It also pins the five body properties' empty descriptions, which are the
+// Business Edition document's own: filling them in from the Community
+// Edition document, which describes three of them, is a gating
+// ChangeFieldDescription on each.
+func TestUnit_HandWrittenInputs_PublishTheShapeTheSpecificationDeclares(t *testing.T) {
 	t.Parallel()
 
 	data, err := os.ReadFile(vendoredSpec)
@@ -629,7 +660,7 @@ func TestUnit_FileCreateInputs_PublishTheShapeTheSpecificationDeclares(t *testin
 		t.Fatalf("read %s: %v", vendoredSpec, err)
 	}
 
-	for _, action := range []string{"stacks.create_docker_standalone_file", "stacks.create_docker_swarm_file"} {
+	for _, action := range []string{"stacks.create_docker_standalone_file", "stacks.create_docker_swarm_file", "stacks.migrate"} {
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()
 			spec := findSpec(t, action)
@@ -660,5 +691,267 @@ func TestUnit_FileCreateInputs_PublishTheShapeTheSpecificationDeclares(t *testin
 				}
 			}
 		})
+	}
+}
+
+// migratedStack is the 200 body POST /stacks/{id}/migrate answers with. Same
+// fixture, and same live credential, as the two create routes above: the
+// route returns a PortainereeStack too.
+func migratedStack(t *testing.T) []byte {
+	t.Helper()
+	return mustMarshal(t, gitBackedStack())
+}
+
+const (
+	// fullMigrateInput sets endpointId and endpointIdQuery to DIFFERENT
+	// values, and that is the whole point of it.
+	//
+	// Both fields are called "endpointId" on the wire — one in the body, one
+	// in the query string — and internal/specnaming publishes the query one
+	// as "endpointIdQuery" precisely because they collide. A handler that
+	// wired them backwards, or that fed both from one field (which is exactly
+	// what the generated handler cmd/gen_action_inputs refused to emit would
+	// have done), still produces a well-formed request and a 200. Only
+	// distinct values can tell the two apart: 9 is the migration target and
+	// must reach the body, 3 is the pre-1.18 fixup and must reach the query.
+	fullMigrateInput = `{
+		"id": 4,
+		"endpointId": 9,
+		"endpointIdQuery": 3,
+		"name": "moved-stack",
+		"swarmId": "jpofkc0i9uo9wtx1zesuk649w",
+		"namespace": "default",
+		"isHelm": true
+	}`
+
+	// minimalMigrateInput carries only what the vendored document lists
+	// required — the path identifier and the body's EndpointID — and no
+	// endpointIdQuery at all. It is the second half of the query/body check:
+	// the query string must come out EMPTY. A handler that unmarshalled the
+	// caller's raw input into apigen.StackMigrateParams would send
+	// endpointId=9 here, silently applying the migration target as a
+	// pre-1.18 environment fixup for a caller who asked for no such thing.
+	minimalMigrateInput = `{"id":4,"endpointId":9}`
+)
+
+// decodeRequestBody decodes a captured JSON request body into a map, so an
+// assertion can name the exact wire keys the server will read.
+//
+// A map rather than apigen.StacksStackMigratePayload deliberately: decoding
+// into that struct would match keys case-insensitively, the way Go's
+// encoding/json always does, so a body that spelled the property
+// "endpointId" instead of the document's "EndpointID" would decode
+// identically and the test would not notice. The multipart tests above assert
+// literal part names for the same reason.
+func decodeRequestBody(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	if len(raw) == 0 {
+		t.Fatal("the server received no request body")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode the captured request body %q: %v", raw, err)
+	}
+	return body
+}
+
+// TestUnit_MigrateRequest_SendsTheQueryFieldAsTheQueryAndTheBodyFieldAsTheBody
+// is the test this hand-written handler exists for.
+//
+// POST /stacks/{id}/migrate is the one operation in this domain whose query
+// parameter and request body contribute the same wire name: the query's
+// optional "endpointId" (a fixup for a stack created before Portainer 1.18.0
+// that recorded no environment) and the body's required "EndpointID" (the
+// environment the stack is migrating to). internal/specnaming gives the body
+// the plain name and publishes the query parameter as "endpointIdQuery", and
+// cmd/gen_action_inputs refuses the operation because a generated handler
+// would unmarshal the caller's raw input into apigen.StackMigrateParams —
+// whose field is tagged `json:"endpointId,omitempty"`, an exact match for the
+// BODY's key — and so would migrate to an environment the caller never named.
+//
+// Nothing about that failure is visible from a status code: the request stays
+// well-formed and Portainer answers 200 after migrating the stack somewhere
+// else. So the two fields carry different values here and each is asserted at
+// its own destination, and the second row asserts the query string is empty
+// when the caller supplies no endpointIdQuery at all — the case a
+// raw-input unmarshal gets wrong most loudly, by inventing a parameter.
+func TestUnit_MigrateRequest_SendsTheQueryFieldAsTheQueryAndTheBodyFieldAsTheBody(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantQuery string
+		wantBody  map[string]any
+	}{
+		{
+			name:  "both endpoint fields set, to different values",
+			input: fullMigrateInput,
+			// 3, the endpointIdQuery field — never 9, the migration target.
+			wantQuery: "endpointId=3",
+			wantBody: map[string]any{
+				"EndpointID": float64(9),
+				"Name":       "moved-stack",
+				"SwarmID":    "jpofkc0i9uo9wtx1zesuk649w",
+				"Namespace":  "default",
+				"IsHelm":     true,
+			},
+		},
+		{
+			name:  "no endpointIdQuery leaves the query string empty",
+			input: minimalMigrateInput,
+			// Not "endpointId=9", and not "endpointId=0" either: the
+			// parameter is optional and the caller said nothing about it.
+			wantQuery: "",
+			wantBody: map[string]any{
+				"EndpointID": float64(9),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, captured := capturingClient(t, http.StatusOK, migratedStack(t))
+
+			if _, err := find(t, "stacks.migrate")(context.Background(), c, json.RawMessage(tt.input)); err != nil {
+				t.Fatalf("handler error = %v", err)
+			}
+
+			if captured.method != http.MethodPost {
+				t.Errorf("method = %s, want POST", captured.method)
+			}
+			// The path identifier is the third field that could be crossed
+			// with the other two; 4 is neither 9 nor 3.
+			if want := "/api/stacks/4/migrate"; captured.path != want {
+				t.Errorf("path = %s, want %s", captured.path, want)
+			}
+			if captured.rawQuery != tt.wantQuery {
+				t.Errorf("query = %q, want %q — endpointIdQuery is the pre-1.18 fixup parameter and the body's endpointId is the migration target; sending either in the other's place migrates the stack to the wrong environment",
+					captured.rawQuery, tt.wantQuery)
+			}
+
+			body := decodeRequestBody(t, captured.body)
+			if !reflect.DeepEqual(body, tt.wantBody) {
+				t.Errorf("request body = %v, want %v", body, tt.wantBody)
+			}
+			// Stated separately from the DeepEqual above so a failure names
+			// the defect rather than a whole-map difference: the qualified
+			// name is this project's own invention and means nothing to
+			// Portainer, and the body must never carry the query's value.
+			if _, leaked := body["endpointIdQuery"]; leaked {
+				t.Error("the request body carries endpointIdQuery; that name exists only to disambiguate the published schema and is not a property of stacks.stackMigratePayload")
+			}
+		})
+	}
+}
+
+// TestUnit_MigrateWithGitCredentialInResponse_ReturnsNoCredential is the
+// discriminating redaction test for this handler, and like the two above it
+// has to exist separately.
+//
+// redaction_test.go's table drives generated wrappers and generated handlers;
+// StackMigrate has no generated handler, so no entry there reaches this code
+// path, and cmd/gen_action_inputs's checkCredentialRedaction is a static AST
+// scan over generated code that only proves redactStackMigrate is declared.
+// Nothing but this stands between a hand-written handler that returns
+// resp.JSON200 directly and a git password reaching a model — confirmed by
+// mutation: replacing the redaction call with the raw response makes this
+// test fail naming hunter2.
+func TestUnit_MigrateWithGitCredentialInResponse_ReturnsNoCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "every field supplied", input: fullMigrateInput},
+		{name: "only the required fields", input: minimalMigrateInput},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, _ := capturingClient(t, http.StatusOK, migratedStack(t))
+
+			out, err := find(t, "stacks.migrate")(context.Background(), c, json.RawMessage(tt.input))
+			if err != nil {
+				t.Fatalf("handler error = %v", err)
+			}
+			// The migrated stack and its repository URL are what the action
+			// exists to return: a handler returning nil, or dropping
+			// GitConfig whole, would satisfy every credential assertion.
+			assertNoCredential(t, "stacks.migrate", out, "nginx-stack", "https://git.example.com/team/app.git")
+		})
+	}
+}
+
+// TestUnit_MigrateWhenPortainerRefuses_ReturnsTheServerError pins that this
+// handler runs its response through toolutil.Check, and that a decode failure
+// is wrapped with the operation's own name.
+//
+// The 409 is the route's own: "A stack with the same name is already running
+// on the target environment(endpoint)" is what a second migrate is answered
+// with, and it is the measured fact behind this action not being marked
+// Idempotent. Without the Check call it would reach a model as a nil body and
+// no error — a migration that never happened, reported as one that did.
+func TestUnit_MigrateWhenPortainerRefuses_ReturnsTheServerError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "the target environment already runs a stack of that name",
+			input:  minimalMigrateInput,
+			status: http.StatusConflict,
+			body:   `{"message":"A stack with the same name is already running on the target environment"}`,
+			want:   "A stack with the same name is already running on the target environment",
+		},
+		{
+			name:   "no such stack",
+			input:  minimalMigrateInput,
+			status: http.StatusNotFound,
+			body:   `{"message":"Stack not found"}`,
+			want:   "Stack not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, _ := capturingClient(t, tt.status, []byte(tt.body))
+
+			out, err := find(t, "stacks.migrate")(context.Background(), c, json.RawMessage(tt.input))
+			if err == nil {
+				t.Fatalf("handler error = nil and returned %v, want the server's refusal", out)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want it to carry the server's own message", err)
+			}
+			if !strings.Contains(err.Error(), "StackMigrate") {
+				t.Errorf("error = %v, want it wrapped with the operation's own name", err)
+			}
+		})
+	}
+}
+
+// TestUnit_MigrateWithUnparseableInput_ReturnsAWrappedError pins the decode
+// step's error context, the one thing a hand-written handler can get wrong
+// that the generated ones cannot.
+func TestUnit_MigrateWithUnparseableInput_ReturnsAWrappedError(t *testing.T) {
+	t.Parallel()
+	c, _ := capturingClient(t, http.StatusOK, migratedStack(t))
+
+	_, err := find(t, "stacks.migrate")(context.Background(), c, json.RawMessage(`{"id":"four"}`))
+	if err == nil {
+		t.Fatal("handler error = nil, want a decode failure")
+	}
+	if want := "StackMigrate: parse input"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v, want it wrapped with %q", err, want)
 	}
 }

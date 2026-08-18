@@ -799,7 +799,7 @@ declared `redact<OperationID>` wrapper.
 ## 5. Edition asymmetry: Business Edition is not a superset of Community
 
 **Evidence: vendored spec**, measured across both committed documents during
-the P2 pre-scan, re-verified 2026-08-03.
+the P2 pre-scan, re-verified 2026-08-18.
 
 The client is generated from the Business Edition document alone. That is a
 deliberate decision, but it is only sound because the gaps are known and
@@ -807,12 +807,49 @@ shimmed by hand.
 
 | Measurement | Value |
 |---|---|
-| Operations that exist only in Community Edition | 2 |
+| Community-only `operationId`s, compared as the documents spell them | 4 |
+| Community-only `operationId`s, compared as this project keys them | 3 |
+| Community-only **routes** — served by CE, absent from the EE document | 2 |
 | Shared schemas that differ between editions | 42 |
 | Paths that differ between editions | 118 |
 | Shared schemas that **lose** Community fields under the Business shape | 4 |
 
-The two Community-only operations have **no generated method at all**:
+Three counts rather than one, because the raw set difference over the two
+documents' `operationId` values overstates the asymmetry twice over, and both
+overstatements matter to code that is already written.
+
+A raw set difference returns four: `GetAllKubernetesApplicationsCount`,
+`GetKubernetesConfig`, `WebhookInvoke` and `systemUpgrade`. Two of the four
+are not Community-only operations at all.
+
+**`GetAllKubernetesApplicationsCount` differs from its Business Edition
+counterpart only in the case of its first letter.** Community Edition declares
+`GetAllKubernetesApplicationsCount` and Business Edition declares
+`getAllKubernetesApplicationsCount`, on the same route `GET
+/kubernetes/{id}/applications/count`. Every mechanism in this project compares
+operationIds in the exported Go form oapi-codegen derives (upper-casing the
+first rune — `exportedName` in `cmd/audit_1to1`, the identical transform in
+`cmd/gen_applicability`, and what `toolutil.ActionSpec.OperationID` holds), so
+the two are one name everywhere it counts. The generated client has
+`GetAllKubernetesApplicationsCountWithResponse`, generated from the Business
+Edition document, under exactly the name the Community Edition document uses.
+There is nothing to shim.
+
+**`WebhookInvoke` is one route under two names.** `POST
+/stacks/webhooks/{webhookID}` is served by both editions; Business Edition
+calls the operation `StacksWebhookInvoke` and Community Edition calls it
+`WebhookInvoke`. The catalog is generated from the Business Edition document,
+so the action `stacks.webhook_invoke` carries the Business Edition spelling and
+a Community Edition user reaches the same route through the same action name.
+Only the coverage audit, which keys strictly by operationId, could see a gap
+here — and `cmd/audit_1to1`'s alias table (`alias.go`) is what closes it:
+covering either name covers both, and the entry fails the build if the two ids
+ever stop naming one route. An allow-list entry would have been the wrong
+instrument, since that file is for operations that will never be exposed, and
+this one is.
+
+That leaves **two** genuinely Community-only routes, and these are the ones
+with **no generated method at all**:
 
 | Operation ID | Route |
 |---|---|

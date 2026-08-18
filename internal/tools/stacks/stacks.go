@@ -28,11 +28,19 @@
 // /stacks/webhooks/{webhookID}: both documents declare it, but the Business
 // Edition calls it StacksWebhookInvoke and Community Edition calls it
 // WebhookInvoke. cmd/gen_action_inputs enumerates from the Business Edition
-// document alone and cmd/audit_1to1 keys coverage by operationId, so the
-// Community Edition spelling will read as an uncovered operation the moment
-// this domain lands. That is a wave-level decision (an allow-list entry, a
-// second hand-declared ActionSpec, or an accepted gap recorded in
-// docs/api-divergences.md), not something this file can settle.
+// document alone and cmd/audit_1to1 keyed coverage by operationId, so the
+// Community Edition spelling would have read as an uncovered operation the
+// moment this domain landed. That is settled outside this package and not by
+// anything this domain declares: cmd/audit_1to1 now carries an alias table
+// (alias.go) recording the two operationIds as one route, so covering either
+// covers both. A second ActionSpec was rejected because actioncatalog.Build
+// refuses two specs sharing a Name before it filters by edition, which would
+// have forced a Community user to call stacks.webhook_invoke_ce for the route
+// an EE user calls stacks.webhook_invoke; a coverage allow-list entry was
+// rejected because that file is for operations that will never be exposed as
+// an MCP action, and this one is exposed, under the other name. The action
+// stays edition.EE, because the catalog is still built from the Business
+// Edition document and StacksWebhookInvoke is the name that resolves there.
 //
 // Second, three of the twenty-five can never be generated, and each refuses
 // for its own reason. Two are multipart: StackCreateDockerStandaloneFile
@@ -94,10 +102,10 @@
 // deleted before the scaffolder ran. Its keep-alive block went with it —
 // every wrapper it held live now has a real call site in a generated
 // handler, which is the only reason it existed. handWrittenSpecs is no
-// longer a stub either: two of its three actions are declared, their
+// longer a stub either: all three of its actions are declared, their
 // handlers are in handlers.go, and the keep-alive references that stood in
-// for those call sites are gone. One remains, for redactStackMigrate, and it
-// disappears when that handler lands. No redaction wrapper in this file may
+// for those call sites are gone — the last of them, for redactStackMigrate,
+// left with that handler. No redaction wrapper in this file may
 // ever be held live by a lint directive instead: `unused` is the one linter
 // that reports a redaction wrapper losing its call site, and a lost call
 // site is a silent credential exposure.
@@ -119,30 +127,23 @@ func Specs() []toolutil.ActionSpec {
 // produce — StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
 // StackMigrate. See this file's package doc for why each refuses.
 //
-// Two of the three are declared below, over the handlers in handlers.go and
-// the shared multipart writer in internal/portainer. Those handlers are what
-// call redactStackCreateDockerStandaloneFile and
-// redactStackCreateDockerSwarmFile: both wrappers were declared before a call
-// site existed, held live only by a throwaway reference in this function's
-// earlier stub, and those references are gone now that real call sites do the
-// work. Nothing mechanical would have noticed their absence — golangci-lint's
+// All three are declared below, over the handlers in handlers.go. Those
+// handlers are what call redactStackCreateDockerStandaloneFile,
+// redactStackCreateDockerSwarmFile and redactStackMigrate: every one of the
+// three wrappers was declared before a call site existed, held live only by a
+// throwaway reference in this function's earlier stub, and the last of those
+// references is gone with this commit now that real call sites do the work.
+// Nothing mechanical would have noticed their absence — golangci-lint's
 // unused check would simply have gone quiet — which is why the calls are
 // pinned by tests of their own (handlers_test.go) rather than left to review:
 // an uncalled redaction wrapper is a silent path for a credential to reach a
 // model.
 //
-// StackMigrate is still to come, and the one assignment left below is what
-// holds redactStackMigrate live until its handler lands. Deliberately still
-// no ActionSpec literal and no function named stackMigrate: scanHandOverrides
-// reads both an OperationID literal and a mechanically-named handler function
-// as "already hand-written", so either would make a regeneration skip the
-// operation rather than report the refusal.
-//
-// Both specs below are Mutating and NOT Destructive, matching the four JSON
+// The first two specs are Mutating and NOT Destructive, matching the four JSON
 // creates: each adds a stack at a new identifier and removes nothing. Neither
 // is Idempotent. That agrees with the generator's own POST rule (dangerFlags
 // in cmd/gen_action_inputs treats POST as mutating, not destructive, not
-// idempotent), but nothing here inherits it — these two specs are written by
+// idempotent), but nothing here inherits it — these specs are written by
 // hand, so the flag was decided rather than defaulted, and the decision is the
 // one the four JSON creates already ship: repeating either call does not
 // converge on the state the first produced, it asks Portainer for a second
@@ -150,32 +151,56 @@ func Specs() []toolutil.ActionSpec {
 // "Stack name or webhook id is not unique" — a refusal, not a no-op — and the
 // standalone route does not even declare that. Idempotent reaches clients as
 // IdempotentHint, which invites unattended retry; a create must not.
-// The rulings on Destructive were made by the
-// scaffold task while the whole domain was in view and were carried here by
-// pendingRulings in stacks_test.go, which starts asserting the moment an
-// ActionSpec exists; TestUnit_DangerFlags_MatchThisDomainsRulings now pins all
-// three flags for both, and the pendingRulings entries moved out with this
-// commit.
+//
+// stacks.migrate is the one Destructive spec in this function, and the flag is
+// a hand ruling the verb rule does not produce: POST alone gives Mutating and
+// nothing else. The vendored description is what decides it — the route "will
+// re-create the stack inside the target environment(endpoint) before removing
+// the original stack" — so the original is gone and no field of
+// stacks.stackMigratePayload describes what it held. That is the same
+// criterion stacks.git_redeploy is flagged under.
+//
+// Its Idempotent was decided rather than left at the verb rule's false, which
+// is a distinction this domain has already paid for once: git_redeploy shipped
+// a hand-set Destructive next to a verb-derived Idempotent that contradicted
+// it, and the two had to be reconciled in a later fix. Here they agree, and
+// they agree for a reason worth stating. A repeat of this call is not a no-op
+// converging on the first one's state: the stack is already in the target
+// environment by then, and the route's own vendored responses declare 409 "A
+// stack with the same name is already running on the target environment
+// (endpoint)" — a refusal. Worse, Idempotent reaches a client as
+// IdempotentHint, an invitation to retry unattended, and the one act this
+// route performs that cannot be taken back is removing the original. A
+// destructive action must not carry it.
+//
+// The rulings on Destructive were made by the scaffold task while the whole
+// domain was in view and were carried here by pendingRulings in stacks_test.go,
+// which starts asserting the moment an ActionSpec exists;
+// TestUnit_DangerFlags_MatchThisDomainsRulings now pins all three flags for all
+// three actions, and the last pendingRulings entry moved out with this commit.
 //
 // Declared through toolutil.WithNarrative with the vendored summary and
 // description as the literal Title and Description, exactly like the
 // twenty-two in actions.go. The literals are what a regeneration would write
 // and what cmd/audit_spec_drift compares against; the narrative case is what a
 // model actually reads, and WithNarrative is what records the difference as a
-// deliberate override rather than as drift. Both routes arrive carrying the
-// seven-way-identical description their JSON siblings carry ("Deploy a new
-// stack into a Docker environment specified via the environment identifier."),
-// so without a case they would collide outright —
+// deliberate override rather than as drift. The two create routes arrive
+// carrying the seven-way-identical description their JSON siblings carry
+// ("Deploy a new stack into a Docker environment specified via the environment
+// identifier."), so without a case they would collide outright —
 // TestUnit_Narrative_GivesEveryActionADistinctTitleAndDescription is what says
 // so.
 //
-// Edition CE for both: /stacks/create/standalone/file and
-// /stacks/create/swarm/file are declared in api/specs/ce-2.44.0.json as well
-// as in the Business Edition document, with byte-identical multipart schemas
+// Edition CE for all three: /stacks/create/standalone/file,
+// /stacks/create/swarm/file and /stacks/{id}/migrate are declared in
+// api/specs/ce-2.44.0.json as well as in the Business Edition document. The
+// two create routes' multipart schemas are byte-identical across the two
 // (internal/apiversion/applicability_gen.go carries both routes for both
-// editions, from 2.27.9 with no upper bound).
+// editions, from 2.27.9 with no upper bound); migrate's are not — the Business
+// Edition copy of stacks.stackMigratePayload adds IsHelm and Namespace, which
+// is a difference in shape rather than in whether the route exists, and
+// inputs.go carries it as an `edition:"EE"` tag on those two fields.
 func handWrittenSpecs() []toolutil.ActionSpec {
-	_ = redactStackMigrate
 	return []toolutil.ActionSpec{
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "stacks.create_docker_standalone_file", Domain: "stacks", OperationID: "StackCreateDockerStandaloneFile",
@@ -195,6 +220,16 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 			Handler:     stackCreateDockerSwarmFile,
 			Input:       stackCreateDockerSwarmFileInput{},
 		}, narrative("StackCreateDockerSwarmFile")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "stacks.migrate", Domain: "stacks", OperationID: "StackMigrate",
+			Title:       "Migrate a stack to another environment(endpoint)",
+			Description: "Migrate a stack from an environment(endpoint) to another environment(endpoint). It will re-create the stack inside the target environment(endpoint) before removing the original stack.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Destructive: true,
+			Handler:     stackMigrate,
+			Input:       stackMigrateInput{},
+		}, narrative("StackMigrate")),
 	}
 }
 
@@ -257,15 +292,20 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 // appear — the API-key probe recorded under StackImagesStatus — is quoted as
 // this wave's reconnaissance recorded it and labelled as such.
 //
-// Two of the three operations cmd/gen_action_inputs refused now have their
-// case here too — StackCreateDockerStandaloneFile and
-// StackCreateDockerSwarmFile, whose ActionSpecs handWrittenSpecs declares —
-// written in this same hook rather than as Title and Description literals on
-// those specs, exactly like the twenty-two. StackMigrate still has none: it
-// has no ActionSpec to attach one to until its hand-written handler lands,
-// and a case for an operation with no action would be prose nothing renders
-// and no test can reach. The task that writes that handler adds its case
-// here.
+// All three operations cmd/gen_action_inputs refused now have their case here
+// too — StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
+// StackMigrate, whose ActionSpecs handWrittenSpecs declares — written in this
+// same hook rather than as Title and Description literals on those specs,
+// exactly like the twenty-two.
+//
+// StackMigrate's case carries a third kind of correction the two above do not.
+// Its two endpoint fields are indistinguishable by name to a model reading the
+// schema alone: the vendored Business Edition document gives its body
+// properties no descriptions at all, so endpointId — the migration target, the
+// one required field this action turns on — reaches a model as a bare integer
+// with an example. Naming which of endpointId and endpointIdQuery is the
+// destination is therefore not commentary but the only place that fact is
+// stated to a caller.
 func narrative(operationID string) toolutil.ActionNarrative {
 	switch operationID {
 	case "StackList":
@@ -473,6 +513,18 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"The route declares no security requirement at all — it is public — so that UUID is the only thing protecting it: treat it as a secret and never place it where the answer to another call could carry it. " +
 				"Answers with no body, only a status. " +
 				"Registered as a Business Edition action because the two vendored documents give this one route two different operationIds — StacksWebhookInvoke in Business Edition, WebhookInvoke in Community Edition — and the catalog is built from the Business Edition document; the route itself exists in both.",
+		}
+	case "StackMigrate":
+		return toolutil.ActionNarrative{
+			Title: "Move a stack to another environment, destroying the original",
+			Description: "Re-creates one stack in a different environment and then REMOVES the original: after this call the stack no longer exists where it was, and nothing here records what it held. " +
+				"There is no undo and no reverse action — migrating back is another call to this action, which re-creates and destroys again. " +
+				"id names the stack to move. endpointId is the environment to move it TO and is required. " +
+				"endpointIdQuery is a different field for a different job and is almost never what you want: it repairs a stack created before Portainer 1.18.0 that has no environment recorded against it, by stating which environment it is currently deployed to. Both are called endpointId in the HTTP API — one in the body, one in the query string — and this action publishes the query one under the longer name so the two cannot be confused. Setting endpointIdQuery does not change where the stack is migrated to. " +
+				"name renames the stack as it is re-created, and swarmId names the target Swarm cluster, which a Swarm stack needs because the cluster identifier does not travel with it. " +
+				"Business Edition additionally accepts namespace, the target Kubernetes namespace, and isHelm for a Helm-deployed stack; neither field exists against a Community Edition server. " +
+				"Not marked idempotent, deliberately: a second call is not a no-op. By then the stack is already in the target environment, and Portainer answers 409 \"A stack with the same name is already running on the target environment(endpoint)\" — so this must not be retried unattended. " +
+				"Answers with the migrated stack, git credentials stripped.",
 		}
 	case "EdgeStackWebhookInvoke":
 		return toolutil.ActionNarrative{

@@ -26,6 +26,12 @@ type editionReport struct {
 type auditResult struct {
 	CE, EE         editionReport
 	AllowListCount int
+	// Aliases are the operationId pairs that were treated as one route while
+	// deciding coverage. Carried into the result, and printed by buildReport,
+	// for the reason the allow-list count is: a mechanism that changes what
+	// "covered" means and does not appear in the report is a mechanism nobody
+	// re-reads.
+	Aliases []operationAlias
 }
 
 // HasGap reports whether either edition has an operation with no catalog
@@ -50,7 +56,21 @@ func (r *auditResult) HasGap() bool {
 //     this case (against the version-applicability table), but this is the
 //     only place that checks both specs loaded for this audit at once,
 //     independent of that table.
-func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpec, allowList []allowListEntry) (*auditResult, error) {
+//   - An alias entry that no longer names one route under two names is
+//     forgiving a difference that has changed shape underneath it. See
+//     checkAliases, which is what this delegates that third check to.
+//
+// aliases is what keeps the strict operationId key from going blind on a
+// route the two documents name differently: covering either name covers
+// both. It is a parameter rather than read from operationAliases directly so
+// that a test can drive this with a synthetic table — a test asserting
+// something about the real one only would pass just as happily against an
+// implementation that never consulted a table at all.
+func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpec, allowList []allowListEntry, aliases []operationAlias) (*auditResult, error) {
+	if err := checkAliases(aliases, ce, ee); err != nil {
+		return nil, err
+	}
+
 	inEither := func(id string) bool {
 		_, inCE := ce[id]
 		_, inEE := ee[id]
@@ -78,10 +98,17 @@ func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpe
 		allowListedIDs[entry.OperationID] = true
 	}
 
+	// Expanded only here, at the point coverage is decided: coveredIDs and
+	// allowListedIDs above are still exactly what the catalog and the
+	// allow-list declared, which is what the two cross-checks needed to see.
+	coveredIDs = expandAliases(coveredIDs, aliases)
+	allowListedIDs = expandAliases(allowListedIDs, aliases)
+
 	return &auditResult{
 		CE:             buildEditionReport("Community Edition (CE)", ce, coveredIDs, allowListedIDs),
 		EE:             buildEditionReport("Business Edition (EE)", ee, coveredIDs, allowListedIDs),
 		AllowListCount: len(allowList),
+		Aliases:        aliases,
 	}, nil
 }
 
@@ -132,11 +159,22 @@ func operationLine(op specOperation) string {
 // it turns from an honesty mechanism into a hiding place. Allow-listed
 // operations are named, not just counted, for the same reason exclusion from
 // the failure must never mean exclusion from the report.
+//
+// The aliases are printed by name for that same reason, and it is arguably
+// more important for them: an allow-list entry at least leaves its operation
+// visible in the allow-listed section, while an alias makes one operationId
+// count as covered because another is, and nothing in the coverage numbers
+// alone would ever say so.
 func buildReport(result *auditResult) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Portainer MCP 1:1 API coverage audit")
 	fmt.Fprintln(&b, "=====================================")
-	fmt.Fprintf(&b, "Allow-list entries: %d\n\n", result.AllowListCount)
+	fmt.Fprintf(&b, "Allow-list entries: %d\n", result.AllowListCount)
+	fmt.Fprintf(&b, "Operation aliases:  %d\n", len(result.Aliases))
+	for _, a := range result.Aliases {
+		fmt.Fprintf(&b, "    - %s (EE) = %s (CE)\n", a.Business, a.Community)
+	}
+	fmt.Fprintln(&b)
 
 	for _, r := range []editionReport{result.EE, result.CE} {
 		fmt.Fprintf(&b, "%s\n", r.Name)

@@ -180,3 +180,73 @@ func stackCreateDockerSwarmFileBody(params stackCreateDockerSwarmFileInput) (io.
 	}
 	return body, contentType, nil
 }
+
+// stackMigrate is the hand-written handler for operation StackMigrate (POST
+// /stacks/{id}/migrate).
+//
+// Hand-written for a reason unrelated to the two handlers above: the
+// generated client does declare StackMigrateWithResponse, and this handler
+// calls it. What cmd/gen_action_inputs refused is one line of the handler it
+// would have written.
+//
+// A generated handler distributes an operation's query parameters by
+// unmarshalling the caller's raw input straight into apigen's Params struct
+// — `json.Unmarshal(input, &queryParams)`, as the twenty-two in actions.go
+// all do. That works because a generated Input's wire names and the Params
+// struct's json tags come from the same specification. On this one route
+// they do not agree, and the disagreement is silent:
+// apigen.StackMigrateParams's only field is tagged
+// `json:"endpointId,omitempty"`, and "endpointId" is the name the REQUEST
+// BODY's required EndpointID property publishes here (internal/specnaming
+// gives the body the plain name and qualifies the query parameter as
+// "endpointIdQuery"). An unmarshal of the raw input would therefore read the
+// migration TARGET into the pre-1.18 fixup parameter, and drop whatever the
+// caller actually put in endpointIdQuery. Nothing fails: the request is
+// well-formed, the server answers 200, and the stack migrates using a
+// parameter the caller never set. buildHandlerSpec refuses the operation
+// naming both names rather than emit that.
+//
+// So the query parameter is built by hand, from the one Input field that
+// means it, and that assignment is the whole of this handler's deviation
+// from its generated neighbours. The body is still unmarshalled from the raw
+// input exactly as a generated handler would: the body side of this route
+// was never the problem, "endpointIdQuery" matches no field of
+// StacksStackMigratePayload (Go's case-insensitive fallback folds
+// "endpointid", not "endpointidquery"), and keeping that line generated-shaped
+// means a body property added to inputs.go later reaches the wire without a
+// second edit here.
+//
+// The split is pinned by TestUnit_MigrateRequest_SendsTheQueryFieldAsTheQueryAndTheBodyFieldAsTheBody,
+// which sends two DIFFERENT values and asserts each arrives where it belongs.
+// A test that sent one value for both, or asserted only the status, would
+// pass against a handler that had them exactly backwards.
+//
+// redactStackMigrate is called for the same reason the two handlers above
+// call theirs: POST /stacks/{id}/migrate answers with a PortainereeStack,
+// which reaches GitConfig.Authentication.Password, and nothing mechanical
+// forces a hand-written handler to redact — checkCredentialRedaction only
+// proves the wrapper is declared. TestUnit_MigrateWithGitCredentialInResponse_ReturnsNoCredential
+// is what proves it is called.
+func stackMigrate(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var params stackMigrateInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("StackMigrate: parse input: %w", err)
+	}
+	// By hand, never json.Unmarshal(input, &queryParams): see this function's
+	// doc comment. EndpointIDQuery is a pointer and stays nil when the caller
+	// said nothing, which is what keeps the parameter off the URL entirely
+	// rather than sending endpointId=0.
+	queryParams := apigen.StackMigrateParams{EndpointId: params.EndpointIDQuery}
+	var body apigen.StackMigrateJSONRequestBody
+	if err := json.Unmarshal(input, &body); err != nil {
+		return nil, fmt.Errorf("StackMigrate: parse request body: %w", err)
+	}
+	resp, err := c.API.StackMigrateWithResponse(ctx, params.ID, &queryParams, body)
+	if err != nil {
+		return nil, fmt.Errorf("StackMigrate: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return nil, fmt.Errorf("StackMigrate: %w", err)
+	}
+	return redactStackMigrate(resp.JSON200), nil
+}
