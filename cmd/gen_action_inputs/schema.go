@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -150,7 +151,11 @@ func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 		node.Description = d
 	}
 	if e, ok := raw["enum"].([]any); ok && len(e) > 0 {
-		node.Enum = e
+		cleaned, err := normaliseEnumValues(e)
+		if err != nil {
+			return nil, err
+		}
+		node.Enum = cleaned
 	}
 
 	if propsRaw, ok := raw["properties"].(map[string]any); ok {
@@ -229,6 +234,72 @@ func (r *resolver) resolve(raw map[string]any, depth int) (*schemaNode, error) {
 	}
 
 	return node, nil
+}
+
+// normaliseEnumValues cleans one "enum" keyword's values as resolve reads them
+// out of the vendored document, and is the single place enum values enter this
+// generator: every published enum — the EnumParams() methods rendered into a
+// domain's inputs.go, and through them every surface's JSON Schema — is built
+// from what this function returns.
+//
+// # Why trimming at all
+//
+// Surrounding whitespace on an enum value is never intentional. The one
+// occurrence in either vendored specification proves it by contradicting
+// itself: portaineree.CustomTemplateRelativePathSettings declares
+// PerDeviceConfigsMatchType (and its Group sibling) as an allOf $ref to
+// portainer.PerDevConfigsFilterType, whose own enum is the clean
+// ["file", "dir"], while attaching an inline ["file", " dir"] beside that
+// $ref. resolve's overlay below deliberately lets a sibling keyword beat the
+// $ref it sits next to, so the malformed value is the one that would survive
+// and reach a model as the only spelling the catalog admits. Portainer's
+// server accepts "dir", never " dir". This is the same class of defect as the
+// leading space on a content type recorded in docs/api-divergences.md §6.1,
+// in a different keyword; §6.6 records this one.
+//
+// # The two cases that are not a plain trim
+//
+// An empty string is a legitimate enum value in both vendored documents and is
+// preserved untouched: portaineree.EndpointOperationStatus spells its "done"
+// state as "" (its own x-enum-varnames names that member
+// EndpointOperationStatusDone), and portainer.UserThemeSettings.color offers
+// "" for "no theme chosen". Only a value that is non-empty in the document and
+// becomes empty once trimmed — " ", "\t" — is refused, because there is no
+// defensible reading of what the document meant and emitting "" instead would
+// silently invent the one value that already means something else in this very
+// specification. Refusing propagates out of resolve as an ordinary resolution
+// error, so the operation carrying it is reported and skipped rather than
+// generated wrong. Neither vendored document contains such a value today.
+//
+// A value that collides with an earlier one once trimmed is dropped,
+// preserving first-occurrence order, rather than published twice: an enum
+// listing the same value twice is what cmd/fetch_spec's own deduplicateEnums
+// already repairs for values that were exact duplicates as published, and a
+// pair that becomes identical only after trimming is the same defect one
+// stray space later. Dropping is safe because the surviving copy admits
+// exactly the values the pair did.
+func normaliseEnumValues(values []any) ([]any, error) {
+	cleaned := make([]any, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for i, value := range values {
+		if s, ok := value.(string); ok {
+			trimmed := strings.TrimSpace(s)
+			if trimmed == "" && s != "" {
+				return nil, fmt.Errorf("enum value %d is %q, which is only whitespace: no value can be recovered from it", i, s)
+			}
+			value = trimmed
+		}
+		key, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("enum value %d is not representable as JSON: %w", i, err)
+		}
+		if seen[string(key)] {
+			continue
+		}
+		seen[string(key)] = true
+		cleaned = append(cleaned, value)
+	}
+	return cleaned, nil
 }
 
 // lookupSchema resolves a "#/components/schemas/Name" reference.
