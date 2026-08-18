@@ -272,6 +272,34 @@ func buildHandlerSpec(domain string, op operation, fields []fieldSpec, pathOrder
 		byJSON[f.JSONName] = f
 	}
 
+	// A query parameter internal/specnaming had to rename cannot be
+	// distributed by the JSON round trip this file's package doc describes.
+	// The round trip works because both generators agree on the *tag*: this
+	// one publishes a query parameter under the specification's own name, and
+	// so does oapi-codegen in apigen.<Operation>Params. Disambiguation breaks
+	// exactly that agreement, and not harmlessly — the body property that
+	// took the plain name is still in the same raw input being unmarshalled
+	// into the query struct, so the generated handler would send the *body's*
+	// value as the query parameter and silently drop the caller's real one.
+	// That is a wrong request that compiles, runs and returns a plausible
+	// answer, which is the one outcome this generator refuses to produce.
+	//
+	// Only query fields: a path field is read off the Input struct by Go
+	// field name and passed positionally, never matched by tag, and a body
+	// property is never renamed by the rule at all. Refused here rather than
+	// in assembleOperationFields because the Input shape itself is perfectly
+	// describable — internal/specdiff must be able to shape this operation,
+	// and the drift audit must be able to compare a hand-written Input
+	// against it. It is only the mechanical *handler* that cannot be trusted.
+	for _, f := range fields {
+		if f.Origin != originQuery || f.WireName == "" || f.WireName == f.JSONName {
+			continue
+		}
+		return handlerSpec{}, fmt.Errorf(
+			"%s: query parameter %q is published as %q because a request body property already contributes its own name (see internal/specnaming); the generated handler unmarshals the caller's raw input straight into apigen.%sParams, which is tagged %q, so it would read the body property's value into this query parameter and drop the caller's own — write this handler by hand",
+			op.OperationID, f.WireName, f.JSONName, op.OperationID, f.WireName)
+	}
+
 	pathArgs := make([]pathArg, 0, len(pathOrder))
 	for _, name := range pathOrder {
 		f, ok := byJSON[name]

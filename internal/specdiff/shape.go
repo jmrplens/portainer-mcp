@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -431,7 +432,7 @@ func synthesizeMapBodyField(op SpecOperation) FieldShape {
 		description = d
 	}
 	return FieldShape{
-		JSONName:    "namespace",
+		JSONName:    mapBodyFieldName,
 		Type:        "object",
 		Required:    required,
 		Description: description,
@@ -439,25 +440,145 @@ func synthesizeMapBodyField(op SpecOperation) FieldShape {
 	}
 }
 
+// mapBodyFieldName is the single wire name a map-shaped request body
+// contributes (see synthesizeMapBodyField for why "namespace"). Named as a
+// constant rather than written twice because occupiedBodyNames must report
+// the identical name to internal/specnaming: a body that occupies a name the
+// disambiguation rule does not know about is exactly the silent shadow the
+// rule exists to prevent.
+const mapBodyFieldName = "namespace"
+
+// bodyWireName pairs one top-level request-body property's raw
+// specification name with the wire name it renders to.
+type bodyWireName struct {
+	raw  string
+	json string
+}
+
+// bodyProperties renders every top-level property of a resolved request body
+// to its wire name, in raw-name order (sorted, so the fields this function
+// feeds are produced deterministically regardless of Go map iteration order).
+//
+// Rendered once, here, and consumed both by ShapeFromSpec's own property
+// loop and by occupiedBodyNames below: computing a property's wire name in
+// one place for the collision rule and again in another for the field it
+// produces is the "one fact, derived twice" defect this whole package exists
+// to catch, and it would be particularly perverse to commit it inside the
+// function that catches it.
+func bodyProperties(resolved resolvedNode) []bodyWireName {
+	rawNames := make([]string, 0, len(resolved.Properties))
+	for name := range resolved.Properties {
+		rawNames = append(rawNames, name)
+	}
+	sort.Strings(rawNames)
+
+	out := make([]bodyWireName, 0, len(rawNames))
+	for _, raw := range rawNames {
+		// A body property's own name is rendered through bodyJSONTag, the
+		// identical transform cmd/gen_action_inputs used when it generated
+		// this operation's Input struct: see naming.go's doc comment for
+		// why comparing the raw spec name against ShapeFromCatalog's
+		// JSONName would make every body field incomparable.
+		out = append(out, bodyWireName{raw: raw, json: bodyJSONTag(splitWords(raw))})
+	}
+	return out
+}
+
+// occupiedBodyNames is every wire name this operation's request body takes,
+// which is what internal/specnaming needs to decide whether a parameter's
+// own name collides with one. A map-shaped body occupies one name too
+// (mapBodyFieldName), even though it has no named properties at all.
+func occupiedBodyNames(bodySchema map[string]any, resolved resolvedNode, props []bodyWireName) []string {
+	if bodySchema == nil {
+		return nil
+	}
+	names := make([]string, 0, len(props)+1)
+	for _, p := range props {
+		names = append(names, p.json)
+	}
+	if len(resolved.Properties) == 0 && resolved.HasMapValue {
+		names = append(names, mapBodyFieldName)
+	}
+	return names
+}
+
+// specParameters projects op's raw parameter list onto the pairs
+// internal/specnaming's rule reads: the wire name each contributes and the
+// location it comes from. A parameter whose location this function cannot
+// support is still projected verbatim rather than filtered out — the
+// parameter loop below is what refuses it, with the message it has always
+// used, and pre-filtering here would mean the rule silently disambiguated
+// against an incomplete set of contributors.
+func specParameters(op SpecOperation) []specnaming.Parameter {
+	out := make([]specnaming.Parameter, 0, len(op.Parameters))
+	for _, param := range op.Parameters {
+		name, _ := param["name"].(string)
+		in, _ := param["in"].(string)
+		out = append(out, specnaming.Parameter{Name: name, Origin: in})
+	}
+	return out
+}
+
 // ShapeFromSpec flattens op's path parameters, query parameters and
 // top-level request-body properties into the single OperationShape both
 // audit consumers compare — mirroring cmd/gen_action_inputs's
 // assembleOperationFields's flattening exactly (same three sources, same
-// "path parameters are always required" rule, same refusal when one wire
-// name is contributed by more than one source), because a divergence between
-// how this package flattens an operation and how the generator does would
-// reintroduce the exact defect this package exists to catch: one fact,
-// derived twice.
+// "path parameters are always required" rule, same disambiguation of a wire
+// name two sources both contribute — internal/specnaming, imported by both —
+// and the same refusal for the collisions that rule deliberately does not
+// resolve), because a divergence between how this package flattens an
+// operation and how the generator does would reintroduce the exact defect
+// this package exists to catch: one fact, derived twice.
 func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 	var fields []FieldShape
 	origins := make(map[string]string)
 
-	for _, param := range op.Parameters {
-		name, _ := param["name"].(string)
+	// The request body is resolved before the parameter loop rather than
+	// after it, because internal/specnaming's disambiguation rule cannot
+	// decide whether a parameter's own name collides with the body until it
+	// knows every name the body contributes. Only the resolution moved: each
+	// refusal the body block raises still fires exactly where it always did,
+	// below, and the parameter loop still reports its own refusals first for
+	// every operation whose body this document can resolve at all.
+	bodySchema, err := requestBodySchemaNode(op)
+	if err != nil {
+		return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: %w", op.OperationID, err)
+	}
+	var bodyResolved resolvedNode
+	if bodySchema != nil {
+		bodyResolved, err = resolveSchema(op.Schemas, bodySchema, map[string]int{}, 0)
+		if err != nil {
+			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: %w", op.OperationID, err)
+		}
+	}
+	bodyProps := bodyProperties(bodyResolved)
+
+	// One wire name contributed by both a parameter and a body property is
+	// disambiguated by the single rule cmd/gen_action_inputs applies too
+	// (internal/specnaming): the body keeps the plain name, the parameter
+	// carries its origin. Both sides must produce the identical name or the
+	// drift audit reports one field added and another removed on an
+	// operation nobody touched — see
+	// cmd/gen_action_inputs's TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation,
+	// which runs both derivations over every operation in both vendored
+	// specifications for exactly that reason.
+	paramNames, err := specnaming.ResolveParameters(specParameters(op), occupiedBodyNames(bodySchema, bodyResolved, bodyProps))
+	if err != nil {
+		return OperationShape{}, fmt.Errorf("shape from spec for %s: %w", op.OperationID, err)
+	}
+
+	for i, param := range op.Parameters {
+		rawName, _ := param["name"].(string)
 		in, _ := param["in"].(string)
-		if name == "" {
+		if rawName == "" {
 			return OperationShape{}, fmt.Errorf("shape from spec for %s: parameter with no name (possibly an unresolved components.parameters $ref)", op.OperationID)
 		}
+		// name is the wire name this parameter actually publishes: its own,
+		// unless the request body already took it (see paramNames above).
+		// Every refusal below still names rawName, the identifier the
+		// specification itself declares and the only one a reader can grep
+		// the document for.
+		name := paramNames[i]
 
 		schemaRaw, _ := param["schema"].(map[string]any)
 		if schemaRaw == nil {
@@ -465,7 +586,7 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 		}
 		resolved, err := resolveSchema(op.Schemas, schemaRaw, map[string]int{}, 0)
 		if err != nil {
-			return OperationShape{}, fmt.Errorf("shape from spec for %s: parameter %q: %w", op.OperationID, name, err)
+			return OperationShape{}, fmt.Errorf("shape from spec for %s: parameter %q: %w", op.OperationID, rawName, err)
 		}
 
 		var origin string
@@ -477,7 +598,7 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 			origin = "query"
 			required, _ = param["required"].(bool)
 		default:
-			return OperationShape{}, fmt.Errorf("shape from spec for %s: parameter %q: location %q is not supported (only path and query parameters flatten into a field)", op.OperationID, name, in)
+			return OperationShape{}, fmt.Errorf("shape from spec for %s: parameter %q: location %q is not supported (only path and query parameters flatten into a field)", op.OperationID, rawName, in)
 		}
 
 		description := resolved.Description
@@ -500,15 +621,8 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 		})
 	}
 
-	bodySchema, err := requestBodySchemaNode(op)
-	if err != nil {
-		return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: %w", op.OperationID, err)
-	}
 	if bodySchema != nil {
-		resolved, err := resolveSchema(op.Schemas, bodySchema, map[string]int{}, 0)
-		if err != nil {
-			return OperationShape{}, fmt.Errorf("shape from spec for %s: request body: %w", op.OperationID, err)
-		}
+		resolved := bodyResolved
 
 		// Mirrors cmd/gen_action_inputs/fields.go's identical refusal exactly
 		// (same message, same condition): a non-object top-level body has no
@@ -566,6 +680,12 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 		}
 		if len(resolved.Properties) == 0 && resolved.HasMapValue {
 			mapField := synthesizeMapBodyField(op)
+			// occupiedBodyNames already reported this name to
+			// internal/specnaming, so a parameter that wanted it was
+			// qualified before the loop above ran and this cannot fire for a
+			// parameter/body collision any more. Kept as the net for the one
+			// thing the rule does not police: a body that somehow occupies
+			// this name twice.
 			if existing, dup := origins[mapField.JSONName]; dup {
 				return OperationShape{}, fmt.Errorf("shape from spec for %s: %q is contributed by both %s and body", op.OperationID, mapField.JSONName, existing)
 			}
@@ -578,25 +698,13 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 			// path every other operation does, not a second, parallel one.
 		}
 
-		propNames := make([]string, 0, len(resolved.Properties))
-		for name := range resolved.Properties {
-			propNames = append(propNames, name)
-		}
-		sort.Strings(propNames)
-
-		wireNames := make(map[string]string, len(propNames)) // jsonName -> raw property name, for the collision check below
-		for _, rawName := range propNames {
+		wireNames := make(map[string]string, len(bodyProps)) // jsonName -> raw property name, for the collision check below
+		for _, prop := range bodyProps {
+			rawName, jsonName := prop.raw, prop.json
 			propResolved, err := resolveSchema(op.Schemas, resolved.Properties[rawName], map[string]int{}, 0)
 			if err != nil {
 				return OperationShape{}, fmt.Errorf("shape from spec for %s: request body property %q: %w", op.OperationID, rawName, err)
 			}
-
-			// A body property's own name is rendered through bodyJSONTag, the
-			// identical transform cmd/gen_action_inputs used when it generated
-			// this operation's Input struct: see naming.go's doc comment for
-			// why comparing the raw spec name against ShapeFromCatalog's
-			// JSONName would make every body field incomparable.
-			jsonName := bodyJSONTag(splitWords(rawName))
 
 			// bodyJSONTag is not injective (see naming.go): two distinct raw
 			// property names can render to the same JSON tag. The generator
@@ -609,6 +717,14 @@ func ShapeFromSpec(op SpecOperation) (OperationShape, error) {
 			}
 			wireNames[jsonName] = rawName
 
+			// Cross-origin collisions are disambiguated before the parameter
+			// loop runs (internal/specnaming: the body keeps the plain name,
+			// the parameter carries its origin), so reaching this means a
+			// name the body contributes was taken by a parameter the rule
+			// did not qualify — which it only declines to do when it cannot,
+			// and it refuses outright then. Kept as a net rather than
+			// deleted: it costs one map lookup, and the alternative to a net
+			// that never fires is a silent shadow if one ever could.
 			if existing, dup := origins[jsonName]; dup {
 				return OperationShape{}, fmt.Errorf("shape from spec for %s: %q is contributed by both %s and body", op.OperationID, jsonName, existing)
 			}

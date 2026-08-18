@@ -722,3 +722,173 @@ func TestUnit_ShapeFromCatalogAndShapeFromSpec_AgreeStructurallyForPilotDomain(t
 		})
 	}
 }
+
+// TestUnit_ShapeFromSpec_StackMigrate_DisambiguatesTheQueryParameterFromTheBodyProperty
+// is the operation this project's disambiguation rule was written for, shaped
+// against both real vendored documents rather than a fixture: POST
+// /stacks/{id}/migrate declares an optional query parameter "endpointId" and
+// a required body property "EndpointID", which bodyJSONTag renders to the
+// same "endpointId". ShapeFromSpec used to refuse the whole operation, and
+// because cmd/audit_spec_drift turns that refusal into a returned error
+// before any FieldChange exists, no api/spec-drift-allowlist.yaml entry could
+// excuse it and the audit failed for every domain in the catalog, not only
+// for stacks.
+//
+// The specific names are asserted, not merely the absence of an error: the
+// whole point of the rule is that both this package and cmd/gen_action_inputs
+// produce the *same* names, and a test that only checked "no error" would
+// pass just as happily against a rule that qualified the body instead of the
+// parameter — which would put the catalog and the specification permanently
+// one added and one removed field apart.
+func TestUnit_ShapeFromSpec_StackMigrate_DisambiguatesTheQueryParameterFromTheBodyProperty(t *testing.T) {
+	t.Parallel()
+	for _, specPath := range []string{"../../api/specs/ee-2.44.0.json", "../../api/specs/ce-2.44.0.json"} {
+		t.Run(specPath, func(t *testing.T) {
+			t.Parallel()
+			data, err := os.ReadFile(specPath)
+			if err != nil {
+				t.Fatalf("read vendored spec: %v", err)
+			}
+			op, err := LoadSpecOperation(data, "StackMigrate")
+			if err != nil {
+				t.Fatalf("LoadSpecOperation(StackMigrate) error = %v", err)
+			}
+			shape, err := ShapeFromSpec(op)
+			if err != nil {
+				t.Fatalf("ShapeFromSpec(StackMigrate) error = %v, want the collision disambiguated, not refused", err)
+			}
+
+			byName := make(map[string]FieldShape, len(shape.Fields))
+			for _, f := range shape.Fields {
+				byName[f.JSONName] = f
+			}
+
+			body, ok := byName["endpointId"]
+			if !ok {
+				t.Fatalf("no \"endpointId\" field in %+v; the body property must keep the plain name", shape.Fields)
+			}
+			if body.Origin != "body" {
+				t.Errorf(`Fields["endpointId"].Origin = %q, want "body": the required body property that names the migration target keeps the plain name, not the optional pre-1.18 query parameter`, body.Origin)
+			}
+			if !body.Required || body.Type != "integer" {
+				t.Errorf(`Fields["endpointId"] = %+v, want {Type: integer, Required: true}`, body)
+			}
+
+			query, ok := byName["endpointIdQuery"]
+			if !ok {
+				t.Fatalf("no \"endpointIdQuery\" field in %+v; the query parameter must survive under its origin-qualified name, not be dropped", shape.Fields)
+			}
+			if query.Origin != "query" {
+				t.Errorf(`Fields["endpointIdQuery"].Origin = %q, want "query"`, query.Origin)
+			}
+			if query.Required {
+				t.Error(`Fields["endpointIdQuery"].Required = true, want false: the specification declares this parameter optional`)
+			}
+			if !strings.Contains(query.Description, "1.18") {
+				t.Errorf(`Fields["endpointIdQuery"].Description = %q, want the parameter's own description (the pre-1.18 fixup), not the body property's`, query.Description)
+			}
+
+			// The path parameter, and every body property that never
+			// collided, are untouched: a rule that renamed more than it had
+			// to would drift every one of them against the catalog.
+			for _, want := range []string{"id", "name", "swarmId"} {
+				if _, ok := byName[want]; !ok {
+					t.Errorf("no %q field in %+v; disambiguation renamed a field that never collided", want, shape.Fields)
+				}
+			}
+		})
+	}
+}
+
+// TestUnit_ShapeFromSpec_TwoBodyPropertiesRenderingToOneTag_StillRefuses is
+// the half of the collision refusal that must survive the disambiguation
+// rule. bodyJSONTag is not injective, so two distinct specification property
+// names can render to one JSON tag; unlike a parameter colliding with a body
+// property, there is no principled winner between them and no origin to
+// qualify either by, so this stays a refusal. Synthetic rather than
+// spec-derived because neither vendored document contains this shape today —
+// which is exactly why nothing would notice if the refusal quietly stopped
+// firing.
+func TestUnit_ShapeFromSpec_TwoBodyPropertiesRenderingToOneTag_StillRefuses(t *testing.T) {
+	t.Parallel()
+	doc := []byte(`{
+		"paths": {
+			"/x": {
+				"post": {
+					"operationId": "SyntheticCollide",
+					"requestBody": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"EndpointID": {"type": "integer"},
+										"endpointId": {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"components": {"schemas": {}}
+	}`)
+	op, err := LoadSpecOperation(doc, "SyntheticCollide")
+	if err != nil {
+		t.Fatalf("LoadSpecOperation error = %v", err)
+	}
+	shape, err := ShapeFromSpec(op)
+	if err == nil {
+		t.Fatalf("ShapeFromSpec() error = nil, shape = %+v, want a refusal: two body properties rendering to one JSON tag have no principled winner", shape)
+	}
+	if !strings.Contains(err.Error(), "both render as JSON field") {
+		t.Errorf("ShapeFromSpec() error = %q, want the body-property collision refusal, not some other failure", err)
+	}
+}
+
+// TestUnit_ShapeFromSpec_QualifiedNameAlreadyTaken_Refuses covers the one
+// cross-origin collision the disambiguation rule declines to resolve: the
+// name it would rename the parameter to is already contributed by a third
+// field, so renaming into it would shadow that field instead — the same
+// defect one step removed.
+func TestUnit_ShapeFromSpec_QualifiedNameAlreadyTaken_Refuses(t *testing.T) {
+	t.Parallel()
+	doc := []byte(`{
+		"paths": {
+			"/x/{namespace}": {
+				"post": {
+					"operationId": "SyntheticTaken",
+					"parameters": [
+						{"name": "namespace", "in": "path", "required": true, "schema": {"type": "string"}}
+					],
+					"requestBody": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"Namespace": {"type": "string"},
+										"NamespacePath": {"type": "string"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"components": {"schemas": {}}
+	}`)
+	op, err := LoadSpecOperation(doc, "SyntheticTaken")
+	if err != nil {
+		t.Fatalf("LoadSpecOperation error = %v", err)
+	}
+	shape, err := ShapeFromSpec(op)
+	if err == nil {
+		t.Fatalf("ShapeFromSpec() error = nil, shape = %+v, want a refusal: \"namespacePath\" is already a body property", shape)
+	}
+	if !strings.Contains(err.Error(), "already contributed by another field") {
+		t.Errorf("ShapeFromSpec() error = %q, want the refusal internal/specnaming raises when a qualified name is taken", err)
+	}
+}

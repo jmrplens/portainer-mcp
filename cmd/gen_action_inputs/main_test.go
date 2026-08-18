@@ -237,20 +237,29 @@ func TestUnit_DomainTags_CoversEveryTagInTheVendoredSpec(t *testing.T) {
 
 // TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainStillWritten
 // is Task 1's own acceptance test, extended by P3.3 task 3 to also cover the
-// per-*operation* (not per-domain) granularity that task introduced: "stacks"
-// (freshly created, zero hand-written files — exactly what a domain looks
-// like the moment before its first scaffold) has two operations that refuse
-// for two genuinely different reasons in the real, unmodified vendored spec,
-// with no fixture mutation needed to produce either:
+// per-*operation* (not per-domain) granularity that task introduced:
+// "stacks" has two operations that refuse for two genuinely different
+// reasons in the real, unmodified vendored spec:
 //
-//   - StackMigrate refuses inside assembleOperationFields: its query
-//     parameter "endpointId" and its body's "EndpointID" property both render
-//     the JSON name "endpointId" (a field collision) — the exact real case
-//     main.go's own doc comment names, and the reason a hand-written override
-//     cannot suppress it (assembleOperationFields runs before overrideReason).
+//   - StackMigrate refuses inside buildHandlerSpec: its query parameter
+//     "endpointId" and its body's "EndpointID" property both render the JSON
+//     name "endpointId", so internal/specnaming publishes the parameter as
+//     "endpointIdQuery" — a name the generated client's own
+//     apigen.StackMigrateParams is not tagged with, which makes the
+//     mechanical handler's JSON round trip unable to distribute it (see
+//     buildHandlerSpec's refusal for what it would otherwise send).
 //   - StackList refuses inside checkCredentialRedaction: its success response
-//     nests a GitConfig.Authentication.Password, and this freshly created
-//     domain has declared no redactStackList wrapper yet.
+//     nests a GitConfig.Authentication.Password, and this domain has declared
+//     no redactStackList wrapper.
+//
+// The fixture declares exactly one hand-written function, redactStackMigrate,
+// for the sole purpose of getting StackMigrate *past* the credential check so
+// that the two refusals stay two different kinds. Before internal/specnaming,
+// StackMigrate refused earlier, in assembleOperationFields, and never reached
+// the credential check at all; now it does, and without that stub both of
+// this test'"'"'s refusals would be credential-shaped and the "two different
+// reasons" premise would be quietly false while every assertion still
+// passed.
 //
 // The trap this guards against (this project's own standing warning, caught
 // by seven implementers in a row before it reached this one): a test with
@@ -284,6 +293,13 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 	if err := os.MkdirAll(filepath.Join(toolsDir, "stacks"), 0o750); err != nil {
 		t.Fatalf("mkdir stacks: %v", err)
 	}
+	// See this test'"'"'s doc comment: the one hand-written declaration this
+	// domain gets, so StackMigrate reaches buildHandlerSpec instead of
+	// stopping at the credential check the way its 14 siblings do.
+	handWritten := "package stacks\n\nfunc redactStackMigrate(v any) any { return v }\n"
+	if err := os.WriteFile(filepath.Join(toolsDir, "stacks", "stacks.go"), []byte(handWritten), 0o600); err != nil {
+		t.Fatalf("write stacks/stacks.go: %v", err)
+	}
 	freshDomainDir(t, toolsDir, "tags")
 
 	var runErr error
@@ -298,8 +314,9 @@ func TestUnit_Run_TwoDifferentRefusalsInOneDomain_BothReported_AndLaterDomainSti
 		t.Errorf("error = %q, want the deferred-refusal summary", runErr)
 	}
 
-	if !strings.Contains(stderr, "StackMigrate") || !strings.Contains(stderr, "contributed by both") {
-		t.Errorf("stderr report does not name StackMigrate's field collision (\"endpointId\" contributed by both query parameter and body):\n%s", stderr)
+	wantStackMigrateRefusal := "domain stacks: POST /stacks/{id}/migrate (operationId StackMigrate): StackMigrate: query parameter \"endpointId\" is published as \"endpointIdQuery\""
+	if !strings.Contains(stderr, wantStackMigrateRefusal) {
+		t.Errorf("stderr report does not contain StackMigrate's refusal line %q:\n%s", wantStackMigrateRefusal, stderr)
 	}
 	// Anchored on the whole refusal line, not two independent substrings: a
 	// bare `strings.Contains(stderr, "StackList")` also matches

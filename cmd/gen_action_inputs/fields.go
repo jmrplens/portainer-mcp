@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jmrplens/portainer-mcp/internal/edition"
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 )
 
 // structSpec is one Go struct this generator will emit: either the flat
@@ -22,10 +23,18 @@ type structSpec struct {
 // Origin values identify which part of an operation contributed a
 // top-level field: see fieldSpec.Origin's doc comment for why this exists.
 const (
-	originPath  = "path"
-	originQuery = "query"
-	originBody  = "body"
+	originPath  = specnaming.OriginPath
+	originQuery = specnaming.OriginQuery
+	originBody  = specnaming.OriginBody
 )
+
+// mapBodyFieldName is the one wire name a map-shaped request body
+// contributes — see assembleOperationFields' own map-body branch for why
+// "namespace". Named as a constant rather than written twice because
+// bodyWireNames must report the identical name to internal/specnaming: a
+// name the body occupies but the disambiguation rule does not know about is
+// exactly the silent shadow that rule exists to prevent.
+const mapBodyFieldName = "namespace"
 
 // fieldSpec is one struct field.
 type fieldSpec struct {
@@ -49,6 +58,24 @@ type fieldSpec struct {
 	// forwards a nested object whole, as one value, to whichever bucket its
 	// parent field belongs to.
 	Origin string
+	// WireName is the name the specification itself declares for a top-level
+	// path or query parameter, which is also the name the generated client's
+	// own query-parameters struct tags it with. Equal to JSONName for every
+	// operation but the handful where a request-body property already took
+	// that name and internal/specnaming qualified this parameter by its
+	// origin instead ("endpointId" -> "endpointIdQuery" for StackMigrate).
+	// Left "" for a body field and for a nested struct's own fields, whose
+	// wire name is bodyJSONTag's rendering of the specification's name and
+	// so is never expected to be equal to it.
+	//
+	// Carried so buildHandlerSpec can see that a query parameter was
+	// renamed. That matters because the generated handler distributes query
+	// parameters by unmarshalling the caller's raw input straight into
+	// apigen.<Operation>Params, which matches on this name and not on
+	// JSONName — see handler.go's refusal, and its package doc for why the
+	// whole distribution is a JSON round trip rather than field-by-field
+	// assignment.
+	WireName string
 	// Enum is non-nil when the spec constrains this field to a fixed set of
 	// values. google/jsonschema-go v0.4.3's reflector has no struct-tag
 	// syntax for "enum" — see internal/toolutil/schema.go's EnumParams for
@@ -510,6 +537,49 @@ type mergeSource struct {
 	field  fieldSpec
 }
 
+// operationParameters projects op's raw parameter list onto the pairs
+// internal/specnaming's disambiguation rule reads: the wire name each
+// parameter contributes and the location it comes from. A parameter whose
+// location this generator does not support is projected verbatim rather than
+// filtered out — assembleOperationFields' own loop is what refuses it, with
+// the message it has always used, and pre-filtering here would mean the rule
+// disambiguated against an incomplete set of contributors.
+func operationParameters(op operation) []specnaming.Parameter {
+	out := make([]specnaming.Parameter, 0, len(op.Parameters))
+	for _, param := range op.Parameters {
+		name, _ := param["name"].(string)
+		in, _ := param["in"].(string)
+		out = append(out, specnaming.Parameter{Name: name, Origin: in})
+	}
+	return out
+}
+
+// bodyWireNames returns every top-level wire name a resolved request body
+// node contributes, which is what internal/specnaming needs in order to
+// decide whether a parameter's own name collides with one. It mirrors
+// assembleOperationFields' own body branches exactly, in the same
+// precedence: named properties first (rendered by the identical
+// bodyJSONTag(splitWords(...)) call assembleFields makes for the same
+// property — one function called twice with one input, not a second
+// implementation of the rule), then a map-shaped body's single synthesised
+// name, then nothing for a body neither branch can flatten.
+func bodyWireNames(node *schemaNode) []string {
+	switch {
+	case node == nil:
+		return nil
+	case len(node.Properties) > 0:
+		out := make([]string, 0, len(node.Properties))
+		for _, p := range node.Properties {
+			out = append(out, bodyJSONTag(splitWords(p.Name)))
+		}
+		return out
+	case node.MapValue != nil:
+		return []string{mapBodyFieldName}
+	default:
+		return nil
+	}
+}
+
 // assembleOperationFields merges an operation's path parameters, query
 // parameters and request body into the single flat field list an Input
 // struct needs — the "generate for the model, not for the wire" merge this
@@ -522,9 +592,21 @@ type mergeSource struct {
 // a path/query parameter whose location is neither ("in": "header" or
 // "cookie", which this generator does not support merging into a body-shaped
 // struct), and a wire name contributed by more than one of
-// {path, query, body} — the collision the brief calls out explicitly, since
+// {path, query, body} that internal/specnaming's rule cannot disambiguate —
 // silently letting the later source shadow the earlier one would mean a
 // caller's value for one silently governs both.
+//
+// The cross-origin case of that collision is disambiguated rather than
+// refused (internal/specnaming: the body keeps the plain name, the parameter
+// carries its origin), because refusing it is not free. internal/specdiff's
+// ShapeFromSpec applies the identical rule, and cmd/audit_spec_drift turns
+// its refusal into a returned error before any FieldChange exists, so no
+// api/spec-drift-allowlist.yaml entry can excuse one — a single unshapeable
+// operation fails the drift gate for every domain in the catalog. What is
+// still refused, here and in ShapeFromSpec, is a collision with no
+// principled winner: two *body* properties rendering to one JSON tag
+// (assembleFields, above), and a qualified name that some third contributor
+// already holds (internal/specnaming's own refusal).
 //
 // It returns the operation's flat fields (sorted by
 // JSON name, for deterministic struct rendering — unchanged from before this
@@ -556,10 +638,41 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		return nil
 	}
 
-	for _, param := range op.Parameters {
-		name, _ := param["name"].(string)
+	// The request body is resolved before the parameter loop rather than
+	// after it, because internal/specnaming's disambiguation rule cannot
+	// decide whether a parameter's own name collides with the body until it
+	// knows every name the body contributes. Only the resolution moved: the
+	// body block below still raises each of its own refusals exactly where it
+	// always did.
+	bodySchema, err := doc.requestBodySchema(op.RequestBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("request body: %w", err)
+	}
+	var bodyNode *schemaNode
+	if bodySchema != nil {
+		bodyNode, err = res.resolve(bodySchema, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("request body: %w", err)
+		}
+	}
+
+	// One wire name contributed by both a parameter and a body property is
+	// disambiguated by the single rule internal/specdiff applies too
+	// (internal/specnaming): the body keeps the plain name, the parameter
+	// carries its origin. Both sides must produce the identical name, or the
+	// drift audit reports one field added and another removed on an operation
+	// nobody touched — see TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation,
+	// which runs both derivations over every operation in both vendored
+	// specifications for exactly that reason.
+	paramNames, err := specnaming.ResolveParameters(operationParameters(op), bodyWireNames(bodyNode))
+	if err != nil {
+		return nil, nil, fmt.Errorf("merging parameters with the request body: %w", err)
+	}
+
+	for i, param := range op.Parameters {
+		rawName, _ := param["name"].(string)
 		in, _ := param["in"].(string)
-		if name == "" {
+		if rawName == "" {
 			// A components.parameters $ref parameter object carries no "name"
 			// of its own — the name lives on the referenced component, which
 			// this generator does not resolve. Silently skipping it (as this
@@ -578,7 +691,7 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		}
 		node, err := res.resolve(schemaRaw, 0)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parameter %q: %w", name, err)
+			return nil, nil, fmt.Errorf("parameter %q: %w", rawName, err)
 		}
 		if d, ok := param["description"].(string); ok {
 			node.Description = d
@@ -594,12 +707,20 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			origin, fieldOrigin = "query parameter", originQuery
 			required, _ = param["required"].(bool)
 		default:
-			return nil, nil, fmt.Errorf("parameter %q: location %q is not supported; only path and query parameters merge into a flat Input", name, in)
+			return nil, nil, fmt.Errorf("parameter %q: location %q is not supported; only path and query parameters merge into a flat Input", rawName, in)
 		}
 
-		goType, err := typeOf(node, required, structPrefix+goFieldName(splitWords(name)), structs)
+		// name is the wire name this parameter actually publishes: its own,
+		// unless the request body already took it (paramNames above). Every
+		// refusal in this loop still names rawName, the identifier the
+		// specification declares and the only one a reader can grep the
+		// document for, and so do pathParamGoType/pathParamTakesMinimum
+		// below, whose tables are keyed by what the specification says.
+		name := paramNames[i]
+		goName := goFieldName(splitWords(name))
+		goType, err := typeOf(node, required, structPrefix+goName, structs)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s %q: %w", origin, name, err)
+			return nil, nil, fmt.Errorf("%s %q: %w", origin, rawName, err)
 		}
 		if in == "path" {
 			// pathParamTypeOverrides only ever applies to the four opaque
@@ -609,21 +730,22 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			// the Minimum check further down, and the cross-check test that
 			// keeps pathParamTypeOverrides honest against the real spec) still
 			// sees what the specification actually says.
-			goType = pathParamGoType(op.OperationID, name, goType)
+			goType = pathParamGoType(op.OperationID, rawName, goType)
 		}
 		f := fieldSpec{
-			GoName:      goFieldName(splitWords(name)),
+			GoName:      goName,
 			GoType:      goType,
-			JSONName:    name, // path/query names are already the lower-camel-case OpenAPI declares; used verbatim
+			JSONName:    name, // path/query names are already the lower-camel-case OpenAPI declares; used verbatim unless disambiguated
 			Required:    required,
 			Description: node.Description,
 			Origin:      fieldOrigin,
+			WireName:    rawName,
 		}
 		if len(node.Enum) > 0 && isEnumScalar(node.Type) {
 			f.Enum = node.Enum
 			f.EnumScalarType = node.Type
 		}
-		if in == "path" && node.Type == "integer" && pathParamTakesMinimum(op.OperationID, name) {
+		if in == "path" && node.Type == "integer" && pathParamTakesMinimum(op.OperationID, rawName) {
 			one := 1
 			f.Minimum = &one
 		}
@@ -632,15 +754,8 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 		}
 	}
 
-	bodySchema, err := doc.requestBodySchema(op.RequestBody)
-	if err != nil {
-		return nil, nil, fmt.Errorf("request body: %w", err)
-	}
 	if bodySchema != nil {
-		node, err := res.resolve(bodySchema, 0)
-		if err != nil {
-			return nil, nil, fmt.Errorf("request body: %w", err)
-		}
+		node := bodyNode
 		if node.Type != "" && node.Type != "object" {
 			return nil, nil, fmt.Errorf("request body: top-level type %q is not an object; only an object body flattens into named fields", node.Type)
 		}
@@ -682,7 +797,7 @@ func assembleOperationFields(op operation, res *resolver, doc *document, structP
 			f := fieldSpec{
 				GoName:      "Namespace",
 				GoType:      "map[string]" + valueType,
-				JSONName:    "namespace",
+				JSONName:    mapBodyFieldName,
 				Required:    bodyRequired,
 				Description: bodyDescription(op.RequestBody, "Values keyed by Kubernetes namespace."),
 				Origin:      originBody,
