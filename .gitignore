@@ -26,3 +26,18 @@ test/e2e/.edge.env
 
 # Harness scratch: isolated worktrees created for subagents.
 .claude/worktrees/
+
+# Binaries a `go build ./cmd/<name>` drops in the repository root. The build
+# output belongs in dist/ (see the Makefile); these are what an ad-hoc
+# `go build ./cmd/gen_applicability/` leaves behind, and one of them reached a
+# commit before this rule existed.
+/gen_applicability
+/gen_action_inputs
+/audit_1to1
+/audit_discovery
+/audit_e2e_gaps
+/audit_spec_delta
+/audit_spec_drift
+/audit_spec_reality
+/fetch_spec
+/portainer-mcp
