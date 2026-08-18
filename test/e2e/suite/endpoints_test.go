@@ -674,25 +674,40 @@ func createEdgeEnvironmentThroughSurface(t *testing.T, surface, name string) int
 // TestEndpoints_EdgeActions_OnAnEnvironmentThisTestOwns covers the edge
 // actions against an edge environment this test registers and removes.
 //
-// It takes about a minute, and that is Portainer's own cost rather than
-// anything this suite can tune away — worth recording so a later reader does
-// not "fix" it by weakening the test. Registering an edge environment
-// schedules one snapshot attempt against a host that will never answer, and
-// that attempt costs ~20 seconds. Portainer serialises them, so with three
-// surfaces each registering one, whichever call happens to queue behind an
-// in-flight attempt pays the 20 seconds: measured 2026-08-18, one run
-// charged it to trust_edge_endpoints on one surface and to
-// association_delete on two others, while the remaining calls of both
-// actions returned in single-digit milliseconds. Total wall clock is
-// three environments x ~20s regardless of which call absorbs it, and running
-// the surfaces serially does not help for the same reason.
+// It takes about a minute, serially, and both halves of that are deliberate.
+//
+// Registering an edge environment schedules one snapshot attempt against a
+// host that will never answer, and that attempt costs ~20 seconds. Portainer
+// serialises them globally, so the cost is not per-call but per-environment,
+// and any concurrent request can end up queued behind an attempt that is not
+// its own: measured 2026-08-18, one local run charged the 20 seconds to
+// trust_edge_endpoints on one surface and to association_delete on two
+// others, while the remaining calls of both actions returned in single-digit
+// milliseconds.
+//
+// The subtests therefore do NOT run in parallel, and that is the fix for a
+// real CI failure rather than tidiness. Run in parallel, three surfaces
+// register three edge environments at once, and the third call to arrive
+// waits behind two attempts it did not cause — about 40 seconds before its
+// own work even starts. That fits inside portainer.DefaultCallTimeout (60s)
+// on this machine and does not on a slower CI runner, where a raw read timed
+// out with "context deadline exceeded" against an environment that was
+// perfectly healthy.
+//
+// rawEdgeEnvironment's ?excludeSnapshot=true is still worth having and does
+// not solve this on its own: it avoids the cost of the reader's OWN snapshot
+// attempt, not the queue behind somebody else's. Serialising is what bounds
+// any single call's wait to one attempt.
+//
+// Total wall clock stays about a minute either way — three environments x
+// ~20s is Portainer's cost, not this suite's, and a later reader should not
+// try to "fix" it by weakening the test.
 func TestEndpoints_EdgeActions_OnAnEnvironmentThisTestOwns(t *testing.T) {
 	if !estate.HasBusinessEdition() {
 		t.Skip("trust_edge_endpoints and set_policy_statuses are Business Edition only")
 	}
 	for _, surface := range surfaceNames {
 		t.Run(surface, func(t *testing.T) {
-			t.Parallel()
 			session := sessions.For(t, surface, "EE")
 
 			id := createEdgeEnvironmentThroughSurface(t, surface, uniqueName("env-edge"))

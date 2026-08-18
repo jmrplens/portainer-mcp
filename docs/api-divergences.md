@@ -1162,12 +1162,22 @@ Three facts a caller meets and neither specification mentions:
   `GET /endpoints/{id}?excludeSnapshot=true` returns in under 1ms even the
   first time. Portainer attempts one snapshot of a host that will never
   answer, with its own timeout, and caches the outcome. `GET /endpoints` (the
-  list) is unaffected. It is under `portainer.DefaultCallTimeout` (60s) for a
-  single call, but the attempts serialise: three edge environments registered
-  concurrently cost ~60s of blocking spread across whichever calls queue
-  behind them, which is why `TestEndpoints_EdgeActions_OnAnEnvironmentThisTestOwns`
-  takes about a minute and cannot be tuned below it. `endpoints.inspect`'s
-  own narrative tells a model to pass `excludeSnapshot`.
+  list) is unaffected.
+
+  **The attempts serialise globally, and that is the part that bites.** The
+  cost is per *environment*, not per call, and a request touching an
+  environment whose attempt has already completed can still queue behind an
+  attempt belonging to a different one. Three edge environments registered
+  concurrently therefore put ~40s of somebody else's waiting in front of the
+  third caller — inside `portainer.DefaultCallTimeout` (60s) on a developer
+  machine and outside it on a slower CI runner, where a raw read of a
+  perfectly healthy environment failed with "context deadline exceeded".
+  `?excludeSnapshot=true` does not rescue that case: it skips the reader's
+  *own* attempt, not the queue in front of it. Registering such environments
+  one at a time is what bounds any single call's wait to one attempt, which
+  is why `TestEndpoints_EdgeActions_OnAnEnvironmentThisTestOwns` runs its
+  surfaces serially. `endpoints.inspect`'s own narrative tells a model to
+  pass `excludeSnapshot`.
 
 - **`POST /endpoints` with `EndpointCreationType=3` authenticates against
   Azure during the call.** It is not merely storing credentials: invalid ones
