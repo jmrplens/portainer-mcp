@@ -481,6 +481,11 @@ type namedOrphanSweep struct {
 var orphanSweeps = []namedOrphanSweep{
 	{name: "tags", sweep: deleteOrphanTags},
 	{name: "registries", sweep: deleteOrphanRegistries},
+	// Custom templates join the same way, from wave 1 stage B: the sweep
+	// itself lives beside the domain's own suite (custom_templates_test.go)
+	// rather than in this file, which is what this registration point exists
+	// to allow.
+	{name: "custom templates", sweep: deleteOrphanCustomTemplates},
 }
 
 // cleanupOrphans runs every registered orphanSweep (see orphanSweeps) against

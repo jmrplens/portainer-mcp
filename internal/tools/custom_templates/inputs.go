@@ -81,6 +81,20 @@ type customTemplateCreateRepositoryInput struct {
 	// * 1 - swarm
 	// * 2 - compose
 	// * 3 - kubernetes
+	//
+	// Published with all three values, against the vendored specification,
+	// which declares enum [1, 2] on this route alone while its own
+	// description (above, verbatim) advertises 3 and both sibling routes
+	// declare [1, 2, 3]. The catalog carried the narrow enum deliberately
+	// until somebody measured the server rather than trusting a neighbouring
+	// route's declaration; that measurement is now in: a Type 3 template
+	// created from a git repository answers 200 on a live 2.44.0, Community
+	// and Business Edition alike, and comes back stored as type 3. See
+	// docs/api-divergences.md §6.5, which prescribed exactly this widening
+	// on exactly this evidence, and the dated
+	// api/spec-drift-allowlist.yaml entry
+	// (CustomTemplateCreateRepository/type) that excuses the resulting
+	// gating [enum] finding.
 	Type int `json:"type" jsonschema:"Type of created stack:\n* 1 - swarm\n* 2 - compose\n* 3 - kubernetes"`
 	// Variables Definitions of variables in the stack file
 	Variables []customTemplateCreateRepositoryInputVariablesItem `json:"variables,omitempty" jsonschema:"Definitions of variables in the stack file"`
@@ -91,7 +105,9 @@ func (customTemplateCreateRepositoryInput) EnumParams() map[string][]any {
 		"platform":                    {1, 2},
 		"repositoryAuthorizationType": {0, 1},
 		"repositoryProvider":          {0, 1, 2, 3, 4, 5, 6},
-		"type":                        {1, 2},
+		// [1, 2, 3], not the vendored [1, 2]: measured, see the Type field's
+		// own comment above.
+		"type": {1, 2, 3},
 	}
 }
 

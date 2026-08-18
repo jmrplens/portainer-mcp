@@ -203,3 +203,19 @@
     string" so a caller encodes the array itself instead of handing over a
     structure this route cannot carry.
   added: 2026-08-14
+
+- operation_id: CustomTemplateCreateRepository
+  field: type
+  reason: >-
+    Published as enum [1, 2, 3] where the vendored specification declares
+    [1, 2] on this route alone — its own description advertises "3 -
+    kubernetes" and both sibling routes (create/string, PUT
+    /custom_templates/{id}) declare all three. Measured against a live
+    Portainer 2.44.0, Community and Business Edition alike (2026-08-18): a
+    Type 3 template created from a git repository answers 200 and comes back
+    stored as type 3. The neighbouring routes' declaration was NOT the
+    evidence — a live server was, which is the distinction
+    docs/api-divergences.md §6.5 insisted on before this could be widened,
+    and that section prescribed exactly this entry on exactly this
+    measurement.
+  added: 2026-08-18

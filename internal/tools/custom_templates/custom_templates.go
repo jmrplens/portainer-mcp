@@ -151,12 +151,13 @@ func handWrittenSpecs() []toolutil.ActionSpec {
 //     one measured working end to end.
 //  4. CustomTemplateCreateRepository's Type declares enum [1, 2] while its
 //     own description advertises "3 - kubernetes", which the two sibling
-//     routes do declare. See docs/api-divergences.md §6.5: the enum is
-//     published as declared, because nobody has measured whether that
-//     route accepts Type 3, and the narrative sends a caller who needs a
-//     Kubernetes template from git to create_string instead.
+//     routes do declare. Measured 2026-08-18, later than the three above:
+//     a Type 3 template created from a git repository answers 200 on both
+//     editions and is stored as type 3, so the catalog now publishes
+//     [1, 2, 3] here. See docs/api-divergences.md §6.5, which prescribed
+//     that widening on exactly this evidence, and inputs.go's Type field.
 //
-// Items 1 and 2 are not merely described here, they are corrected in
+// Items 1, 2 and 4 are not merely described here, they are corrected in
 // inputs.go: toolutil.ActionSpec.ValidateInput enforces required-ness
 // locally, before the handler runs, so publishing the vendored arrays would
 // have let a model that fills exactly the required fields — which is what a
@@ -232,7 +233,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"This is the one of the three create actions that needs no external source: custom_templates.create_repository clones the body from a git repository, and custom_templates.create_file takes it from an uploaded file. " +
 				"title, description, fileContent, type and platform are all required here. " +
 				"platform is required although the vendored specification's own required list omits it: the server enforces it for Docker stacks, and a type 2 (compose) template created without it was measured answering 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
-				"Unlike custom_templates.create_repository, this route accepts type 3 (kubernetes) as well as 1 (swarm) and 2 (compose).",
+				"type accepts 1 (swarm), 2 (compose) and 3 (kubernetes), as does custom_templates.create_repository — measured, although that route's vendored enum omits 3.",
 		}
 	case "CustomTemplateCreateRepository":
 		return toolutil.ActionNarrative{
@@ -243,7 +244,8 @@ func narrative(operationID string) toolutil.ActionNarrative {
 				"sourceId is optional despite being listed required: omit it, or pass 0, and the repository is cloned from repositoryUrl alone — pass a real identifier only if it exists under /gitops/sources, since an unknown one answers 500 \"Source not found\". " +
 				"platform is required despite not being listed: without it a type 2 (compose) template answers 500 \"Invalid custom template platform\" (1 linux, 2 windows). " +
 				"The inline repository fields (repositoryUrl, repositoryUsername, repositoryPassword, repositoryAuthentication, repositoryAuthorizationType, repositoryProvider) are all marked \"Deprecated: use SourceID instead\", yet that deprecated path is the one measured working end to end. " +
-				"type accepts only 1 (swarm) or 2 (compose) on this route, even though the field's description advertises 3 (kubernetes) and the sibling routes accept it — for a Kubernetes template use custom_templates.create_string. " +
+				"type accepts 1 (swarm), 2 (compose) and 3 (kubernetes), although the vendored enum for this route alone omits 3: a type 3 template created from a repository was measured answering 200 on both editions and coming back stored as type 3. " +
+				"repositoryUrl must be an http(s) URL on Community Edition: a git:// URL is refused there with 500 \"invalid auth method\" even when the remote is reachable, while Business Edition clones git:// anonymously. Neither edition can clone a \"dumb HTTP\" repository. " +
 				"A credential sent here is stored by Portainer and stripped from this action's result before it reaches you.",
 		}
 	case "CustomTemplateCreateFile":

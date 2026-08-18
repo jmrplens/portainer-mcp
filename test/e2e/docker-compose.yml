@@ -147,3 +147,128 @@ services:
     depends_on:
       docker:
         condition: service_healthy
+
+  # A git server the two Portainer servers can clone from, so
+  # custom_templates.create_repository and custom_templates.git_fetch are
+  # exercised against a repository that really exists rather than left to
+  # safe-mode previews. It is reached as
+  # http://git:8080/cgi-bin/git/repo.git — a compose service name on the
+  # estate's own network, published to nothing.
+  #
+  # Smart HTTP (git-http-backend behind busybox httpd's CGI), chosen on
+  # measurements against this estate's own Portainer 2.44.0 — both editions,
+  # since they do not agree (docs/api-divergences.md section 3.8):
+  #
+  #   - Smart HTTP is the only one of the three transports that works on
+  #     BOTH editions: Community and Business Edition each answer 200 and
+  #     clone from it.
+  #   - Plain "dumb HTTP" (a bare repository with git update-server-info
+  #     served as static files) answers an ordinary `git clone` fine and
+  #     fails on both editions ("unexpected EOF"), so it is not an option.
+  #   - git:// (git daemon) works on Business Edition for an anonymous
+  #     clone and fails on Community Edition for every payload tried,
+  #     including when a daemon really is listening: CE answers
+  #     500 "invalid auth method" even for a hostname that does not
+  #     resolve, so it never dials. Serving git:// here would mean the git
+  #     tests covering half the matrix, and it could never carry an
+  #     authenticated clone at all — the protocol has no credential — which
+  #     stacks and edge_stacks will need later in this wave.
+  #   - git-http-backend is in Alpine's git-daemon package, not its git
+  #     package (measured: git alone ships git-http-fetch, git-http-push and
+  #     git-remote-http, but no git-http-backend; neither does the
+  #     alpine/git image), and busybox httpd is in busybox-extras, not the
+  #     busybox the base image already carries ("httpd: applet not found").
+  #     Both are installed at start-up, which is one more network dependency
+  #     at `up` time alongside the image pulls the rest of the estate needs.
+  #
+  # The whole fixture is inline rather than a bind-mounted directory of
+  # scripts, on purpose: a bind mount resolves on the DAEMON's filesystem, so
+  # `make e2e-up-remote` (which points DOCKER_HOST at another machine) would
+  # mount a path that does not exist there and start a container with an
+  # empty fixture directory. Everything this service needs, it writes itself.
+  # For the same reason the script carries no `$` anywhere: compose
+  # interpolates the command string before the shell ever sees it, so a
+  # literal one has to be written `$$`, which is a trap for the next person
+  # editing this.
+  #
+  # Two repositories, not one, and the split is what keeps the suite from
+  # racing against itself. repo.git is seeded once and never written to
+  # again: every test that creates a template from git clones it and asserts
+  # on its exact content, and those tests run in parallel across three
+  # surfaces and both editions. mutable.git exists for the single test that
+  # has to prove custom_templates.git_fetch really re-fetched rather than
+  # answering with the copy Portainer stored at create time — the stale
+  # answer docs/api-divergences.md section 2.4 records another operation
+  # giving. That proof needs a commit pushed between the create and the
+  # fetch, and a push into the shared repository would change what every
+  # concurrently running clone sees.
+  #
+  # /commit.sh is what the suite execs to make that commit: it reads a new
+  # stack file on stdin, commits it and pushes it into mutable.git — never
+  # into repo.git, so no argument decides which repository is written to.
+  # That is deliberate: compose interpolates this command string before the
+  # shell ever sees it, so a positional parameter would have to be written
+  # `$$1`. It lives in the container's own filesystem for the same reason
+  # the rest is inline.
+  git:
+    image: alpine:3.22
+    command:
+      - sh
+      - -euc
+      - |
+        apk add --no-cache git git-daemon busybox-extras >/dev/null
+        git config --global user.name "portainer-mcp e2e"
+        git config --global user.email "e2e@portainer-mcp.invalid"
+        mkdir -p /srv /work /mutable /www/cgi-bin
+        git init --bare -q -b main /srv/repo.git
+        git init --bare -q -b main /srv/mutable.git
+        cd /work
+        git init -q -b main .
+        cat > docker-compose.yml <<'YAML'
+        services:
+          hello:
+            image: busybox:1.36
+            command: ["echo", "portainer-mcp e2e git fixture revision one"]
+        YAML
+        git add -A
+        git commit -q -m "seed the read-only fixture repository"
+        git push -q /srv/repo.git main
+        cd /mutable
+        git init -q -b main .
+        cat > docker-compose.yml <<'YAML'
+        services:
+          hello:
+            image: busybox:1.36
+            command: ["echo", "portainer-mcp e2e mutable fixture, initial revision"]
+        YAML
+        git add -A
+        git commit -q -m "seed the mutable fixture repository"
+        git push -q /srv/mutable.git main
+        cat > /www/cgi-bin/git <<'CGI'
+        #!/bin/sh
+        export GIT_PROJECT_ROOT=/srv
+        export GIT_HTTP_EXPORT_ALL=1
+        exec /usr/libexec/git-core/git-http-backend
+        CGI
+        chmod +x /www/cgi-bin/git
+        cat > /commit.sh <<'SH'
+        #!/bin/sh
+        set -eu
+        cd /mutable
+        cat > docker-compose.yml
+        git add -A
+        git commit -q -m "update the mutable fixture repository"
+        git push -q /srv/mutable.git main
+        SH
+        chmod +x /commit.sh
+        exec /usr/sbin/httpd -f -p 8080 -h /www
+    # `git ls-remote` over the served URL, not a port probe: it is the same
+    # smart-HTTP ref listing Portainer's own client performs first, so it
+    # fails when the server is up but the CGI wrapper, the git-http-backend
+    # package or the seeded repository behind it is not.
+    healthcheck:
+      test: ["CMD", "git", "ls-remote", "http://127.0.0.1:8080/cgi-bin/git/repo.git", "HEAD"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
