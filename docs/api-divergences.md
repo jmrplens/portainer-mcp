@@ -389,6 +389,88 @@ alone. See `test/e2e/suite/docker_test.go`
 asserts this directly, and `internal/tools/docker/docker.go`'s `narrative`
 function for the model-facing description of it.
 
+### 2.5 `POST /custom_templates/create/file` ignores the multipart filename, and `create/repository` returns no `EntryPoint` at all
+
+**Evidence: measured** against a live Portainer 2.44.0. The two-filenames
+comparison was run on Community Edition; the resulting `EntryPoint` value was
+separately confirmed on Business Edition, and is asserted on both legs by
+`TestCustomTemplates_CreateFile_StoresTheUploadedStackFile`. Recorded
+2026-08-18 (wave 1 stage B, task 7).
+
+`internal/tools/custom_templates/handlers.go` writes a constant filename,
+`template.yml`, into the multipart `File` part's `Content-Disposition`,
+with a comment stating that what Portainer does with the name was never
+measured. It does nothing with it. Two uploads of identical content
+differing only in filename produce identical templates:
+
+```text
+POST /custom_templates/create/file
+  -F Title=... -F Description=... -F Note=n -F Platform=1 -F Type=2
+  -F "File=@stack.yml;filename=template.yml"
+→ 200 {"Id":11, ..., "EntryPoint":"docker-compose.yml", ...}
+
+POST /custom_templates/create/file            (same body, one part renamed)
+  -F "File=@stack.yml;filename=my-custom-stack.yaml"
+→ 200 {"Id":12, ..., "EntryPoint":"docker-compose.yml", ...}
+
+GET /custom_templates/11/file → {"FileContent":"services:\n  hello:\n ..."}
+GET /custom_templates/12/file → {"FileContent":"services:\n  hello:\n ..."}   (identical)
+```
+
+`EntryPoint` is the literal `docker-compose.yml` in both, and the stored
+file is byte-identical in both. So the constant is mechanically necessary —
+Go's multipart reader files a part under `Form.File` only when its
+`Content-Disposition` carries a filename, and Portainer parses the body with
+exactly that reader — but its **value** is unobservable, and there is no
+case for deriving it from the caller or adding an input field for it. The
+measured value is pinned by
+`TestCustomTemplates_CreateFile_StoresTheUploadedStackFile`, so a Portainer
+that starts honouring the filename shows up as a failing assertion rather
+than as a silently wrong `EntryPoint`.
+
+The same field behaves differently on the git route:
+`POST /custom_templates/create/repository` returns `EntryPoint: ""` and puts
+the path in `GitConfig.ConfigFilePath` instead. Nothing in the vendored
+document says either.
+
+### 2.6 `PUT /custom_templates/{id}` answers 200 and does not store `FileContent` for a git-backed template
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-18 (wave 1 stage B, task 7). The
+Business Edition leg was re-run deliberately rather than assumed, after §3.8
+turned out to be an edition asymmetry: the same sequence there answers 200
+and leaves the file at the git content too.
+
+`FileContent` is required on the update route, and for a template created
+from an inline string it is stored, as expected:
+
+```text
+PUT /custom_templates/13   {"Title":"...","Description":"...","FileContent":"...edited by update...","Platform":1,"Type":2}
+→ 200
+GET /custom_templates/13/file → {"FileContent":"...edited by update..."}   (stored)
+```
+
+For a template created from a git repository, the same call answers 200 and
+the stored file does not change:
+
+```text
+PUT /custom_templates/6    {"Title":"...","Description":"...","FileContent":"...edited by update...","Platform":1,"Type":2,
+                            "RepositoryURL":"http://git:8080/cgi-bin/git/repo.git","ComposeFilePathInRepository":"docker-compose.yml"}
+→ 200  (Title and Description are updated)
+GET /custom_templates/6/file → {"FileContent":"...the git content..."}     (unchanged)
+```
+
+This is the same family as §2.1: a route that reports success for a change
+it did not make. It is narrower — the rest of the payload IS stored, so the
+call is not a whole no-op — and it is arguably reasonable (the file belongs
+to the repository, and `custom_templates.git_fetch` is what refreshes it),
+but nothing in the document hints at it, and `custom_templates.update`'s own
+narrative currently tells a caller that "every field sent is stored".
+
+Consequence for a caller: to change a git-backed template's stack file, push
+to the repository and call `custom_templates.git_fetch`. Sending different
+content through `update` is accepted and lost.
+
 ---
 
 ## 3. Requirements the documents understate or omit
@@ -511,6 +593,171 @@ error="dial unix /var/run/docker.sock: connect: no such file or directory"
 The fix in this project's bench is a named volume mounted at `/var/run` in
 both the dind daemon and the agent. Recorded here because the misleading
 symptom, not the fix, is what costs the time.
+
+### 3.7 The custom-template create routes' `required` arrays are wrong in both directions
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-14 (wave 1 stage B, task 4).
+
+`POST /custom_templates/create/repository` and
+`POST /custom_templates/create/string` each publish a `required` array that
+contradicts what the server enforces, once in each direction:
+
+| Field | Vendored `required` | Server | Measurement |
+|---|---|---|---|
+| `Platform` (both routes) | absent | **enforced** for Docker stacks | `Type: 2` with no `Platform` → `500 "Invalid custom template platform"` |
+| `SourceID` (`create/repository`) | present | **not required** | `RepositoryURL` + `Platform: 1`, no `SourceID` → `200`, repository cloned. `SourceID: 0` sent explicitly → `200`, identical. `SourceID: 99999` → `500 "Source not found"` |
+| `Note` (`create/file`) | present | **not required** | a multipart body with no `Note` part at all → `200`, and the template comes back with `"Note":""` — measured 2026-08-18 on Community **and** Business Edition |
+
+`Platform`'s own field description already says "Required for Docker
+stacks", so on that route the field prose is right and the `required` array
+is wrong. `SourceID` is read when a real identifier is supplied and
+validated against `/gitops/sources`, so it is optional rather than ignored;
+zero is genuinely unset.
+
+This matters more than a documentation defect normally would, because
+`toolutil.ActionSpec.ValidateInput` enforces required-ness *locally*, before
+the handler runs (`internal/tools/register.go`). Publishing the vendored
+arrays verbatim would mean a model that fills exactly the required fields —
+which is what a model does — omits `Platform` and takes the 500 every time,
+while a caller cloning from the inline repository fields is refused outright
+for lacking a `SourceID` the server never wanted. The catalog therefore
+publishes `Platform` required and `SourceID` optional on those two routes,
+each with a dated `api/spec-drift-allowlist.yaml` entry.
+
+Deliberately **not** changed on `PUT /custom_templates/{id}`: `Platform`
+carries the same "Required for Docker stacks" note there, but that route was
+never probed, and inferring a requirement onto an unmeasured route is how a
+schema starts lying in the other direction.
+
+`Note` on `POST /custom_templates/create/file` was measured later than the
+other two rows (2026-08-18, wave 1 stage B task 7) and is recorded here
+**uncorrected**, unlike them. The reasoning is not that it matters less but
+that it fails differently: an over-required field can never produce a server
+error, only a local refusal, so the cost is a caller with nothing to note
+being made to invent one — irritating, and invisible in any log. Correcting
+it means turning `Note` optional in `customTemplateCreateFileInput`, teaching
+the hand-written multipart handler to omit the part when unset (its sibling
+optional fields already go through `OptionalField`), and adding a dated
+allow-list entry. That is a change to the shipped surface, so it is left as
+a decision rather than folded into the task that measured it; the field's own
+doc comment in `inputs.go` says the requirement was published unmeasured, and
+this row is the measurement it was waiting for.
+
+Related: the inline repository fields (`RepositoryURL`,
+`RepositoryUsername`, `RepositoryPassword`, `RepositoryAuthentication`,
+`RepositoryAuthorizationType`, `RepositoryProvider`) are all marked
+*"Deprecated: use SourceID instead"* in the vendored document, yet that
+deprecated path is the one measured working end to end — over smart HTTP on
+both editions, and over `git://` on Business Edition only; see §3.8.
+
+### 3.8 Git transport support differs by edition: Community Edition cannot clone `git://` at all, and neither edition can clone dumb HTTP
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition, 2026-08-18 (wave 1 stage B, task 7), re-measured the same
+day after review: the first pass reported this as "smart HTTP only" for both
+editions, which is wrong, and the worked example at the end of this section
+is how a plausible-looking wrong conclusion was produced.
+
+Nothing in the vendored document says what git transports
+`POST /custom_templates/create/repository` can use; `RepositoryURL` is
+documented as "URL of a Git repository hosting the Stack file" and nothing
+more. What the two editions accept is not the same:
+
+| Transport | real `git` client | Community Edition | Business Edition |
+|---|---|---|---|
+| dumb HTTP (static files + `git update-server-info`) | `git clone` succeeds | `500 … failed to clone git repository: unexpected EOF` | `500 … failed to list repository refs: unexpected EOF` |
+| `git://`, daemon listening, no authentication asked for | `git ls-remote` succeeds | `500 … failed to clone git repository: invalid auth method` | **`200`, repository cloned** |
+| `git://`, daemon listening, `RepositoryAuthentication: true` | n/a | `500 … invalid auth method` | `500 … failed to list repository refs: invalid auth method` |
+| `git://`, nothing listening on 9418 | connection refused | `500 … invalid auth method` (identical) | `500 … dial tcp 172.20.0.2:9418: connect: connection refused` |
+| `git://`, hostname that does not resolve | n/a | `500 … invalid auth method` (identical) | `500 … dial tcp: lookup no-such-host-anywhere on 127.0.0.11:53: no such host` |
+| smart HTTP (`git-http-backend` behind a CGI server) | `git clone` succeeds | **`200`** | **`200`** |
+
+Every "real `git` client" cell was run, not inferred: `git ls-remote` or
+`git clone` from a throwaway container on the same network, before any
+Portainer call.
+
+Business Edition dials, and its errors say what happened at the wire:
+
+```text
+POST /api/custom_templates/create/repository            (EE)
+{"Title":"e2e-e1","Description":"anonymous","RepositoryURL":"git://gitdaemon/repo.git",
+ "ComposeFilePathInRepository":"docker-compose.yml","Platform":1,"Type":2}
+200 {"Id":1,...,"GitConfig":{"URL":"git://gitdaemon/repo","ConfigFilePath":"docker-compose.yml",...}}
+
+same body plus "RepositoryAuthentication":true,"RepositoryUsername":"u","RepositoryPassword":"p"
+500 {"message":"Unable to create custom template",
+     "details":"Unable to fetch git repository id: failed to list repository refs: invalid auth method"}
+```
+
+That second failure is correct behaviour, not a defect: the git protocol has
+no authentication mechanism, so go-git refuses an `AuthMethod` on a `git://`
+transport. Asking for authentication over `git://` is the caller's mistake.
+
+Community Edition never gets that far. The identical anonymous body against
+the same listening daemon:
+
+```text
+POST /api/custom_templates/create/repository            (CE)
+{"Title":"e2e-d1","Description":"anonymous","RepositoryURL":"git://gitdaemon/repo.git",
+ "ComposeFilePathInRepository":"docker-compose.yml","Platform":1,"Type":2}
+500 {"message":"Unable to create custom template",
+     "details":"Unable to clone git repository: failed to clone git repository: invalid auth method"}
+```
+
+and it answers that same string for a URL where nothing listens, and for a
+hostname that does not resolve at all — so it is not reaching DNS, let alone
+the network. `SourceID: 0`, `RepositoryAuthentication: false`, empty
+`RepositoryUsername`/`RepositoryPassword` and an explicit
+`RepositoryReferenceName` were each tried, alone and combined: every one
+answers the same 500. On this edition the clone path attaches a credential
+object unconditionally, and `git://` is unusable through this route no
+matter what the caller sends.
+
+The two editions' error prefixes are worth knowing on their own, because
+they identify which code path answered: Community Edition says
+`Unable to clone git repository: failed to clone git repository: …`,
+Business Edition says
+`Unable to fetch git repository id: failed to list repository refs: …`.
+Telling those apart is what resolved a disagreement between two people who
+had each measured one leg and written "Portainer".
+
+Consequences:
+
+- A caller on Business Edition can clone `git://` anonymously through
+  `custom_templates.create_repository` today. The generated request body
+  always carries `Description`, `SourceID`, `Title` and `Type` (non-pointer
+  fields) and carries `RepositoryAuthentication` only when the caller sets
+  it, so the catalog never triggers the authenticated-`git://` failure by
+  itself.
+- The same call on Community Edition always fails. Nothing in the catalog
+  can fix that; it is the server's own path.
+- Dumb HTTP is unusable on both editions, whatever the repository's own
+  `git clone` does.
+
+`test/e2e/docker-compose.yml`'s `git` service therefore serves **smart
+HTTP**, and the reasons survive the correction above: it is the only one of
+the three transports that works on **both** editions, it is the transport
+real deployments use, and it is the only one that can also carry the
+**authenticated** clones `stacks` and `edge_stacks` will need later in this
+wave — `git://` cannot express a credential at all. It is not, as this
+section first claimed, the only transport that works.
+
+**How the wrong conclusion was produced**, recorded because the mechanism is
+reusable: the first pass measured Community Edition only, and wrote
+"Portainer". Worse, by the time the row was written the estate's `git`
+service had been switched from `git daemon` to `httpd`, so nothing was
+listening on 9418 any more — and because Community Edition answers
+`invalid auth method` whether or not anything is listening, the response
+alone cannot distinguish "the client refuses this transport" from "the port
+is closed". A reviewer re-running the probe against the switched fixture saw
+a dial failure on the other edition and concluded the original row was an
+artefact; it was not, but it was also not what it claimed to be. One
+`git ls-remote git://…` from a throwaway container — the same check the
+fixture's own healthcheck performs — separates the two states in a second,
+and both parties had skipped it. Separate "the server is not there" from
+"the client refuses" before writing either down, and name the edition every
+time the two legs have not both been run.
 
 ---
 
@@ -671,6 +918,181 @@ not a description. See `internal/tools/registries/registries.go` and
 `internal/tools/registries/inputs.go` for the shape it settled into (renamed
 from `inputs.gen.go` when the pilot domains were converted to owned files —
 see §9.1).
+
+### 6.5 `CustomTemplateCreateRepository.Type` declares an enum narrower than the server accepts
+
+**Evidence: vendored spec** for the declaration, verified 2026-08-14;
+**measured** against a live Portainer 2.44.0, Community and Business Edition
+alike, 2026-08-18 (wave 1 stage B, task 7).
+
+`POST /custom_templates/create/repository` declares `Type` with
+`enum: [1, 2]` while the same field's description reads:
+
+```text
+Type of created stack:
+* 1 - swarm
+* 2 - compose
+* 3 - kubernetes
+```
+
+The two sibling routes disagree with it: `POST /custom_templates/create/string`
+and `PUT /custom_templates/{id}` both declare `enum: [1, 2, 3]` with the
+same prose.
+
+This section previously recorded the enum as published-as-declared, with an
+explicit instruction for settling it: *"create a git-backed custom template
+with `Type: 3` against a live 2.44.0 (both editions). If it answers 200,
+widen the enum to `[1, 2, 3]` with an allow-list entry citing that
+measurement; if it answers 4xx/5xx, record the message here and leave the
+enum alone."* That was done:
+
+```text
+POST /api/custom_templates/create/repository        (Community Edition)
+{"Title":"e2e-probe-repo-type3","Description":"probe: type 3 on create/repository",
+ "RepositoryURL":"http://httpgit:8080/cgi-bin/git/repo.git",
+ "ComposeFilePathInRepository":"docker-compose.yml","Platform":1,"Type":3}
+
+200 {"Id":8,...,"Type":3,...,"GitConfig":{"URL":"http://httpgit:8080/cgi-bin/git/repo",...}}
+```
+
+The identical body against the Business Edition server answers `200` with
+`"Type":3` as well. The server accepts it, stores it as type 3, and clones
+the repository exactly as it does for types 1 and 2.
+
+So the enum is now published as `[1, 2, 3]`, carrying a dated
+`api/spec-drift-allowlist.yaml` entry for
+(`CustomTemplateCreateRepository`, `type`) that cites this measurement, and
+`custom_templates.create_repository`'s narrative no longer sends a caller
+wanting a Kubernetes template to `custom_templates.create_string`. The
+sibling route's declaration was not the evidence for widening — a live
+server was; §3.7's own warning against trusting a neighbouring route's
+declaration still stands.
+
+`POST /custom_templates/create/file` was probed in the same pass and also
+answers `200` for `Type: 3`, which matches the enum it already declares.
+
+### 6.6 An enum value with a leading space, overriding a clean `$ref`
+
+**Evidence: vendored spec**, verified 2026-08-14 (wave 1 stage B, task 6).
+
+`portaineree.CustomTemplateRelativePathSettings` declares both
+`PerDeviceConfigsMatchType` and `PerDeviceConfigsGroupMatchType` as a
+`$ref` to `portainer.PerDevConfigsFilterType` — whose own enum is the clean
+`["file", "dir"]` — while attaching an inline `enum` of its own as a
+sibling of that `allOf`:
+
+```json
+"PerDeviceConfigsMatchType": {
+  "allOf": [{"$ref": "#/components/schemas/portainer.PerDevConfigsFilterType"}],
+  "description": "Per device configs match type",
+  "enum": ["file", " dir"],
+  "example": "file"
+}
+```
+
+The second value carries a **leading space**. This is the same class of
+defect as §6.1's content type, in a different keyword.
+
+The malformed value is the one that survives resolution, not the clean one:
+`cmd/gen_action_inputs/schema.go`'s `resolve()` merges every `allOf` branch
+first and then overlays the node's own directly-declared keywords over the
+result (`if e, ok := raw["enum"].([]any); ok && len(e) > 0 { node.Enum = e }`),
+because a sibling keyword next to `$ref`/`allOf` is meant to take
+precedence. So the generated `EnumParams()` on all three nested
+`...EdgeSettingsRelativePathSettings` structs in
+`internal/tools/custom_templates/inputs.go` reads `{"file", " dir"}`,
+verbatim from the document.
+
+Only the Business Edition document defines this schema; Community Edition
+has neither it nor `portainer.PerDevConfigsFilterType`.
+
+Not corrected in the generator, and not hand-edited out of the generated
+file, for two reasons. First, the generated value is a faithful transcript
+of what the document says, and silently trimming it in `resolve()` would
+put the generator in the business of guessing which of a spec's two
+disagreeing declarations is the intended one. A trimming rule belongs in
+`cmd/fetch_spec/normalise.go` alongside the duplicate-enum and `*/*`
+rules — the same place §6.1 says a content-type rule belongs — so that the
+correction is visible in the vendored document rather than applied
+invisibly at generation. Second, and the reason this is not urgent: the
+value never reaches a model at all today, for the unrelated reason recorded
+in §9.5 below.
+
+**To settle it:** add a whitespace-trimming rule for enum values to
+`cmd/fetch_spec/normalise.go`, with its test, when a domain that publishes
+these fields needs them — which cannot happen before §9.5 is fixed.
+
+### 6.7 `CustomTemplateList.type` is declared `explode: false`, and the server cannot parse what that produces — fixed by a hand-written handler
+
+**Evidence: measured** against a live Portainer 2.44.0, Community and
+Business Edition alike; recorded 2026-08-18 (wave 1 stage B, task 7).
+
+`GET /custom_templates` declares its required `type` parameter as an array
+with `style: form` and **`explode: false`**. That combination means one
+comma-joined value, and the generated client encodes it exactly so — via
+`runtime.StyleParamWithOptions("form", false, "type", ...)` in
+`NewCustomTemplateListRequest`. Portainer's own handler then parses each
+value with `strconv.Atoi` and fails, while the repeated form it expects
+answers 200:
+
+```text
+GET /api/custom_templates?type=2
+200 [...]
+
+GET /api/custom_templates?type=1,2,3
+400 {"message":"Invalid Custom template type",
+     "details":"Failed parsing template type: strconv.Atoi: parsing \"1,2,3\": invalid syntax"}
+
+GET /api/custom_templates?type=1&type=2&type=3
+200 [...]
+```
+
+Neither implementation is wrong on its own terms: the client encodes what
+the document declares, and the server implements what `explode: true` would
+have declared. The document is wrong, and the cost lands squarely on the
+catalog, because `type` is `required: true`: there is no "omit it and get
+everything" escape, so a list action published on the generated client works
+for exactly one stack type and fails on the most obvious call a list action
+has.
+
+**What the catalog does about it.** `custom_templates.list` is hand-written
+(`internal/tools/custom_templates/handlers.go`, declared in
+`handWrittenSpecs()` beside `custom_templates.create_file`) and builds the
+query itself with `url.Values`, which renders one `type=` per value — the
+form the server accepts. Everything else about the action is unchanged: the
+same `customTemplateListInput` (`type` as `[]int`, `edge` optional), the same
+`redactCustomTemplateList` wrapper over a response that still carries
+`GitConfig`, the same edition and flags.
+
+**No allow-list entry, and that is a considered answer rather than an
+omission.** `api/spec-drift-allowlist.yaml` excuses differences between the
+parameter shape the catalog PUBLISHES and the one the vendored specification
+declares; `cmd/audit_spec_drift` compares exactly that. This change alters
+neither: the published input is byte-identical to what the generator emitted,
+and only the wire encoding of an already-declared array parameter differs.
+`make audit-spec-drift` reports no finding for it, and adding an entry
+anyway would be reported as stale, which is itself a build error.
+
+Pinned from three directions, because a list call is easy to test in a way
+that cannot fail:
+
+- `TestUnit_CustomTemplateList_SendsTheTypeParameterRepeated` asserts the
+  literal query string (`type=1&type=2&type=3`, and no comma anywhere),
+  including for the single-type call the broken encoding also got right.
+- `TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall`
+  (`test/e2e/suite/custom_templates_test.go`) seeds two templates of
+  different stack types and requires the one live multi-type call to return
+  both, on both editions and all three surfaces — so a handler that quietly
+  sent one type and dropped the rest fails it.
+- The same test's last subtest calls the GENERATED client against the same
+  server at the same moment and requires it to still fail with the
+  `strconv.Atoi` message above. If Portainer ever starts accepting the comma
+  form, that subtest fails and this section needs revisiting.
+
+Confirmed discriminating: reverting the handler to a comma-joined value
+makes the unit test report
+`query = "type=1%2C2%2C3", want "type=1&type=2&type=3"` and all six
+(edition, surface) pairs of the e2e test fail with the server's own 400.
 
 ---
 
@@ -935,6 +1357,59 @@ declared parameter type against the operation's real response type before
 accepting it as satisfying `checkCredentialRedaction`. Either is a
 generator/toolchain change large enough to deserve its own review, not a
 line-item inside this one.
+
+### 9.5 A nested struct's `EnumParams`/`MinimumParams` is never called
+
+`toolutil.ActionSpec.InputSchema` (`internal/toolutil/schema.go`) reflects
+the Input type into a JSON Schema and then applies the two constraint
+interfaces the reflector cannot express as struct tags, by asserting on the
+**top-level Input value only**:
+
+```go
+if enumer, ok := s.Input.(EnumParams); ok { ... }
+if minimums, ok := s.Input.(MinimumParams); ok { ... }
+```
+
+`applyEnumParams` then writes each entry into the schema's own
+`properties`. A *nested* struct type's `EnumParams()` is therefore never
+consulted, however faithfully `cmd/gen_action_inputs` generated it: no
+enum is published for any field of a nested object, and the same holds for
+`MinimumParams`, which is reached by the identical assertion two lines
+later. This is §9.3's shape — a generated per-field annotation that is
+correct in the source and inert at runtime — for enums and minimums rather
+than for edition tags.
+
+**Measured** 2026-08-14 by calling `InputSchema()` on the registered
+`custom_templates.create_repository` spec and reading the result: the
+top-level `platform` publishes `"enum": [1, 2]`, while
+`edgeSettings.relativePathSettings.perDeviceConfigsMatchType` — whose
+generated nested `EnumParams()` returns `{"file", " dir"}` — publishes
+`{"description": "Per device configs match type", "type": ["null",
+"string"]}` and no `enum` keyword at all.
+
+Six generated nested `EnumParams()` methods exist today, all in
+`internal/tools/custom_templates/inputs.go`: an
+`...EdgeSettingsRelativePathSettings` and an `...EdgeSettingsStaggerConfig`
+for each of `CustomTemplateCreateRepository`, `CustomTemplateCreateString`
+and `CustomTemplateUpdate`. Between them they declare 15 field-level enum
+constraints that no surface publishes and no `ValidateInput` enforces. No
+nested `MinimumParams()` has been generated yet — every one in the tree
+today is on a top-level `...Input` type — so that half of the gap is
+mechanical rather than observed.
+
+Two consequences worth stating plainly, because they point in opposite
+directions. It is why §6.6's malformed `" dir"` is harmless today: a value
+that is never published cannot mislead anybody. It is equally why a caller
+gets no help filling `staggerOption` or `perDeviceConfigsMatchType`
+correctly, and why a wrong value there is refused by Portainer rather than
+by this catalog.
+
+Not fixed here, for the same reason §9.3 was not: `applyEnumParams` walks
+one level of `properties` and refuses an entry naming a property it cannot
+find, so recursing means walking the schema tree and the Go type in
+lockstep through pointers, slices and maps — the same change §9.3 needs,
+and reviewable on its own. Whichever change closes it must also fix §6.6
+first, or registering the fix will start publishing `" dir"` to models.
 
 ---
 
