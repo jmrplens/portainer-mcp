@@ -83,9 +83,14 @@ var syntheticOperationIDs = map[operationKey]syntheticName{
 			"EndpointGroupUpdate, EndpointGroupDelete and the two endpoint-membership operations — and the " +
 			"catalog-wide *Inspect convention for a single-resource GET (EndpointInspect, TeamInspect, " +
 			"RegistryInspect, StackInspect). " +
-			"Verified collision-free when written: EndpointGroupInspect appears in neither vendored specification " +
-			"nor in internal/apiversion/applicability_gen.go, and both callers refuse a synthetic name that " +
-			"collides with a real one rather than overwriting it",
+			"Verified collision-free when written: EndpointGroupInspect is published by neither vendored " +
+			"specification, so it displaces no real operationId. The two occurrences in " +
+			"internal/apiversion/applicability_gen.go are this entry's own effect, not a collision with it — " +
+			"cmd/gen_applicability writes the name into operationIDs for both editions precisely because this " +
+			"table supplies it, after borrowIDsAcrossEditions has already failed to find one to borrow. Every " +
+			"caller refuses a synthetic name that collides with a published one rather than overwriting it: " +
+			"cmd/gen_applicability's applySyntheticIDs, cmd/audit_1to1's collisionError and " +
+			"cmd/audit_spec_drift's parseSpecOperations",
 	},
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 )
@@ -61,7 +62,7 @@ func endpointGroupInspect(ctx context.Context, c *portainer.Client, input json.R
 	path := fmt.Sprintf("/endpoint_groups/%d", params.ID)
 	if params.Size != nil {
 		query := url.Values{}
-		query.Set("size", fmt.Sprintf("%t", *params.Size))
+		query.Set("size", strconv.FormatBool(*params.Size))
 		path += "?" + query.Encode()
 	}
 

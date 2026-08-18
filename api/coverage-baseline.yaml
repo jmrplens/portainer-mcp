@@ -21,13 +21,15 @@
 # is why that distinction is worth stating. The audit stopped skipping routes
 # with no operationId that day: GET /endpoint_groups/{id} is named by neither
 # vendored document, so it had been silently absent from both denominators,
-# and internal/specnaming now names it. The totals moved — CE 251 -> 252, EE
-# 441 -> 442 — while these two numbers did not, because the newly visible
-# route is uncovered, not covered. A ratchet keyed on totals would have gone
-# red for a change that only made the real surface visible.
+# and internal/specnaming names it now. The totals moved — CE 251 -> 252, EE
+# 441 -> 442 — while these two numbers held at 71 and 93, because at that
+# moment the newly visible route was uncovered, not covered. A ratchet keyed
+# on totals would have gone red for a change that only made the real surface
+# visible.
 #
 # Later the same day, endpoint_groups.inspect covered that very route on both
-# editions: CE 71 -> 72, EE 93 -> 94. That is the pair of numbers moving for
-# the reason this file exists — one route made visible, then actually served.
+# editions, which is what moved these two numbers to their values below: CE
+# 71 -> 72, EE 93 -> 94. One route made visible, then actually served — the
+# pair of numbers moving for the reason this file exists.
 ce_covered: 72
 ee_covered: 94

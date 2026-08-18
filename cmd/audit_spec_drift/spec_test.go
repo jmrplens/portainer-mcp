@@ -181,38 +181,87 @@ func TestUnit_ParseSpecOperations_UnnamedRouteTakesItsNameFromSpecnaming(t *test
 // is what keeps internal/specnaming's "verified collision-free" claim true
 // against a future respec, on this side of the fence: if some later document
 // starts publishing EndpointGroupInspect for a different route, the two must
-// not silently shadow each other — whichever Go's randomised map iteration
-// reached first would win, and this audit would then compare the catalog
+// not silently shadow each other, or this audit would compare the catalog
 // action against the wrong operation's shape.
 //
-// The message must say which side is which, or a reader sent to fix it
-// removes the wrong one.
+// Two rows, and the reason there are two is the reason nameOrigin exists.
+// parseSpecOperations walks paths in sorted order (sort.Strings, above), so
+// whichever route sorts first becomes the incumbent and the other is the one
+// nameOrigin describes. One row therefore reaches nameOrigin's published
+// branch and the other its synthetic branch, and with only the first row
+// written the synthetic branch was reachable by no test at all.
+//
+// Each row asserts the phrase that DISTINGUISHES its branch, and asserts the
+// other branch's phrase is absent. Asserting merely that the message
+// mentions the operationId does not discriminate: the message's own leading
+// clause names it whatever nameOrigin returns, so that assertion passes with
+// nameOrigin's body replaced by any string at all — which is exactly the
+// distinction spec.go's own doc comment says the function exists to make.
 func TestUnit_ParseSpecOperations_SyntheticNameCollidingWithAPublishedOne_ReturnsError(t *testing.T) {
 	t.Parallel()
-	t.Run("ParseSpecOperations SyntheticNameCollidingWithAPublishedOne ReturnsError", func(t *testing.T) {
-		synthetic, named := specnaming.SyntheticOperationID(http.MethodGet, "/endpoint_groups/{id}")
-		if !named {
-			t.Fatal("internal/specnaming no longer names GET /endpoint_groups/{id}")
-		}
-		spec := `{"paths": {
-			"/endpoint_groups/{id}": {"get": {"tags": ["endpoint_groups"]}},
-			"/somewhere/else": {"get": {"operationId": "` + synthetic + `", "tags": ["x"]}}
-		}}`
 
-		_, err := parseSpecOperations([]byte(spec))
-		if err == nil {
-			t.Fatalf("parseSpecOperations() = nil error, want a refusal: %q is both published and synthetic here", synthetic)
-		}
-		if !strings.Contains(err.Error(), synthetic) {
-			t.Errorf("parseSpecOperations() error = %v, want it to name %q", err, synthetic)
-		}
-		if !strings.Contains(err.Error(), "/endpoint_groups/{id}") || !strings.Contains(err.Error(), "/somewhere/else") {
-			t.Errorf("parseSpecOperations() error = %v, want it to name both colliding routes", err)
-		}
-		if !strings.Contains(err.Error(), "specnaming") && !strings.Contains(err.Error(), "operationId \""+synthetic+"\"") {
-			t.Errorf("parseSpecOperations() error = %v, want it to say where the second name came from", err)
-		}
-	})
+	synthetic, named := specnaming.SyntheticOperationID(http.MethodGet, "/endpoint_groups/{id}")
+	if !named {
+		t.Fatal("internal/specnaming no longer names GET /endpoint_groups/{id}")
+	}
+
+	const (
+		publishedPhrase = `the second declares operationId`
+		syntheticPhrase = `internal/specnaming's table`
+	)
+
+	for _, tc := range []struct {
+		name string
+		// otherPath is the route that publishes the colliding name. Its
+		// position relative to "/endpoint_groups/{id}" in sort order is what
+		// decides which of the two is met second, and so which branch of
+		// nameOrigin describes it.
+		otherPath  string
+		wantPhrase string
+		notPhrase  string
+	}{
+		{
+			name:       "the published name is met second",
+			otherPath:  "/somewhere/else",
+			wantPhrase: publishedPhrase,
+			notPhrase:  syntheticPhrase,
+		},
+		{
+			name: "the synthetic name is met second",
+			// Sorts before "/endpoint_groups/{id}", so the published route is
+			// the incumbent and the nameless one is the collision reported.
+			otherPath:  "/a-route-that-sorts-first",
+			wantPhrase: syntheticPhrase,
+			notPhrase:  publishedPhrase,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spec := `{"paths": {
+				"/endpoint_groups/{id}": {"get": {"tags": ["endpoint_groups"]}},
+				"` + tc.otherPath + `": {"get": {"operationId": "` + synthetic + `", "tags": ["x"]}}
+			}}`
+
+			_, err := parseSpecOperations([]byte(spec))
+			if err == nil {
+				t.Fatalf("parseSpecOperations() = nil error, want a refusal: %q is both published and synthetic here", synthetic)
+			}
+			if !strings.Contains(err.Error(), synthetic) {
+				t.Errorf("parseSpecOperations() error = %v, want it to name %q", err, synthetic)
+			}
+			if !strings.Contains(err.Error(), "/endpoint_groups/{id}") || !strings.Contains(err.Error(), tc.otherPath) {
+				t.Errorf("parseSpecOperations() error = %v, want it to name both colliding routes", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantPhrase) {
+				t.Errorf("parseSpecOperations() error = %v, want it to contain %q: the message must say which of the two names came from where, or a reader sent to fix it removes the wrong one",
+					err, tc.wantPhrase)
+			}
+			if strings.Contains(err.Error(), tc.notPhrase) {
+				t.Errorf("parseSpecOperations() error = %v, must NOT contain %q: it describes the other branch, and a message carrying both distinguishes nothing",
+					err, tc.notPhrase)
+			}
+		})
+	}
 }
 
 // TestUnit_ParseSpecOperations_DuplicateOperationID_ReturnsError proves a
