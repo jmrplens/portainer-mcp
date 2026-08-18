@@ -240,3 +240,134 @@ func TestRun_UnwritableOutputPath_ReturnsError(t *testing.T) {
 		t.Error("run() error = nil, want an error when the output path cannot be written")
 	}
 }
+
+// TestUnit_ApplySyntheticIDs_RouteNoEditionNames_TakesTheTableName is driven
+// by a synthetic lookup rather than internal/specnaming's real one, for the
+// same reason resolveActionName in cmd/gen_action_inputs takes its override
+// table as an argument: a test that only asserted what the real single-entry
+// table produces would pass just as happily against an implementation that
+// hardcoded that entry, or one that never consulted a table at all.
+//
+// The three sub-cases are the three decisions this pass makes. It names a
+// route this edition serves and nothing names; it leaves alone a route that
+// already resolves, whether from its own document or borrowed; and it writes
+// nothing at all for a route this edition does not serve, however willing the
+// table is to name it — a name in operationIDs is what makes an action
+// declarable on an edition, so inventing one for a route the edition does not
+// answer would send calls to a 404.
+func TestUnit_ApplySyntheticIDs_RouteNoEditionNames_TakesTheTableName(t *testing.T) {
+	t.Parallel()
+	nameFor := func(method, path string) (string, bool) {
+		if method == "GET" && path == "/groups/{id}" {
+			return "GroupInspect", true
+		}
+		return "", false
+	}
+
+	for _, tc := range []struct {
+		name      string
+		all       map[operation]bool
+		ids       map[string]operation
+		wantIDs   map[string]operation
+		wantCount int
+	}{
+		{
+			name:      "a route the edition serves and nothing names",
+			all:       map[operation]bool{{Method: "GET", Path: "/groups/{id}"}: true},
+			ids:       map[string]operation{},
+			wantIDs:   map[string]operation{"GroupInspect": {Method: "GET", Path: "/groups/{id}"}},
+			wantCount: 1,
+		},
+		{
+			name: "a route that already resolves is never overridden",
+			all:  map[operation]bool{{Method: "GET", Path: "/groups/{id}"}: true},
+			ids:  map[string]operation{"GroupsRealName": {Method: "GET", Path: "/groups/{id}"}},
+			// Untouched: no second name is minted for an operation that has one.
+			wantIDs:   map[string]operation{"GroupsRealName": {Method: "GET", Path: "/groups/{id}"}},
+			wantCount: 0,
+		},
+		{
+			name:      "a route this edition does not serve is not named",
+			all:       map[operation]bool{{Method: "GET", Path: "/other"}: true},
+			ids:       map[string]operation{},
+			wantIDs:   map[string]operation{},
+			wantCount: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opIDs := map[string]map[string]operation{"ce": tc.ids}
+			got, err := applySyntheticIDs(map[string]map[operation]bool{"ce": tc.all}, opIDs, nameFor)
+			if err != nil {
+				t.Fatalf("applySyntheticIDs() error = %v, want nil", err)
+			}
+			if len(got) != tc.wantCount {
+				t.Errorf("applySyntheticIDs() reported %v, want %d entr(ies)", got, tc.wantCount)
+			}
+			if len(opIDs["ce"]) != len(tc.wantIDs) {
+				t.Fatalf("operationIDs[ce] = %v, want %v", opIDs["ce"], tc.wantIDs)
+			}
+			for id, want := range tc.wantIDs {
+				if opIDs["ce"][id] != want {
+					t.Errorf("operationIDs[ce][%q] = %+v, want %+v", id, opIDs["ce"][id], want)
+				}
+			}
+		})
+	}
+}
+
+// TestUnit_ApplySyntheticIDs_NameAlreadyTakenByAnotherRoute_IsError is the
+// guard that keeps internal/specnaming's "verified collision-free" claim true
+// against a future specification rather than only on the day each entry was
+// written. Overwriting would move an action's edition on the strength of a
+// name this project invented; refusing names both routes and stops the build.
+func TestUnit_ApplySyntheticIDs_NameAlreadyTakenByAnotherRoute_IsError(t *testing.T) {
+	t.Parallel()
+	nameFor := func(method, path string) (string, bool) {
+		if method == "GET" && path == "/groups/{id}" {
+			return "GroupInspect", true
+		}
+		return "", false
+	}
+	opIDs := map[string]map[string]operation{"ce": {
+		"GroupInspect": {Method: "GET", Path: "/somewhere/else"},
+	}}
+	all := map[string]map[operation]bool{"ce": {{Method: "GET", Path: "/groups/{id}"}: true}}
+
+	_, err := applySyntheticIDs(all, opIDs, nameFor)
+	if err == nil {
+		t.Fatal("applySyntheticIDs() = nil error, want a refusal when the synthetic name is already taken")
+	}
+	for _, want := range []string{"GroupInspect", "/somewhere/else", "/groups/{id}"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("applySyntheticIDs() error = %v, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestUnit_Run_RouteNoDocumentNames_ReachesTheGeneratedIndex is the
+// end-to-end half: the pass must actually be wired into run, after borrowing,
+// and its result must reach the emitted operationIDs map. A unit test on
+// applySyntheticIDs alone would pass against a run that never called it — the
+// exact defect shape this task exists to close.
+func TestUnit_Run_RouteNoDocumentNames_ReachesTheGeneratedIndex(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// GET /endpoint_groups/{id} carries no operationId in either document,
+	// exactly as the real vendored pair declares it.
+	writeSpec(t, dir, "ce-2.44.0.json", `{"paths": {"/endpoint_groups/{id}": {"get": {}}}}`)
+	writeSpec(t, dir, "ee-2.44.0.json", `{"paths": {"/endpoint_groups/{id}": {"get": {}}}}`)
+	outPath := filepath.Join(t.TempDir(), "out.go")
+
+	if err := run([]string{"-history", dir, "-out", outPath}); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	want := `"EndpointGroupInspect": {Method: "GET", Path: "/endpoint_groups/{id}"},`
+	if strings.Count(string(got), want) != 2 {
+		t.Errorf("generated file = %s\nwant %s once per edition", got, want)
+	}
+}

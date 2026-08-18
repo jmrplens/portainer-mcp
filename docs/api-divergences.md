@@ -126,6 +126,13 @@ unnamed, the Business document 442 of which 1 is unnamed; unnamed operations
 are skipped because there is nothing to look up for them. Re-verified
 against the committed specs on 2026-08-03; the counts reconcile exactly.
 
+These two figures are `cmd/audit_spec_reality`'s own, and they still read 251
+and 441 deliberately. `cmd/audit_1to1` stopped skipping the nameless on
+2026-08-18 and now reads 252 and 442 (§6.2); this audit has not been changed
+with it, so the one route `internal/specnaming` names has never been probed
+against a live server by *this* command. That is a known remaining gap, not
+an inconsistency between the two numbers.
+
 ### 1.2 The full list, by domain
 
 **`kubernetes` tag — 7 operations, both editions**
@@ -1252,11 +1259,12 @@ rule, with its test, when the `kubernetes` domain is implemented.
 ### 6.2 Operations with no `operationId`
 
 The Community document has 14 path-item operations with no `operationId`,
-the Business document 1. Every tool in `cmd/` that reads these documents
-skips them: there is no name to derive a client method, a catalog entry or
-an audit key from. They are therefore invisible to coverage figures as well
-as to the reality audit, and are the reason the probed totals are 251 and
-441 rather than 265 and 442.
+the Business document 1. There is no name to derive a client method, a
+catalog entry or an audit key from, so every tool in `cmd/` that reads these
+documents used to skip them outright — which is why the probed totals were
+251 and 441 rather than 265 and 442. Both halves of that have since been
+repaired; see "Named where a name exists" and "Counted, or named as
+uncounted" below.
 
 **Evidence: vendored spec**, over all 38 Community and 38 Business
 specifications in `api/specs/history`; measured 2026-08-18 (wave 1,
@@ -1290,9 +1298,55 @@ compares them against a fresh fetch byte for byte. The four domains this
 un-blocks in advance — `endpoint_groups`, `edge_agent`, `webhooks`,
 `websocket` — are not yet written, so nothing else changed today.
 
-The one operation this cannot help is `GET /endpoint_groups/{id}`, which
-*neither* edition names: there is no name to borrow, and it stays absent from
-both indexes and from both coverage totals.
+The one operation borrowing cannot help is `GET /endpoint_groups/{id}`, which
+*neither* edition names: there is nothing to borrow.
+
+**Named where a name exists.** *Measured 2026-08-18 (wave 2 stage A, task 8),
+against a live Community and a live Business server.* `GET
+/endpoint_groups/{id}` answers **200 on both editions** — Community returns
+`{"Id":1,"Name":"Unassigned","Description":"Unassigned environments",
+"Total":0,"TypeInfo":{...}}`, Business the same plus `"Policies":[]` — and it
+is the *only* one of the 442 routes that neither document names; the
+intersection of Community's 14 nameless operations and Business's 1 is
+exactly this route, and borrowing already resolves the other 13.
+
+Because nothing named it, nothing could declare it: `actioncatalog.Build`
+resolves an action's edition through `apiversion.ByOperationID` and refuses
+one that resolves in neither edition, so no `endpoint_groups` action could
+carry this route however the domain package was written. It now gets a name
+from `internal/specnaming`'s `SyntheticOperationID` — an **explicit** table,
+one entry, with a stated `Reason`, in the shape `cmd/gen_action_inputs`'s
+`actionNameOverrides` already uses. A mechanical name derived from method and
+path would invent one for every unnamed route in every future document, and
+naming is a judgement. The name is `EndpointGroupInspect`, following its five
+siblings in the same document and the catalog-wide `*Inspect` convention;
+`cmd/gen_applicability`'s `applySyntheticIDs` applies it after
+`borrowIDsAcrossEditions` (a published name always wins over an invented
+one), adding one entry to `operationIDs[CE]` and one to `operationIDs[EE]`.
+Both callers refuse rather than overwrite if a future document ever publishes
+that name for another route.
+
+The rule lives in a package rather than in either command because
+`cmd/gen_applicability` and `cmd/audit_1to1` must agree on the name exactly
+and, both being `package main`, cannot import each other — the same argument
+that put the parameter/body collision rule there.
+
+**Counted, or named as uncounted.** The deeper defect was not the missing
+name but its invisibility. `cmd/audit_1to1` *skipped* an operation with no
+`operationId`, so it never entered the denominator: a working route could be
+dropped from a domain's plan with every gate green, which is exactly what
+happened to this one. The parser now consults the table first, and a route
+nothing names is still uncounted — there is no key to count it against — but
+is returned and **printed by name** in the report, under "routes with no
+operationId, not counted above". An uncovered operation is honest; an
+invisible one is not.
+
+The measured effect on the audit, 2026-08-18: the denominators rose from 251
+to **252** (CE) and from 441 to **442** (EE) as `EndpointGroupInspect`
+entered both; covered stayed at 71 and 93, so the ratchet baseline is
+unchanged and the operation is reported as an uncovered gap (`endpoint_groups`
+ships the action separately). The remaining 13 Community routes are now
+listed by name in the report instead of vanishing from it.
 
 ### 6.3 Five identifiers declared `integer` that Portainer never treats as a number
 

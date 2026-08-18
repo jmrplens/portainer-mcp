@@ -79,16 +79,58 @@ func TestByOperationID_UnknownID_IsNotFound(t *testing.T) {
 // version in which it appeared, which may predate operationId annotations
 // existing at all — and a handful of route families (the /webhooks CRUD
 // endpoints, the /websocket/* upgrade endpoints) have never carried an
-// operationId in any published CE or EE spec. As measured against the
-// vendored history: CE is missing 16 of 273, EE 4 of 471. The tolerance below
-// is set comfortably above both so a genuine regression (an empty or
-// near-empty index) still trips it.
+// operationId in any published CE or EE spec. Those are repaired by
+// cmd/gen_applicability's two naming passes: borrowIDsAcrossEditions, which
+// takes a name the other edition publishes, and applySyntheticIDs, which
+// takes internal/specnaming's explicit name for a route neither edition
+// names. What is left over is what nothing can name: measured against the
+// vendored history, 2 of CE's 273 operations and 3 of EE's 471 resolve to no
+// operationId at all — GET /endpoints/{id}/kubernetes/helm/{name}, POST
+// /docker/{environmentId}/dashboard and (EE only) GET
+// /websocket/microk8s-shell, every one of them withdrawn upstream by 2.41.0
+// and never named while it existed. The counts this test compares are id
+// counts rather than operation counts, and they differ slightly from those
+// five because a renamed operationId leaves both names in the index. The
+// tolerance below is set far above either reading, so a genuine regression
+// (an empty or near-empty index) still trips it while a handful of upstream
+// removals between spec releases does not.
 func TestOperationIDIndex_CoversNearlyEveryOperation(t *testing.T) {
 	const tolerance = 25
 	for _, e := range []edition.Edition{edition.CE, edition.EE} {
 		ops, ids := len(spans[e]), len(operationIDs[e])
 		if ids < ops-tolerance {
 			t.Errorf("%s: %d operationIds for %d operations, want nearly all", e, ids, ops)
+		}
+	}
+}
+
+// TestGeneratedTable_RouteNoDocumentNames_ResolvesInBothEditions pins the
+// generated data for the one route neither vendored document gives an
+// operationId.
+//
+// GET /endpoint_groups/{id} answers 200 on Community and on Business —
+// measured against both, Business differing only by an extra Policies field
+// — but Community leaves it nameless and so does Business, so there was
+// nothing for cmd/gen_applicability's borrowIDsAcrossEditions to borrow.
+// operationIDs is what internal/tools/actioncatalog resolves an action's
+// edition through, and an operationId absent from both editions of this index
+// makes actioncatalog.Build refuse the action outright as "resolves in
+// neither edition" — so a route Portainer serves could not be declared at
+// all. The name comes from internal/specnaming's explicit table, applied by
+// applySyntheticIDs; this test fails if that table entry is removed, if the
+// pass stops running, or if it lands in only one edition.
+func TestGeneratedTable_RouteNoDocumentNames_ResolvesInBothEditions(t *testing.T) {
+	for _, e := range []edition.Edition{edition.CE, edition.EE} {
+		op, ok := ByOperationID(e, "EndpointGroupInspect")
+		if !ok {
+			t.Errorf("%s: EndpointGroupInspect missing from the operationId index; an action carrying it cannot be declared at all", e)
+			continue
+		}
+		if op.Method != http.MethodGet || op.Path != "/endpoint_groups/{id}" {
+			t.Errorf("%s: EndpointGroupInspect resolved to %+v, want GET /endpoint_groups/{id}", e, op)
+		}
+		if !Available(e, op, "2.44.0") {
+			t.Errorf("%s: the generated table reports GET /endpoint_groups/{id} unavailable on 2.44.0, where both editions serve it", e)
 		}
 	}
 }

@@ -16,5 +16,14 @@
 # the diff, rather than left for the ratchet to silently absorb. Never lower
 # either number to make a regression pass — that defeats the one thing this
 # file exists to catch.
+#
+# Only the covered counts are committed here, never the totals, and 2026-08-18
+# is why that distinction is worth stating. The audit stopped skipping routes
+# with no operationId that day: GET /endpoint_groups/{id} is named by neither
+# vendored document, so it had been silently absent from both denominators,
+# and internal/specnaming now names it. The totals moved — CE 251 -> 252, EE
+# 441 -> 442 — while these two numbers did not, because the newly visible
+# route is uncovered, not covered. A ratchet keyed on totals would have gone
+# red for a change that only made the real surface visible.
 ce_covered: 71
 ee_covered: 93

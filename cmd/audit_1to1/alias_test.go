@@ -16,20 +16,29 @@ const (
 
 // loadRealSpecs parses both committed documents, so a test can check the real
 // alias table against the real operations rather than against a fixture.
-func loadRealSpecs(t *testing.T) (ce, ee map[string]specOperation) {
+func loadRealSpecs(t *testing.T) (ce, ee specDocument) {
 	t.Helper()
-	load := func(path string) map[string]specOperation {
+	load := func(path string) specDocument {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		ops, err := parseSpecOperations(data)
+		doc, err := parseSpecOperations(data)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
-		return ops
+		return doc
 	}
 	return load(realCESpec), load(realEESpec)
+}
+
+// doc wraps a fixture's operation map as the document parseSpecOperations
+// would have returned for it, with no unnamed routes. Every synthetic test
+// below states its operations by operationId, which is what those tests are
+// about; the routes with no operationId at all have their own tests, in
+// spec_test.go and audit_test.go.
+func doc(ops map[string]specOperation) specDocument {
+	return specDocument{Operations: ops}
 }
 
 // webhookRoute is the one route the two vendored documents name differently,
@@ -65,14 +74,14 @@ func TestUnit_OperationAliases_HoldAgainstTheVendoredDocuments(t *testing.T) {
 	// entry can carry on its own.
 	for _, alias := range operationAliases {
 		t.Run(alias.Business+"/"+alias.Community, func(t *testing.T) {
-			if err := checkAliases([]operationAlias{alias}, ce, ee); err != nil {
+			if err := checkAliases([]operationAlias{alias}, ce.Operations, ee.Operations); err != nil {
 				t.Errorf("alias %s/%s no longer names one route under two names: %v", alias.Business, alias.Community, err)
 			}
 		})
 	}
 
 	t.Run("the table as a whole", func(t *testing.T) {
-		if err := checkAliases(operationAliases, ce, ee); err != nil {
+		if err := checkAliases(operationAliases, ce.Operations, ee.Operations); err != nil {
 			t.Errorf("checkAliases(operationAliases) = %v, want nil", err)
 		}
 	})
@@ -143,7 +152,7 @@ func TestUnit_AuditCoverage_CoveringEitherNameOfAnAliasedRoute_CoversBoth(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := auditCoverage(ce, ee, tt.actions, nil, tt.aliases)
+			result, err := auditCoverage(doc(ce), doc(ee), tt.actions, nil, tt.aliases)
 			if err != nil {
 				t.Fatalf("auditCoverage() error = %v", err)
 			}
@@ -183,7 +192,7 @@ func TestUnit_AuditCoverage_AllowListedRouteIsExcusedUnderBothNames(t *testing.T
 		Added:     "2026-08-18",
 	}}
 
-	result, err := auditCoverage(ce, ee, nil, allowList, aliases)
+	result, err := auditCoverage(doc(ce), doc(ee), nil, allowList, aliases)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -211,7 +220,7 @@ func TestUnit_BuildReport_NamesEveryAlias(t *testing.T) {
 		Added:     "2026-08-18",
 	}}
 
-	result, err := auditCoverage(ce, ee, []toolutil.ActionSpec{action("stacks.webhook_invoke", "StacksWebhookInvoke")}, nil, aliases)
+	result, err := auditCoverage(doc(ce), doc(ee), []toolutil.ActionSpec{action("stacks.webhook_invoke", "StacksWebhookInvoke")}, nil, aliases)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -367,7 +376,7 @@ func TestUnit_AuditCoverage_RefusesAStaleAlias(t *testing.T) {
 		Added:     "2026-08-18",
 	}}
 
-	_, err := auditCoverage(ce, ee, []toolutil.ActionSpec{action("tags.list", "TagList")}, nil, aliases)
+	_, err := auditCoverage(doc(ce), doc(ee), []toolutil.ActionSpec{action("tags.list", "TagList")}, nil, aliases)
 	if err == nil {
 		t.Fatal("auditCoverage() = nil error, want a refusal for the stale alias")
 	}

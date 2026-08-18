@@ -19,6 +19,12 @@ type editionReport struct {
 	// stable across runs.
 	AllowListed []specOperation
 	Uncovered   []specOperation
+	// Unnamed are the routes this edition's document declares with no
+	// operationId and that internal/specnaming does not name either. They
+	// are not in Total, because Total counts operations this audit has a key
+	// for and these have none; they are reported by name so that "not
+	// counted" can never again mean "not visible". See parseSpecOperations.
+	Unnamed []unnamedOperation
 }
 
 // auditResult is the outcome of comparing the declared catalog against both
@@ -66,14 +72,14 @@ func (r *auditResult) HasGap() bool {
 // that a test can drive this with a synthetic table — a test asserting
 // something about the real one only would pass just as happily against an
 // implementation that never consulted a table at all.
-func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpec, allowList []allowListEntry, aliases []operationAlias) (*auditResult, error) {
-	if err := checkAliases(aliases, ce, ee); err != nil {
+func auditCoverage(ce, ee specDocument, actions []toolutil.ActionSpec, allowList []allowListEntry, aliases []operationAlias) (*auditResult, error) {
+	if err := checkAliases(aliases, ce.Operations, ee.Operations); err != nil {
 		return nil, fmt.Errorf("validating the operation aliases before auditing coverage: %w", err)
 	}
 
 	inEither := func(id string) bool {
-		_, inCE := ce[id]
-		_, inEE := ee[id]
+		_, inCE := ce.Operations[id]
+		_, inEE := ee.Operations[id]
 		return inCE || inEE
 	}
 
@@ -117,9 +123,9 @@ func auditCoverage(ce, ee map[string]specOperation, actions []toolutil.ActionSpe
 // counted as covered even if it also happens to carry an allow-list entry:
 // coveredIDs is checked first, so a now-unnecessary allow-list entry does not
 // hide a real action from the covered count.
-func buildEditionReport(name string, ops map[string]specOperation, coveredIDs, allowListedIDs map[string]bool) editionReport {
-	r := editionReport{Name: name, Total: len(ops)}
-	for id, op := range ops {
+func buildEditionReport(name string, doc specDocument, coveredIDs, allowListedIDs map[string]bool) editionReport {
+	r := editionReport{Name: name, Total: len(doc.Operations), Unnamed: doc.Unnamed}
+	for id, op := range doc.Operations {
 		switch {
 		case coveredIDs[id]:
 			r.Covered++
@@ -152,6 +158,13 @@ func operationLine(op specOperation) string {
 	return fmt.Sprintf("    - %s (%s %s) [%s]%s\n", op.OperationID, op.Method, op.Path, op.Domain, suffix)
 }
 
+// unnamedLine renders one report line for a route no document and no table
+// names. It has no operationId to lead with — that is the whole point of the
+// line — so it leads with the method and path instead.
+func unnamedLine(op unnamedOperation) string {
+	return fmt.Sprintf("    - %s %s [%s]\n", op.Method, op.Path, op.Domain)
+}
+
 // buildReport renders result as a human-readable summary.
 //
 // The allow-list count is printed unconditionally, alongside the coverage
@@ -159,6 +172,17 @@ func operationLine(op specOperation) string {
 // it turns from an honesty mechanism into a hiding place. Allow-listed
 // operations are named, not just counted, for the same reason exclusion from
 // the failure must never mean exclusion from the report.
+//
+// The unnamed operations are printed for a third variant of that same
+// reason, and it is the sharpest of the three. An allow-listed operation is
+// excluded from the failure but stays in the report and in the denominator;
+// an aliased one is counted as covered through another name. An operation
+// with no operationId at all was in neither — not the numerator, not the
+// denominator, not any list — so the report could truthfully say "every
+// operation is accounted for" while a route Portainer serves was accounted
+// for nowhere. Naming them here is what makes the totals below readable as
+// what they are: coverage of the operations this audit has a key for, with
+// the keyless ones listed separately rather than dropped.
 //
 // The aliases are printed by name for that same reason, and it is arguably
 // more important for them: an allow-list entry at least leaves its operation
@@ -194,7 +218,23 @@ func buildReport(result *auditResult) string {
 				fmt.Fprint(&b, operationLine(op))
 			}
 		}
+		if len(r.Unnamed) > 0 {
+			fmt.Fprintf(&b, "  routes with no operationId, not counted above (%d):\n", len(r.Unnamed))
+			fmt.Fprintln(&b, "    this document names none of these, and internal/specnaming's table does not either,")
+			fmt.Fprintln(&b, "    so there is no key to audit coverage against. Add a table entry to make one countable.")
+			for _, op := range r.Unnamed {
+				fmt.Fprint(&b, unnamedLine(op))
+			}
+		}
 		fmt.Fprintln(&b)
+	}
+
+	// Stated on both paths, and before the verdict on the success one: the
+	// bottom line of this report is what a reader takes away, and "every
+	// operation is accounted for" must not be able to mean "every operation
+	// this audit can see".
+	if unnamed := len(result.CE.Unnamed) + len(result.EE.Unnamed); unnamed > 0 {
+		fmt.Fprintf(&b, "%d route(s) across both editions carry no operationId and are outside the totals above; they are listed by edition.\n", unnamed)
 	}
 
 	if result.HasGap() {
