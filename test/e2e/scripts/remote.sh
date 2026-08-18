@@ -151,6 +151,19 @@ tunnel_add_forward() {
         sleep 0.2
         tries=$((tries + 1))
     done
+    # Cancel the forward before giving up. ssh accepted the request, so the
+    # master is holding 127.0.0.1:${local_port} whether or not anything ever
+    # answered on it, and nothing else will release it: the callers treat
+    # this return as fatal and exit, and k3d-up.sh's only trap removes a
+    # temporary CA file -- it has no tunnel cleanup. So without this the
+    # master and its half-open forward survive the failure, and a retry
+    # before `make e2e-k8s-down` hits the preflight probe above, which
+    # reports "something else is already listening there" and names an
+    # unrelated cause for a listener that is our own.
+    #
+    # Best-effort, like tunnel_down's own `-O exit`: a cancel that fails
+    # must not replace the real diagnostic below with a cleanup error.
+    ssh -S "$sock" -O cancel -L "${local_port}:${remote_host}:${remote_port}" "$dest" >/dev/null 2>&1 || true
     echo "could not confirm the forward from 127.0.0.1:${local_port} to ${remote_host}:${remote_port} on $dest -- ssh accepted the request but nothing answers yet; $dest may not be able to reach ${remote_host}:${remote_port}" >&2
     return 1
 }
