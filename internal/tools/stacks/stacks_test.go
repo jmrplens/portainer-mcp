@@ -378,9 +378,16 @@ func TestUnit_Specs_AreAllValid(t *testing.T) {
 	}
 }
 
-// shippedOperations is every operationId this domain ships: the twenty-two
-// cmd/gen_action_inputs generated, plus the three it refused and handlers.go
-// writes by hand — the two multipart creates and StackMigrate. The roster was
+// shippedOperations is every operationId this domain ships: the twenty-one
+// cmd/gen_action_inputs generated, plus the four handlers.go writes by hand —
+// the two multipart creates, StackMigrate, and StackDeleteKubernetesByName.
+//
+// The first three are here because the generator refused them and said why.
+// The fourth is not: it generated cleanly and was moved by hand afterwards,
+// because the server requires a `namespace` query parameter neither vendored
+// document declares, so the generated action could not send it and every call
+// it could make failed (docs/api-divergences.md §3.9). A reader counting
+// refusals will find three, not four. The roster was
 // called generatedOperations while every entry was in fact generated; the name
 // changed with the first hand-written entry rather than leaving a list that
 // quietly contradicts its own name.

@@ -931,7 +931,10 @@ time the two legs have not both been run.
 **Evidence: measured** against a live Portainer 2.44.0, Community and
 Business Edition alike; recorded 2026-08-18 (wave 1 stage C, task 7). Pinned
 by
-`TestStacks_DeleteKubernetesByName_IsRefusedWithoutTheUndocumentedNamespaceParameter`.
+`TestStacks_DeleteKubernetesByName_SucceedsWithTheUndocumentedNamespaceParameter`
+(live) and
+`TestUnit_DeleteKubernetesByName_SendsTheUndocumentedNamespaceParameter`
+(the query string this handler emits).
 
 `StackDeleteKubernetesByName` declares exactly three parameters, and both
 vendored documents declare the same three, byte for byte: `name` (path,

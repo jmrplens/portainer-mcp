@@ -79,7 +79,7 @@
 // until this file declares a function named exactly redact<OperationID>
 // (checkCredentialRedaction, credential.go). That check runs before the
 // hand-written-override skip, deliberately — it is the one guard a
-// hand-written handler cannot walk around — so all three hand-written
+// hand-written handler cannot walk around — so all four hand-written
 // operations above need their wrapper too even though no handler will ever
 // be generated for them. For those three the wrapper is not dead weight:
 // the hand-written handler is expected to call it, which is how a
@@ -123,7 +123,7 @@ func Specs() []toolutil.ActionSpec {
 	return append(generatedSpecs(), handWrittenSpecs()...)
 }
 
-// handWrittenSpecs returns the three actions cmd/gen_action_inputs can never
+// handWrittenSpecs returns the four actions cmd/gen_action_inputs can never
 // produce — StackCreateDockerStandaloneFile, StackCreateDockerSwarmFile and
 // StackMigrate. See this file's package doc for why each refuses.
 //
@@ -177,7 +177,7 @@ func Specs() []toolutil.ActionSpec {
 // domain was in view and were carried here by pendingRulings in stacks_test.go,
 // which starts asserting the moment an ActionSpec exists;
 // TestUnit_DangerFlags_MatchThisDomainsRulings now pins all three flags for all
-// three actions, and the last pendingRulings entry moved out with this commit.
+// four actions, and the last pendingRulings entry moved out with this commit.
 //
 // Declared through toolutil.WithNarrative with the vendored summary and
 // description as the literal Title and Description, exactly like the
