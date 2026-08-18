@@ -202,7 +202,6 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Edition:     edition.CE,
 			Mutating:    true,
 			Destructive: true,
-			Idempotent:  true,
 			Handler:     customTemplateGitFetch,
 			Input:       customTemplateGitFetchInput{},
 		}, narrative("CustomTemplateGitFetch")),
