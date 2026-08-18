@@ -226,3 +226,18 @@
     and that section prescribed exactly this entry on exactly this
     measurement.
   added: 2026-08-18
+
+- operation_id: CustomTemplateCreateFile
+  field: note
+  reason: >-
+    Measured 2026-08-18 against a live 2.44.0, Community and Business Edition
+    alike: a multipart body with no Note part at all answers 200, and the
+    template comes back with "Note":"". The vendored document lists Note in
+    this route's required array and lists it optional on both JSON create
+    routes, so it is wrong here and right two routes away. Published optional
+    to match the server, for the same reason as the Platform and SourceID
+    entries above: toolutil.ActionSpec.ValidateInput enforces required-ness
+    locally, before the handler runs, so publishing the document's array
+    verbatim would make this catalog refuse a request Portainer accepts. See
+    docs/api-divergences.md §3.7.
+  added: 2026-08-18

@@ -105,10 +105,10 @@ func customTemplateCreateFileBody(params customTemplateCreateFileInput) (io.Read
 
 	form.Field("Title", params.Title)
 	form.Field("Description", params.Description)
-	form.Field("Note", params.Note)
 	form.IntField("Platform", params.Platform)
 	form.IntField("Type", params.Type)
 
+	form.OptionalField("Note", params.Note)
 	form.OptionalField("Logo", params.Logo)
 	form.OptionalField("EdgeSettings", params.EdgeSettings)
 	form.OptionalBoolField("EdgeTemplate", params.EdgeTemplate)
