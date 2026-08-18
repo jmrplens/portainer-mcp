@@ -1418,10 +1418,8 @@ func createSwarmStackFixture(t *testing.T, ed string, envID int, swarmID, name s
 	return id
 }
 
-// TestStacks_DeleteKubernetesByName_IsRefusedWithoutTheUndocumentedNamespaceParameter
-// is the whole live coverage stacks.delete_kubernetes_by_name can currently
-// have, and the failure it asserts is a real finding rather than a
-// convenience.
+// TestStacks_DeleteKubernetesByName_SucceedsWithTheUndocumentedNamespaceParameter
+// is the live half of a divergence the unit tests pin on the wire.
 //
 // Measured against both editions of this estate:
 // DELETE /stacks/name/{name}?endpointId=1 answers
@@ -1429,16 +1427,22 @@ func createSwarmStackFixture(t *testing.T, ed string, envID int, swarmID, name s
 // query parameter"}, and the identical request with &namespace=default
 // answers 204. NEITHER vendored document declares a namespace parameter on
 // this route — api/specs/ce-2.44.0.json and api/specs/ee-2.44.0.json both
-// list exactly name, external and endpointId — so the action as published
-// carries no field that could ever carry it, and every call it can make
-// fails this way. See docs/api-divergences.md §3.9.
+// list exactly name, external and endpointId. See docs/api-divergences.md
+// §3.9.
 //
-// This test therefore pins the measurement, not a wish: it asserts the call
-// fails and that the message names the missing parameter. Three futures make
-// it fail, and all three want a person to look: Portainer stops requiring
-// namespace, Portainer starts failing for some other reason, or the input
-// grows the field and the call starts succeeding.
-func TestStacks_DeleteKubernetesByName_IsRefusedWithoutTheUndocumentedNamespaceParameter(t *testing.T) {
+// When that was first measured the action was generated from the document,
+// so it carried no field that could hold the parameter and every call it
+// could make failed. It is now hand-written and publishes `namespace`, and
+// this test asserts the consequence that matters: the call SUCCEEDS.
+//
+// It deliberately no longer asserts the 400. That failure is now unreachable
+// from here — `namespace` is a required field, so omitting it is refused by
+// toolutil.ActionSpec.ValidateInput before a request is ever built, and a
+// test asserting the refusal would be asserting our own validator while
+// reading as though it still measured Portainer. The server-side behaviour
+// stays pinned where it can still be observed: the unit test on the query
+// string this handler emits, and §3.9's recorded exchange.
+func TestStacks_DeleteKubernetesByName_SucceedsWithTheUndocumentedNamespaceParameter(t *testing.T) {
 	for _, leg := range composeLegs(estate) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
@@ -1449,18 +1453,18 @@ func TestStacks_DeleteKubernetesByName_IsRefusedWithoutTheUndocumentedNamespaceP
 				toolName, args := actionCallParams(t, surface, "stacks.delete_kubernetes_by_name", map[string]any{
 					"name":       uniqueName("stackk8sname"),
 					"endpointId": envID,
+					"namespace":  "default",
 				})
 				res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: args})
 				if err != nil {
 					t.Fatalf("CallTool(%s): %v", toolName, err)
 				}
-				if !res.IsError {
-					t.Fatalf("stacks.delete_kubernetes_by_name succeeded: the server no longer requires the undocumented namespace query parameter, and docs/api-divergences.md §3.9 needs revisiting: %s",
-						toolResultText(res))
-				}
-				const want = "namespace"
-				if text := toolResultText(res); !strings.Contains(text, want) {
-					t.Errorf("stacks.delete_kubernetes_by_name failed with %q, want it to name the missing %q parameter: a different failure is a different defect", text, want)
+				if res.IsError {
+					text := toolResultText(res)
+					if strings.Contains(text, "namespace") {
+						t.Fatalf("stacks.delete_kubernetes_by_name still fails on the namespace parameter with it supplied, so the hand-written handler is not putting it on the wire: %s", text)
+					}
+					t.Fatalf("stacks.delete_kubernetes_by_name failed with namespace supplied: %s", text)
 				}
 			})
 		}

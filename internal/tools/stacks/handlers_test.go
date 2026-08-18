@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -953,5 +954,49 @@ func TestUnit_MigrateWithUnparseableInput_ReturnsAWrappedError(t *testing.T) {
 	}
 	if want := "StackMigrate: parse input"; !strings.Contains(err.Error(), want) {
 		t.Errorf("error = %v, want it wrapped with %q", err, want)
+	}
+}
+
+// TestUnit_DeleteKubernetesByName_SendsTheUndocumentedNamespaceParameter pins
+// the one thing that makes this action callable at all.
+//
+// Neither vendored document declares `namespace`, and the server requires it:
+// without it the route answers 400 "Invalid query parameter: namespace" on
+// both editions, measured, and the check runs before the environment is
+// resolved (docs/api-divergences.md §3.9). The generated handler could not
+// send it, so every call it could make failed.
+//
+// The assertion is on the query string the server would receive, not on a
+// status code: a handler that accepted the field and dropped it would return
+// whatever the stub answers and look perfectly healthy.
+func TestUnit_DeleteKubernetesByName_SendsTheUndocumentedNamespaceParameter(t *testing.T) {
+	t.Parallel()
+
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := portainer.New(&config.Config{URL: srv.URL, Token: "t", ToolSurface: config.SurfaceDynamic})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	input := json.RawMessage(`{"name":"probe-k8s","endpointId":1,"namespace":"default"}`)
+	if _, err := find(t, "stacks.delete_kubernetes_by_name")(context.Background(), c, input); err != nil {
+		t.Fatalf("handler error = %v", err)
+	}
+
+	q, parseErr := url.ParseQuery(gotQuery)
+	if parseErr != nil {
+		t.Fatalf("parsing the query the server received (%q): %v", gotQuery, parseErr)
+	}
+	if got := q.Get("namespace"); got != "default" {
+		t.Errorf("namespace = %q, want \"default\"; without it every call this action makes answers 400 \"Invalid query parameter: namespace\" (docs/api-divergences.md §3.9). Query was %q", got, gotQuery)
+	}
+	if got := q.Get("endpointId"); got != "1" {
+		t.Errorf("endpointId = %q, want \"1\"; the namespace must be added alongside the documented parameters, not instead of them. Query was %q", got, gotQuery)
 	}
 }

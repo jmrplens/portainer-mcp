@@ -203,6 +203,17 @@ func Specs() []toolutil.ActionSpec {
 func handWrittenSpecs() []toolutil.ActionSpec {
 	return []toolutil.ActionSpec{
 		toolutil.WithNarrative(toolutil.ActionSpec{
+			Name: "stacks.delete_kubernetes_by_name", Domain: "stacks", OperationID: "StackDeleteKubernetesByName",
+			Title:       "Remove Kubernetes stacks by name",
+			Description: "Remove a stack.",
+			Edition:     edition.CE,
+			Mutating:    true,
+			Destructive: true,
+			Idempotent:  true,
+			Handler:     stackDeleteKubernetesByName,
+			Input:       stackDeleteKubernetesByNameInput{},
+		}, narrative("StackDeleteKubernetesByName")),
+		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "stacks.create_docker_standalone_file", Domain: "stacks", OperationID: "StackCreateDockerStandaloneFile",
 			Title:       "Deploy a new compose stack from a file",
 			Description: "Deploy a new stack into a Docker environment specified via the environment identifier.",

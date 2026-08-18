@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
@@ -249,4 +250,46 @@ func stackMigrate(ctx context.Context, c *portainer.Client, input json.RawMessag
 		return nil, fmt.Errorf("StackMigrate: %w", err)
 	}
 	return redactStackMigrate(resp.JSON200), nil
+}
+
+// stackDeleteKubernetesByName is hand-written for a reason the vendored
+// documents cannot express: the server requires a `namespace` query
+// parameter that neither document declares.
+//
+// Measured on a live 2.44.0, both editions (docs/api-divergences.md §3.9):
+// without it the route answers 400 "Invalid query parameter: namespace", and
+// the check runs before the environment is resolved -- supplying namespace
+// and omitting endpointId moves the failure on to a 404 -- so it is
+// unconditionally required, not required only for some Kubernetes branch.
+//
+// The generated handler could not send it and neither can the generated
+// client's typed parameters: apigen.StackDeleteKubernetesByNameParams
+// carries only External and EndpointId, both derived from the same document.
+// So every call the generated action could make failed. Rather than bypass
+// the client with portainer.Client.Do, the parameter is appended through the
+// RequestEditorFn hook the client already offers, which keeps the typed call
+// and its response handling intact and confines the divergence to one line.
+func stackDeleteKubernetesByName(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
+	var params stackDeleteKubernetesByNameInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("StackDeleteKubernetesByName: parse input: %w", err)
+	}
+	queryParams := apigen.StackDeleteKubernetesByNameParams{
+		EndpointId: params.EndpointID,
+		External:   params.External,
+	}
+	addNamespace := func(_ context.Context, req *http.Request) error {
+		q := req.URL.Query()
+		q.Set("namespace", params.Namespace)
+		req.URL.RawQuery = q.Encode()
+		return nil
+	}
+	resp, err := c.API.StackDeleteKubernetesByNameWithResponse(ctx, params.Name, &queryParams, addNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("StackDeleteKubernetesByName: %w", err)
+	}
+	if err := toolutil.Check(resp); err != nil {
+		return nil, fmt.Errorf("StackDeleteKubernetesByName: %w", err)
+	}
+	return map[string]any{"status": "ok"}, nil
 }

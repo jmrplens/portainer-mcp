@@ -347,6 +347,14 @@ func (stackDeleteInput) MinimumParams() map[string]int {
 type stackDeleteKubernetesByNameInput struct {
 	// EndpointID Environment identifier
 	EndpointID int `json:"endpointId" jsonschema:"Environment identifier"`
+	// Namespace is required by the server and declared by neither vendored
+	// document. Measured on a live 2.44.0, both editions: without it the
+	// route answers 400 "Invalid query parameter: namespace", and the check
+	// runs before the environment is resolved, so it is unconditionally
+	// required rather than required only for some Kubernetes branch. See
+	// docs/api-divergences.md §3.9. Published required to match the server;
+	// without it every call this action can make fails.
+	Namespace string `json:"namespace" jsonschema:"Kubernetes namespace holding the stack"`
 	// External Set to true to delete an external stack. Only external Swarm stacks are supported
 	External *bool `json:"external,omitempty" jsonschema:"Set to true to delete an external stack. Only external Swarm stacks are supported"`
 	// Name Stack name

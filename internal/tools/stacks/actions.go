@@ -232,26 +232,6 @@ func stackDelete(ctx context.Context, c *portainer.Client, input json.RawMessage
 	return map[string]any{"status": "ok"}, nil
 }
 
-// stackDeleteKubernetesByName is the generated handler for operation StackDeleteKubernetesByName.
-func stackDeleteKubernetesByName(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
-	var params stackDeleteKubernetesByNameInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("StackDeleteKubernetesByName: parse input: %w", err)
-	}
-	var queryParams apigen.StackDeleteKubernetesByNameParams
-	if err := json.Unmarshal(input, &queryParams); err != nil {
-		return nil, fmt.Errorf("StackDeleteKubernetesByName: parse query parameters: %w", err)
-	}
-	resp, err := c.API.StackDeleteKubernetesByNameWithResponse(ctx, params.Name, &queryParams)
-	if err != nil {
-		return nil, fmt.Errorf("StackDeleteKubernetesByName: %w", err)
-	}
-	if err := toolutil.Check(resp); err != nil {
-		return nil, fmt.Errorf("StackDeleteKubernetesByName: %w", err)
-	}
-	return map[string]any{"status": "ok"}, nil
-}
-
 // stackFileInspect is the generated handler for operation StackFileInspect.
 func stackFileInspect(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params stackFileInspectInput
@@ -623,17 +603,6 @@ func generatedSpecs() []toolutil.ActionSpec {
 			Handler:     stackDelete,
 			Input:       stackDeleteInput{},
 		}, narrative("StackDelete")),
-		toolutil.WithNarrative(toolutil.ActionSpec{
-			Name: "stacks.delete_kubernetes_by_name", Domain: "stacks", OperationID: "StackDeleteKubernetesByName",
-			Title:       "Remove Kubernetes stacks by name",
-			Description: "Remove a stack.",
-			Edition:     edition.CE,
-			Mutating:    true,
-			Destructive: true,
-			Idempotent:  true,
-			Handler:     stackDeleteKubernetesByName,
-			Input:       stackDeleteKubernetesByNameInput{},
-		}, narrative("StackDeleteKubernetesByName")),
 		toolutil.WithNarrative(toolutil.ActionSpec{
 			Name: "stacks.file_inspect", Domain: "stacks", OperationID: "StackFileInspect",
 			Title:       "Retrieve the content of the Stack file for the specified stack",

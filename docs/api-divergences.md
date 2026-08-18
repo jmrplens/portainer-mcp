@@ -956,25 +956,25 @@ The check runs before the endpoint is resolved: with `namespace` supplied and
 `404 … (bucket=endpoints, key=0)`, so `namespace` is genuinely required and
 not merely required in some Kubernetes-specific branch.
 
-**Consequence, and it is not cosmetic:** `stacks.delete_kubernetes_by_name`
-is generated from the document, so its input carries no `namespace` field and
-has no way to acquire one at call time. **Every call the action can make
-fails with the 400 above.** The action is published, discoverable and
-destructive-flagged, and it cannot work.
+**Consequence, and how it was closed.** When this was first measured the
+action was generated from the document, so its input carried no `namespace`
+field and had no way to acquire one: every call it could make failed with the
+400 above. The generated client cannot help either — its own
+`StackDeleteKubernetesByNameParams` carries only `External` and `EndpointId`,
+both derived from the same document.
 
-This is deliberately recorded and pinned rather than fixed here: task 7 of
-this stage is the e2e suite, and adding a field the vendored document does
-not declare is a gating `cmd/audit_spec_drift` finding (`AddField`) that
-needs its own dated `api/spec-drift-allowlist.yaml` entry alongside the
-`inputs.go` change and the narrative that explains the field. The e2e test
-asserts the measured failure, so all three futures worth noticing show up as
-a failing test: the server stops requiring `namespace`, the server starts
-failing differently, or the input grows the field and the call starts
-succeeding.
+`stacks.delete_kubernetes_by_name` is therefore hand-written. It publishes
+`namespace` as a required field and appends it through the `RequestEditorFn`
+hook the generated client already offers, which keeps the typed call and its
+response handling intact and confines the divergence to one line rather than
+bypassing the client the way `docker`'s three string-identifier handlers must.
+The added field is a deliberate divergence from both documents and carries a
+dated entry in `api/spec-drift-allowlist.yaml`.
 
----
-
-## 4. Responses that leak secrets
+Proven against a live estate rather than reasoned about: removing the line
+that writes the parameter makes the end-to-end test fail on both editions
+with Portainer's own `400 Invalid query parameter: namespace`, and restoring
+it makes the call answer 204.
 
 ### 4.1 `GET /api/licenses` returns the full licence key and the holder's name
 

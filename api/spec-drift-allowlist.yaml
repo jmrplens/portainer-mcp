@@ -242,3 +242,20 @@
     verbatim would make this catalog refuse a request Portainer accepts. See
     docs/api-divergences.md §3.7.
   added: 2026-08-18
+
+- operation_id: StackDeleteKubernetesByName
+  field: namespace
+  reason: >-
+    Published although neither vendored document declares it, because the
+    server requires it. Measured 2026-08-18 against a live 2.44.0 on both
+    editions: DELETE /stacks/name/{name}?endpointId=1 answers
+    400 "Invalid query parameter: namespace", and the same call with
+    &namespace=default answers 204. The check runs before the environment is
+    resolved -- supplying namespace and omitting endpointId moves the failure
+    on to a 404 -- so it is unconditionally required, not required only for
+    some Kubernetes branch. Without this field the action could not send the
+    parameter at all, and every call it could make failed: the generated
+    client's own StackDeleteKubernetesByNameParams carries only External and
+    EndpointId, both derived from the same document. See
+    docs/api-divergences.md §3.9.
+  added: 2026-08-18
