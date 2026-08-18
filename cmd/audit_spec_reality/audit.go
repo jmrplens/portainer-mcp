@@ -202,7 +202,14 @@ func auditLeg(ctx context.Context, warnings io.Writer, legName, baseURL string, 
 	// command's safety argument rather than caution for its own sake.
 	for i := range result.WrongVerb {
 		w := &result.WrongVerb[i]
-		if ops[w.OperationID].Public {
+		// Fail closed on a lookup miss. The key is present by construction —
+		// every WrongVerb entry came out of ops — but the cost of that
+		// invariant quietly breaking is sweeping five verbs at a route with
+		// no credential check, which is precisely what verbsServing's doc
+		// comment forbids. Not finding the operation is a reason to skip the
+		// sweep, never a reason to assume it is safe.
+		op, known := ops[w.OperationID]
+		if !known || op.Public {
 			continue
 		}
 		served, err := verbsServing(ctx, client, timeout, baseURL, resolvePath(w.Path), w.Method)
