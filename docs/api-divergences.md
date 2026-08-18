@@ -1185,6 +1185,44 @@ Three facts a caller meets and neither specification mentions:
   credentials"`. Worth recording because an Azure registration looks, from
   the document, like the cheapest environment type to create in a test.
 
+### 5.3 `endpointGroupResponse.Policies` is declared required, and Community omits the key entirely
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-18 (wave 2, `endpoint_groups`); independently reproduced
+twice against the same estate.
+
+`components.schemas.endpointgroups.endpointGroupResponse` — the response
+type of both `GET /endpoint_groups` and `GET /endpoint_groups/{id}` —
+declares `Policies` a **required** property (`"required": ["Description",
+"Id", "Name", "Policies"]`, read directly from
+`api/specs/ee-2.44.0.json`). Measured against the built-in "Unassigned"
+group on both editions:
+
+| Edition | `GET /endpoint_groups` element keys |
+|---|---|
+| Community | `Description, Id, Name, Total, TypeInfo` |
+| Business | `Description, Id, Name, Policies, Total, TypeInfo` |
+
+Community does not send `Policies` as `null` or `[]` — the key is **absent**
+from the JSON object outright, on both the list and the single-group route.
+Business sends `"Policies":[]`, honouring the schema's own `required` array.
+This is the same class of asymmetry as §5's four lossy schemas above, found
+by probing rather than by the schema diff those four were found from: the
+`required` array is identical text in both vendored documents (the schema
+itself is shared), so nothing in either document predicts that one edition
+would honour it and the other silently would not.
+
+**Why this does not touch this domain's code.** Every `endpoint_groups`
+Input struct is built from a request body or a path/query parameter, never
+from a response — `endpoint_groups.list`'s handler returns `resp.JSON200`
+unmodified, whatever shape that happens to be, and the MCP transport encodes
+it as JSON same as any other value. A Community caller reading the list
+simply sees no `Policies` field for any group; nothing decodes the response
+into a Go struct that would need the field to exist. Recorded here because a
+later domain reading `endpointgroups.endpointGroupResponse` — or a
+contributor relying on the schema's own `required` array to mean what it
+says — could not otherwise learn that Community does not honour it.
+
 ## 6. Defects in the vendored document itself
 
 **Evidence: vendored spec**, re-verified 2026-08-03.

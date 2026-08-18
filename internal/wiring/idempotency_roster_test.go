@@ -31,6 +31,8 @@ import (
 // set of actions claiming both cannot grow without someone saying so here.
 var destructiveAndIdempotent = map[string]string{
 	"custom_templates.delete":          "deleting an absent template leaves the same end state",
+	"endpoint_groups.delete":           "deleting an absent group leaves the same end state",
+	"endpoint_groups.delete_endpoint":  "removing an environment already out of the group leaves the same end state",
 	"endpoints.association_delete":     "the request names one environment and the end state it converges on is \"this environment has no edge association\"; a second call finds nothing left to detach. Destructive because the first call is not reversible from this catalog — the agent's key stops working and the agent must be enrolled and trusted again",
 	"endpoints.delete":                 "deleting an absent environment leaves the same end state",
 	"registries.delete":                "deleting an absent registry leaves the same end state",

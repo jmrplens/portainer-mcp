@@ -46,6 +46,7 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
+	"github.com/jmrplens/portainer-mcp/internal/tools/endpoint_groups"
 	"github.com/jmrplens/portainer-mcp/internal/tools/endpoints"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
 	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
@@ -132,6 +133,7 @@ func allSpecs() []toolutil.ActionSpec {
 	specs = append(specs, custom_templates.Specs()...)
 	specs = append(specs, endpoints.Specs()...)
 	specs = append(specs, stacks.Specs()...)
+	specs = append(specs, endpoint_groups.Specs()...)
 	return specs
 }
 
