@@ -1087,6 +1087,104 @@ which is harmless when decoding.
 
 ---
 
+### 5.1 `endpointSettingsUpdate`'s ten security settings: each edition silently ignores the other's shape
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition alike, 2026-08-18 (wave 1, `endpoints`).
+
+This is the "shared schemas that lose Community fields under the Business
+shape" row above, measured on the worst of the four. `PUT
+/endpoints/{id}/settings` takes ten per-environment security settings —
+`allowBindMountsForRegularUsers`, `allowPrivilegedModeForRegularUsers`,
+`enableHostManagementFeatures` and seven siblings. Community declares all ten
+as **top-level body properties**; Business nests the identical ten under a
+`securitySettings` object.
+
+The editions do not merely differ in what they accept. Each **silently
+ignores** the other's shape:
+
+| Server | Body sent | Answer | Effect |
+|---|---|---|---|
+| Community | flat top-level fields | `200` | applied |
+| Community | nested `securitySettings` | `200` | **ignored** |
+| Business | nested `securitySettings` | `200` | applied |
+| Business | flat top-level fields | `200` | **ignored** |
+| either | both shapes at once | `200` | that edition's own shape wins |
+
+The ignored case answers `200` and echoes the environment back with the
+settings unchanged, so it is invisible from the response: a caller asking to
+forbid privileged containers on a Community server is told the call
+succeeded, and nothing was forbidden.
+
+**Why it mattered here.** The catalog is generated from the Business document
+alone, so the generated handler sends the nested shape. Against a Community
+server, every `endpoints.settings_update` call would have been a silent
+no-op on precisely the fields the action exists to change — a security
+setting reported as applied and not applied. The per-field edition gate could
+not have helped: `edition:"EE"` marks a field Business-only, and there is no
+tag that says "Community spells this differently".
+
+**Fix.** `endpointSettingsUpdate` is hand-written
+(`internal/tools/endpoints/handlers.go`) and sends **both** shapes on every
+call, which the last row above makes unambiguous rather than a gamble — each
+server takes its own and discards the other, so the two copies cannot
+disagree in effect. The published Input keeps one field, `securitySettings`,
+deliberately **not** tagged `edition:"EE"` so a Community catalog can reach
+it at all.
+
+Pinned by `TestUnit_EndpointSettingsUpdate_SendsBothEditionShapes`
+(the body carries both spellings) and, end to end,
+`TestEndpoints_SettingsUpdate_AppliesOnBothEditions`, which reads the setting
+back raw on each leg. Reverting the handler to send only the Business shape
+was confirmed to fail the latter on all three Community surfaces while
+Business stayed green — the asymmetry, reproduced.
+
+### 5.2 Measured behaviours of the `endpoints` routes that neither document records
+
+**Evidence: probed live** against Portainer 2.44.0, 2026-08-18 (wave 1,
+`endpoints`).
+
+Three facts a caller meets and neither specification mentions:
+
+- **`GET /endpoints/{id}/dockerhub/{registryId}` refuses every environment
+  type this estate provisions.** Type 1 (local Docker), type 2 (agent) and
+  type 7 (edge) all answer `400 "Invalid environment type"`, on both
+  editions, including with the documented `registryId` sentinel `0`. The
+  specification records no environment-type restriction at all. Which types
+  the route *does* serve was not established, so it is stated as measured
+  rather than inferred; `test/e2e/suite/endpoints_test.go` asserts the call
+  is well-formed and reaches Portainer, and accepts this refusal.
+
+- **The first inspection of an edge environment with no connected agent
+  blocks for about 20 seconds.** `GET /endpoints/{id}` on a freshly
+  registered edge environment answers after ~20s; every later read of the
+  same environment returns in under 5ms, and
+  `GET /endpoints/{id}?excludeSnapshot=true` returns in under 1ms even the
+  first time. Portainer attempts one snapshot of a host that will never
+  answer, with its own timeout, and caches the outcome. `GET /endpoints` (the
+  list) is unaffected.
+
+  **The attempts serialise globally, and that is the part that bites.** The
+  cost is per *environment*, not per call, and a request touching an
+  environment whose attempt has already completed can still queue behind an
+  attempt belonging to a different one. Three edge environments registered
+  concurrently therefore put ~40s of somebody else's waiting in front of the
+  third caller — inside `portainer.DefaultCallTimeout` (60s) on a developer
+  machine and outside it on a slower CI runner, where a raw read of a
+  perfectly healthy environment failed with "context deadline exceeded".
+  `?excludeSnapshot=true` does not rescue that case: it skips the reader's
+  *own* attempt, not the queue in front of it. Registering such environments
+  one at a time is what bounds any single call's wait to one attempt, which
+  is why `TestEndpoints_EdgeActions_OnAnEnvironmentThisTestOwns` runs its
+  surfaces serially. `endpoints.inspect`'s own narrative tells a model to
+  pass `excludeSnapshot`.
+
+- **`POST /endpoints` with `EndpointCreationType=3` authenticates against
+  Azure during the call.** It is not merely storing credentials: invalid ones
+  answer `500 "Unable to authenticate against Azure: Invalid Azure
+  credentials"`. Worth recording because an Azure registration looks, from
+  the document, like the cheapest environment type to create in a test.
+
 ## 6. Defects in the vendored document itself
 
 **Evidence: vendored spec**, re-verified 2026-08-03.
@@ -1108,15 +1206,52 @@ an audit key from. They are therefore invisible to coverage figures as well
 as to the reality audit, and are the reason the probed totals are 251 and
 441 rather than 265 and 442.
 
-### 6.3 Four identifiers declared `integer` that Portainer never treats as a number
+**Evidence: vendored spec**, over all 38 Community and 38 Business
+specifications in `api/specs/history`; measured 2026-08-18 (wave 1,
+`endpoints`).
+
+The omission is standing, not a transient publishing slip: not one of the 38
+vendored Community specifications names
+`POST /endpoints/{id}/docker/v2/browse/put`, and the same holds for the other
+13. It is also asymmetric — 13 of Community's 14 ARE named by the Business
+document, which describes the identical method and path.
+
+That asymmetry had a consequence beyond coverage arithmetic, found when the
+`endpoints` domain tried to declare `endpoints.docker_browse_put`.
+`internal/apiversion`'s `operationIDs` index is keyed by operationId and is
+what `internal/tools/actioncatalog` resolves an action's edition through, so
+an operation Community never names reads as *Business-exclusive* — and
+`actioncatalog.Build` refuses a correct `Edition: edition.CE` declaration
+outright, naming the operationId. The route is served by Community: that same
+generated file's own `spans` table, derived from the Community documents'
+paths rather than their names, records
+`POST /endpoints/{id}/docker/v2/browse/put` on the Community channel from
+2.27.9 onward.
+
+**Fixed at the source rather than per-domain.** `cmd/gen_applicability` now
+borrows an operationId from the edition that publishes it, for any
+`(method, path)` the borrowing edition's own `spans` table already proves it
+serves — `borrowIDsAcrossEditions`, which reports every borrow on stderr.
+Thirteen entries were added to `operationIDs[CE]`; `spans` is untouched, and
+the vendored specifications are not modified, so `make check-spec` still
+compares them against a fresh fetch byte for byte. The four domains this
+un-blocks in advance — `endpoint_groups`, `edge_agent`, `webhooks`,
+`websocket` — are not yet written, so nothing else changed today.
+
+The one operation this cannot help is `GET /endpoint_groups/{id}`, which
+*neither* edition names: there is no name to borrow, and it stays absent from
+both indexes and from both coverage totals.
+
+### 6.3 Five identifiers declared `integer` that Portainer never treats as a number
 
 **Evidence: vendored spec** for the declaration; **diagnosed** for what Portainer actually does with
 each value, from the shape of the identifier itself and Docker's/Docker Swarm's own ID conventions;
 recorded 2026-08-04 (P3.3 task 7).
 
-Four path parameters across three `docker`-tagged operations and one endpoint-scoped one declare
-`"type": "integer"` in the vendored Business Edition specification, yet the identifier each one
-names is never actually a number:
+Five path parameters declare `"type": "integer"` in the vendored Business Edition specification,
+yet the identifier each one names is never actually a number. Four were diagnosed from the shape of
+the identifier itself in 2026-08-04; the fifth was **measured against a live server** in 2026-08-18
+and is described below the table:
 
 | Operation ID | Route | Parameter | Real shape |
 |---|---|---|---|
@@ -1124,6 +1259,7 @@ names is never actually a number:
 | `containerImageStatus` | `GET /docker/{environmentId}/containers/{containerId}/image_status` | `containerId` | same |
 | `snapshotContainerInspect` | `GET /docker/{environmentId}/snapshot/containers/{containerId}` | `containerId` | same |
 | `ServiceImageStatus` | `GET /docker/{environmentId}/services/{serviceId}/image_status` | `serviceId` | Docker Swarm's own alphanumeric service ID (e.g. `9mnpnzenvg8p8tdbtq4wvbkcz`) |
+| `namespacesAccessUpdate` | `PUT /endpoints/{id}/pools/{rpn}/access` | `rpn` | the Kubernetes namespace's own name (e.g. `default`) |
 
 Left as generated, all four actions were uncallable: `cmd/gen_action_inputs` rendered each field as
 Go `int`, publishing JSON Schema `"type": "integer"`, and `toolutil.ActionSpec.ValidateInput` (the
@@ -1147,6 +1283,40 @@ either. Whoever scaffolds `docker`/`endpoints` must hand-write these four handle
 four existing pilot actions (`EcrDeleteTags`, `RegistryConfigure`, `RepositoryTagsDelete`,
 `SystemUpgrade`) already bypass generation for their own reasons — building the HTTP request directly
 with the real string identifier rather than going through the generated client's typed wrapper.
+
+**All four have now landed, and the split was three/one rather than four in one wave.** The `docker`
+domain hand-wrote `dockerContainerGpusInspect`, `containerImageStatus` and `ServiceImageStatus`
+(`internal/tools/docker/handlers.go`); `snapshotContainerInspect` arrived a wave later, in
+`endpoints` (`internal/tools/endpoints/handlers.go`), because it is tagged
+`["endpoints", "docker"]` and `cmd/gen_action_inputs` routes an operation by `tags[0]`. Two of its
+neighbours travel with it for the same reason — `snapshotInspect` and `snapshotContainersList` are
+also dual-tagged and also declared in `endpoints`. A reader looking for any of the three in the
+`docker` domain will not find them there, and nothing in the tag itself says so.
+
+**The fifth row is the only one confirmed by the server naming the defect itself**, and the only
+one found by running the action rather than reading the document. `rpn` is Portainer's internal
+name for a resource pool, which is what its interface calls a namespace. Measured 2026-08-18
+against a live Business Edition 2.44.0 with the Kubernetes leg up (`make e2e-k8s-up`):
+
+| Request | Answer |
+|---|---|
+| `PUT /endpoints/1/pools/default/access` | `204` |
+| `PUT /endpoints/1/pools/portainer/access` | `204` |
+| `PUT /endpoints/1/pools/1/access` | error — ``namespaces "1" not found`` |
+
+Two things about how it was found are worth carrying forward. First, **neither standing audit could
+have caught it**: `audit_spec_drift` compares the catalog against the same document that is wrong,
+and `audit_spec_reality` only asks whether a route exists. Second, **the domain's own negative test
+passed against the broken parameter type** — `endpoints.namespaces_access_update` was covered by a
+test asserting a Docker environment refuses it, and a Docker environment refuses it whatever the
+`rpn` is. Negative coverage of an action that needs infrastructure the estate lacks proves the
+action is refused; it does not begin to prove the action works. Bringing the Kubernetes leg up is
+what turned an untested action into a measured defect.
+
+Also worth stating, because it was written down wrongly first: this catalog's own
+`ParameterGuidance` for `rpn` initially told a model the value was "a number rather than the
+namespace's name", transcribed in good faith from the specification. Prose derived from a document
+inherits the document's defects.
 
 **The cheat this is written down to forbid.** `docker.service_image_status`'s `serviceId` can be made
 to look correct without actually being correct: label a probe container (or a Swarm service, in the
@@ -1435,6 +1605,85 @@ makes the unit test report
 
 ---
 
+### 6.8 `PUT /endpoints/{id}/association` is documented with a verb the server does not serve
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition alike, 2026-08-18 (wave 1, `endpoints`).
+
+Both vendored documents declare exactly one operation on
+`/endpoints/{id}/association`, `EndpointAssociationDelete`, under `put`. The
+server registers that path for `DELETE` only. Probing every verb against a
+freshly-registered edge environment on Business Edition:
+
+| Verb | Answer |
+|---|---|
+| `GET`, `POST`, `PUT`, `PATCH` | `405 Method Not Allowed` |
+| `DELETE` | served (`200`, answers with the environment) |
+
+Community Edition answers `405` to `PUT` on the same route, and `400` to
+`DELETE` against a Docker environment — a semantic refusal from the handler,
+which is itself evidence that `DELETE` is the verb that routes.
+
+Everything except the document agrees on `DELETE`: the operationId ends
+`Delete`, the operation is destructive, and Portainer's own interface calls
+it disassociating.
+
+**Consequence.** `oapi-codegen` emitted
+`EndpointAssociationDeleteWithResponse` issuing `http.MethodPut`, so the
+action was uncallable as generated — every call would have answered
+`405`. `internal/tools/endpoints/handlers.go` hand-writes it to issue
+`DELETE`, decodes the environment the route answers with, and passes it
+through `redactEndpointAssociationDelete` (the response carries the edge key
+the call has just invalidated, plus the usual Azure and TLS material).
+
+**Neither standing audit could have caught this, by construction**, and that
+is the part worth carrying forward. `cmd/audit_spec_drift` compares declared
+parameter shapes against the document and never issues a request.
+`cmd/audit_spec_reality` does issue one, but classifies a route as absent
+only when the server answers Go's literal `404 page not found` — see
+`isRouteAbsent` in `cmd/audit_spec_reality/probe.go`. A `405` means the path
+*is* registered, merely not for that verb, so the probe reads it as served
+and the operation never appears in the divergence list. `make
+audit-spec-reality` reported 21 divergences on the run that found this, none
+of them in `endpoints`.
+
+A wrong verb is therefore visible only by calling the action end to end,
+which is what `test/e2e/suite/endpoints_test.go` does. Whoever scaffolds a
+future domain should assume the same class of defect can exist there and is
+not covered by either gate. Widening `audit_spec_reality` to treat `405` as
+a divergence is the obvious follow-up and was not done here: it needs a
+verb-by-verb probe of every documented path, which is a different shape of
+audit from the one that command performs today.
+
+### 6.9 `GET /docker/{environmentId}/snapshot/containers` answers an array, declared as one object
+
+**Evidence: probed live** against Portainer 2.44.0 Business Edition,
+2026-08-18 (wave 1, `endpoints`).
+
+The vendored Business document declares this route's `200` response as a
+single `portainer.DockerContainerSnapshot`
+(`"schema": {"$ref": "#/components/schemas/portainer.DockerContainerSnapshot"}`).
+The server answers a top-level JSON **array** of container snapshots, whose
+elements carry `Id`, `Names`, `Image`, `Labels` and the rest.
+
+`oapi-codegen` typed `SnapshotContainersListResponse.JSON200` as
+`*PortainerDockerContainerSnapshot` accordingly, so the generated handler
+failed on every call, on every input, while decoding:
+
+```text
+json: cannot unmarshal array into Go value of type
+portainerapi.PortainerDockerContainerSnapshot
+```
+
+`internal/tools/endpoints/handlers.go` hand-writes the handler, building the
+request directly and decoding the array.
+
+Like §6.8, this is invisible to both standing audits: `audit_spec_drift`
+reads parameter shapes and not response shapes, and `audit_spec_reality`
+only asks whether a route exists. Unlike §6.8 it is not even a verb
+question — the route is served, answers `200`, and simply sends a different
+shape from the one documented. Only decoding the answer finds it.
+
 ## 7. Adjacent constraint, not an API divergence
 
 Worth knowing when choosing parameter types for a new domain, though it is a
@@ -1633,7 +1882,28 @@ separately-reviewable change (it would need to walk the schema tree and the
 Go type in lockstep, handling a pointer, a slice-of-struct and a
 map-value-of-struct the way `typeOf` itself does), and none of wave 1's
 five domains (`endpoints`, `stacks`, `custom_templates`, `docker`,
-`templates`) is affected. Whichever wave scaffolds `gitops`, `kubernetes`,
+`templates`) is affected.
+
+**Re-measured for `endpoints` when that domain landed, 2026-08-18, because a
+working note had claimed the opposite.** The claim under test was that
+`EndpointUpdate` carries three Business-only fields (`enableNodeShell`,
+`restrictSecrets`, `restrictStandardUserIngressW`) under a `Kubernetes`
+object present in both editions and therefore ungated. It does not. Two of
+those three field names appear nowhere in either vendored document, and
+`restrictSecrets` exists only on `podsecurity.PodSecurityRule`, which
+`EndpointUpdate`'s payload does not reach. Resolving every `endpoints`
+operation shared by both editions and walking each request body in lockstep —
+reporting any Business-only property whose every ancestor is present in
+Community — returns **zero** fields across the whole domain. The three nested
+structs in the generated `internal/tools/endpoints/inputs.go` that do carry
+`edition:"EE"` fields (`ChangeWindow`, `DeploymentOptions`,
+`SecuritySettings`, all under `EndpointSettingsUpdate`) each hang off a
+top-level field that is itself gated, so their tags are effective rather than
+inert.
+
+The claim above therefore stands as written, and the caveat about it being a
+floor stands too: this is one domain re-measured directly, not the whole
+catalog. Whichever wave scaffolds `gitops`, `kubernetes`,
 `ldap` or `users` must either implement nested pruning first or hand-verify
 every nested `edition:"EE"` tag that domain's generated inputs carry is
 subsumed by an already-gated ancestor field, the same way this table was

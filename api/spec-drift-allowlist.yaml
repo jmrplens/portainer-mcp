@@ -259,3 +259,90 @@
     EndpointId, both derived from the same document. See
     docs/api-divergences.md §3.9.
   added: 2026-08-18
+
+# The five entries below arrived with wave 1's endpoints domain. Four are
+# field-level "description" entries of the kind CustomTemplateCreateFile's
+# three above already are — a multipart format:binary field whose vendored
+# description says "file" where what actually crosses the tool boundary is
+# the file's content. The fifth is a "type" entry of the kind the three
+# docker ones at the top of this file are.
+
+- operation_id: EndpointCreate
+  field: tlsCACertFile
+  reason: >-
+    The vendored description, "TLS CA certificate file", names a file, and a
+    model reading it sends a path. It cannot: the specification types this
+    field "string" with format "binary", a model has no way to name a path
+    on the filesystem this process runs on, and the hand-written handler
+    writes whatever it is given as the multipart part's own bytes. Published
+    as "Content of the TLS CA certificate, in PEM form" so the caller sends
+    the certificate rather than a path to one — the identical decision, on
+    the identical shape, as the CustomTemplateCreateFile.file entry above.
+  added: 2026-08-18
+
+- operation_id: EndpointCreate
+  field: tlsCertFile
+  reason: >-
+    Identical to tlsCACertFile above, on the client certificate rather than
+    the CA certificate. Listed separately because this allow-list keys on
+    (operation_id, field) and one entry may never excuse two fields.
+  added: 2026-08-18
+
+- operation_id: EndpointCreate
+  field: tlsKeyFile
+  reason: >-
+    Identical to tlsCACertFile above, on the client key. Worth stating once
+    for all three: registering an agent environment through endpoints.create
+    is the one place this catalog carries private key material, so a
+    description that leaves a caller guessing between "a path" and "the key"
+    is the description most worth correcting in the domain.
+  added: 2026-08-18
+
+- operation_id: EndpointDockerBrowsePut
+  field: file
+  reason: >-
+    The vendored description is "The file to upload", on a field the
+    specification types "string" with format "binary". Published as "Content
+    of the file to upload" for the reason the EndpointCreate TLS entries
+    above give: the content is what crosses the tool boundary, and a
+    description naming a file steers a caller into sending a path this
+    catalog can neither read nor forward.
+  added: 2026-08-18
+
+- operation_id: SnapshotContainerInspect
+  field: containerId
+  reason: >-
+    The same defect as the three docker entries at the top of this file, on
+    the fourth and last of the operations docs/api-divergences.md §6.3
+    measured: the vendored specification declares this path parameter
+    "integer" and Portainer reads it as an opaque Docker container ID — a
+    64-character hexadecimal string — which it passes straight through. This
+    operation is tagged ["endpoints", "docker"] and lands in the endpoints
+    domain because cmd/gen_action_inputs routes by tags[0], which is why it
+    arrives one wave after its three siblings. The generated client bakes the
+    wrong type into its signature (SnapshotContainerInspectWithResponse(ctx,
+    environmentId int, containerId int)), so the action is hand-written and
+    builds its own request; publishing "integer" instead would make it look
+    well-formed while being uncallable with any container ID Docker has ever
+    assigned.
+  added: 2026-08-18
+
+- operation_id: NamespacesAccessUpdate
+  field: rpn
+  reason: >-
+    The fifth instance of the defect the three docker entries at the top of
+    this file and SnapshotContainerInspect.containerId record, and the first
+    found by running an action rather than reading a document. The vendored
+    specification declares this path parameter "integer"; Portainer resolves
+    the segment as the Kubernetes namespace's own NAME. Measured 2026-08-18
+    against a live Business Edition 2.44.0 with the Kubernetes leg up:
+    PUT /endpoints/1/pools/default/access and .../pools/portainer/access both
+    answer 204, while .../pools/1/access fails with the server naming the
+    cause itself — `namespaces "1" not found`. The generated client bakes the
+    same wrong type into its signature (NamespacesAccessUpdateWithResponse(
+    ctx, id int, rpn int, ...)), which is why the handler is hand-written.
+    The published description diverges for the same reason and under the same
+    entry: "Namespace identifier" invites exactly the numeric value the server
+    refuses, so it says what the value actually is. See
+    docs/api-divergences.md §6.3.
+  added: 2026-08-18

@@ -85,6 +85,10 @@ func run(args []string) error {
 	// operationIDs map below can be emitted from data gathered in this same
 	// pass over presence.
 	opIDsByEdition := map[string]map[string]operation{}
+	// edition -> every operation that edition documents in any version, kept
+	// so borrowIDsAcrossEditions below can tell "this edition serves the
+	// route but never named it" from "this edition does not serve it".
+	allByEdition := map[string]map[operation]bool{}
 	for _, ed := range sortedKeys(presence) {
 		versions := sortedKeys(presence[ed])
 		sort.Slice(versions, func(i, j int) bool { return less(versions[i], versions[j]) })
@@ -95,6 +99,7 @@ func run(args []string) error {
 				all[op] = true
 			}
 		}
+		allByEdition[ed] = all
 
 		// Resolve each operation's operationId from the newest spec version in
 		// which it carried a non-empty one: versions are visited oldest to
@@ -168,6 +173,11 @@ func run(args []string) error {
 	}
 	buf.WriteString("}\n")
 
+	borrowed, err := borrowIDsAcrossEditions(allByEdition, opIDsByEdition)
+	if err != nil {
+		return err
+	}
+
 	buf.WriteString("\n// operationIDs maps an operation's OpenAPI operationId to the operation it\n")
 	buf.WriteString("// identifies. oapi-codegen derives every generated Go method name from the\n")
 	buf.WriteString("// operationId, so this is the only machine-checkable link between a generated\n")
@@ -193,6 +203,11 @@ func run(args []string) error {
 		buf.WriteString("\t},\n")
 	}
 	buf.WriteString("}\n")
+
+	for _, b := range borrowed {
+		fmt.Fprintf(os.Stderr, "  borrowed id: %s\n", b)
+	}
+	fmt.Fprintf(os.Stderr, "%d operationId(s) borrowed across editions\n", len(borrowed))
 
 	for _, gap := range gaps {
 		fmt.Fprintf(os.Stderr, "  gap: %s\n", gap)
@@ -298,4 +313,89 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// borrowIDsAcrossEditions gives an operation the operationId the *other*
+// edition publishes for it, when this edition documents the same method and
+// path but names it nothing.
+//
+// Portainer's Community specification omits the operationId on fourteen of
+// its 265 operations, against one of Business's 442 — POST
+// /endpoints/{id}/docker/v2/browse/put, GET and POST /webhooks and its three
+// siblings, the four /websocket routes, POST /endpoint_groups, and two
+// edge_agent routes. Every one of them is a fully documented operation:
+// description, parameters, request body and responses are all there, and the
+// route is served. Only the name is missing, and it has been missing in all
+// thirty-eight vendored Community specifications, so this is a standing
+// defect in the document rather than something a spec refresh will fix.
+//
+// It matters because operationIDs is the only index keyed by the name
+// oapi-codegen gives a generated method, and internal/tools/actioncatalog
+// resolves an action's edition through it: an operation absent from
+// operationIDs[CE] reads as Business-exclusive, so a Community catalog would
+// drop an action a Community server answers, and actioncatalog.Build would
+// refuse a correct `Edition: edition.CE` declaration outright.
+//
+// The name is borrowed rather than invented, and only where this edition's
+// own spans table already proves the route exists here: the (method, path)
+// must be in this edition's operation set, unnamed by every one of this
+// edition's specs, and named by some other edition. Nothing is written for a
+// route an edition does not serve, and an edition that names an operation
+// itself is never overridden. The vendored specifications are not modified —
+// `make check-spec` still compares them against a fresh fetch, byte for byte.
+//
+// The one operation this cannot help is GET /endpoint_groups/{id}, which
+// neither edition names; there is no name to borrow, and it stays absent
+// from both indexes.
+func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsByEdition map[string]map[string]operation) ([]string, error) {
+	// operation -> the id some edition publishes for it.
+	named := map[operation]string{}
+	for _, ed := range sortedKeys(opIDsByEdition) {
+		for id, op := range opIDsByEdition[ed] {
+			named[op] = id
+		}
+	}
+
+	var borrowed []string
+	for _, ed := range sortedKeys(allByEdition) {
+		own := map[operation]bool{}
+		for _, op := range opIDsByEdition[ed] {
+			own[op] = true
+		}
+		ops := make([]operation, 0, len(allByEdition[ed]))
+		for op := range allByEdition[ed] {
+			ops = append(ops, op)
+		}
+		sort.Slice(ops, func(i, j int) bool {
+			if ops[i].Path != ops[j].Path {
+				return ops[i].Path < ops[j].Path
+			}
+			return ops[i].Method < ops[j].Method
+		})
+		for _, op := range ops {
+			if own[op] {
+				continue
+			}
+			id, ok := named[op]
+			if !ok {
+				continue
+			}
+			// Never overwrite a name this edition already resolves. Two
+			// operations sharing one operationId across editions cannot both
+			// be right, and silently taking the borrowed one would move an
+			// action's edition on the strength of a guess — the exact
+			// failure mode this whole index exists to make impossible. No
+			// vendored specification collides today; refusing rather than
+			// picking is what keeps that true when one does.
+			if existing, taken := opIDsByEdition[ed][id]; taken && existing != op {
+				return nil, fmt.Errorf(
+					"edition %s: operationId %q already resolves to %s %s, so it cannot be borrowed for %s %s; "+
+						"one of the two vendored documents names the same operation for two different routes",
+					ed, id, existing.Method, existing.Path, op.Method, op.Path)
+			}
+			opIDsByEdition[ed][id] = op
+			borrowed = append(borrowed, fmt.Sprintf("%s %s %s -> %s", ed, op.Method, op.Path, id))
+		}
+	}
+	return borrowed, nil
 }
