@@ -516,11 +516,12 @@ type customTemplateUpdateInputVariablesItem struct {
 // isGating fires on any ChangeDescription with a non-empty Before and,
 // unlike the $title/$description kinds, does not consult AfterOverridden.
 //
-// Note is required here and optional on both JSON creates. That too is what
-// the vendored specification says for this route, unmeasured against a live
-// server: nothing here was probed end to end, and where the JSON siblings'
-// prose reports measurements, this action's narrative deliberately reports
-// only what the document states.
+// Note is required here and optional on both JSON creates. That is what the
+// vendored specification says, and it was later measured wrong: the server
+// accepts the route with the Note part omitted (docs/api-divergences.md
+// §3.7). The shape is published verbatim all the same — relaxing it changes
+// this hand-written multipart handler's input and deserves its own change,
+// not a side effect of the wave that happened to measure it.
 type customTemplateCreateFileInput struct {
 	// Description Description of the template
 	Description string `json:"description" jsonschema:"Description of the template"`

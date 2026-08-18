@@ -28,8 +28,9 @@ import (
 // "File" part written without one reaches the server's own lookup as
 // nothing at all and the upload fails reporting the field missing. That is
 // the mechanical reason for the value; what Portainer does with the name
-// afterwards is unmeasured, because this route was never exercised against a
-// live server (its two JSON siblings were). ".yml" suits all three stack
+// afterwards was measured after this comment was first written: Portainer
+// ignores the value entirely (docs/api-divergences.md §2.5), so the constant
+// is safe and there is nothing for a caller to control. ".yml" suits all three stack
 // types this route accepts — a Swarm or Compose stack file and a Kubernetes
 // manifest alike.
 const uploadFilename = "template.yml"
@@ -49,7 +50,7 @@ const uploadFilename = "template.yml"
 // Everything else follows the generated handlers in actions.go exactly —
 // unmarshal the Input, call, toolutil.Check, redact — and deliberately so:
 // the shape being identical is what lets a reader check this one against its
-// eight neighbours. The redaction call is the part that must not drift.
+// seven generated neighbours. The redaction call is the part that must not drift.
 // redactCustomTemplateCreateFile is a real function this domain declares
 // (checkCredentialRedaction refuses to generate any handler for a
 // PortainereeCustomTemplate-returning operation without it), but nothing
@@ -171,6 +172,13 @@ const customTemplateListMaxBody = 4 << 20
 // be declared, but nothing mechanical forces a hand-written handler to
 // actually call it, and this response carries GitConfig for every git-backed
 // template in the list.
+// customTemplateListPath is the route customTemplateList builds by hand.
+// Named rather than inlined so TestUnit_CustomTemplateListPath_MatchesThe
+// VendoredSpecification can compare it against internal/apiversion's
+// specification-generated table instead of against another copy of the
+// same literal.
+const customTemplateListPath = "/custom_templates"
+
 func customTemplateList(ctx context.Context, c *portainer.Client, input json.RawMessage) (any, error) {
 	var params customTemplateListInput
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -184,7 +192,7 @@ func customTemplateList(ctx context.Context, c *portainer.Client, input json.Raw
 	if params.Edge != nil {
 		query.Set("edge", strconv.FormatBool(*params.Edge))
 	}
-	path := "/custom_templates"
+	path := customTemplateListPath
 	if encoded := query.Encode(); encoded != "" {
 		path += "?" + encoded
 	}

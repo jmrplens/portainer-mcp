@@ -18,8 +18,8 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
-// redactionGuards is one table entry per generated redaction wrapper in this
-// domain, consulted by TestUnit_RedactionGuards_RemoveEveryCredentialShapedField and
+// redactionGuards is one table entry per redaction wrapper in this domain —
+// including CustomTemplateList's, whose handler is hand-written — consulted by TestUnit_RedactionGuards_RemoveEveryCredentialShapedField and
 // TestUnit_RedactionGuards_HandlerRedactsCredentialShapedFields.
 var redactionGuards = []struct {
 	funcName    string

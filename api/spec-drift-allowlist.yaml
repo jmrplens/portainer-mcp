@@ -60,10 +60,11 @@
 # TitleOverridden/DescriptionOverridden's mechanism above does not apply to
 # them at all. See docs/api-divergences.md §6.3 for the full measurement.
 #
-# The six custom_templates entries after those three arrived with wave 1
-# stage B, in the same commit that registered the domain (a divergence
+# The seven custom_templates entries after those three arrived with wave 1
+# stage B. Six landed in the commit that registered the domain (a divergence
 # entry added before its domain is registered matches nothing and is
-# reported stale, which is itself a build error). They are two kinds:
+# reported stale, which is itself a build error); the seventh followed once
+# the estate was up and the enum below was measured. They are three kinds:
 #
 #   - three "requiredness" entries, where a live 2.44.0 was measured
 #     enforcing a required array different from the vendored one in both
@@ -80,6 +81,12 @@
 #     operation-level $title/$description kinds: it fires on any non-empty
 #     Before and does not consult AfterOverridden, so toolutil.WithNarrative
 #     buys them nothing and an entry here is the only instrument available.
+#   - one "enum" entry, where create/repository publishes a wider set of
+#     stack types than the vendored specification declares. The document
+#     gives that route {1,2} while its own field description advertises
+#     "3 - kubernetes" and both sibling routes accept 3; a live 2.44.0 was
+#     measured accepting 3 on both editions, so the narrower enum was the
+#     defect. See docs/api-divergences.md §6.5.
 
 - operation_id: DockerContainerGpusInspect
   field: containerId

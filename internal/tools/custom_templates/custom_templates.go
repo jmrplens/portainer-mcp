@@ -49,10 +49,10 @@
 // domains use, since all four reach the identical RepoConfig type.
 //
 // generatedSpecs lives in actions.go, written by `make scaffold-domain`:
-// eight ActionSpecs, each wrapped in toolutil.WithNarrative(…,
-// narrative(operationID)), and five of them calling one of the redaction
-// wrappers below. handWrittenSpecs, in this file, adds the ninth in the
-// same shape, over the handler in handlers.go and the shared multipart
+// seven ActionSpecs, each wrapped in toolutil.WithNarrative(…,
+// narrative(operationID)), and four of them calling one of the redaction
+// wrappers below. handWrittenSpecs, in this file, adds the other two —
+// create_file and list — in the same shape, over the handler in handlers.go and the shared multipart
 // writer in internal/portainer. That handler is what calls
 // redactCustomTemplateCreateFile: the wrapper was declared before it
 // existed, held live only by a throwaway reference in this function's
@@ -94,7 +94,7 @@ func Specs() []toolutil.ActionSpec {
 //
 // Declared with the vendored summary and description as its literal Title
 // and Description and then passed through toolutil.WithNarrative, exactly
-// like the eight in actions.go. The literals are what a regeneration would
+// like the seven in actions.go. The literals are what a regeneration would
 // write and what cmd/audit_spec_drift compares against; the narrative case
 // is what a model actually reads, and WithNarrative is what records the
 // difference as a deliberate override rather than as drift.
@@ -234,7 +234,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "CustomTemplateGitFetch":
 		return toolutil.ActionNarrative{
 			Title: "Overwrite a custom template from its git repository",
-			Description: "Pulls the stack file from a git-backed template's repository and REPLACES the template's stored content with what the remote holds now, discarding whatever was stored — including edits made through custom_templates.update. " +
+			Description: "Pulls the stack file from a git-backed template's repository and REPLACES the template's stored content with what the remote holds now, discarding whatever was stored. " +
 				"This is a write with no undo: Portainer keeps no previous version, and the request says nothing about what is being discarded. " +
 				"Both the action name and the specification's own description (\"Retrieve details about a template created from git repository method\") read like a query; they are wrong, which is why this action is flagged destructive. " +
 				"It answers with the new content only, as a single FileContent string (measured against 2.44.0). " +
@@ -244,7 +244,8 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "CustomTemplateUpdate":
 		return toolutil.ActionNarrative{
 			Title: "Replace a custom template's definition",
-			Description: "Replaces the whole definition of one custom template: every field sent is stored and every optional field omitted is cleared, so send the template's current values plus the change, not the change alone — read them first with custom_templates.inspect and custom_templates.file. " +
+			Description: "Replaces the whole definition of one custom template: every optional field omitted is cleared, so send the template's current values plus the change, not the change alone — read them first with custom_templates.inspect and custom_templates.file. " +
+				"One exception, measured rather than documented upstream: on a template created by custom_templates.create_repository the stack file is NOT stored. The route answers 200 and silently leaves the file at whatever the repository holds, so an edit to fileContent is reported as succeeding and is lost. To change a git-backed template's stack file, change it in the repository and pull it with custom_templates.git_fetch. " +
 				"title, description, fileContent and type are all required, so an update meaning to change only the title still rewrites the stack file body with whatever fileContent it sends. " +
 				"platform is optional here and required on the two create actions, and that difference is deliberate rather than an oversight: the create routes were measured rejecting a type 2 template without it (500 \"Invalid custom template platform\") and this route was not probed, so send platform for a Docker stack anyway — its \"Required for Docker stacks\" note applies here too. " +
 				"The inline repository fields are marked deprecated in favour of sourceId, but are the path measured working. " +

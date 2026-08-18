@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrplens/portainer-mcp/internal/apiversion"
 	"github.com/jmrplens/portainer-mcp/internal/config"
+	"github.com/jmrplens/portainer-mcp/internal/edition"
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 )
 
@@ -494,5 +496,36 @@ func TestUnit_CustomTemplateList_ServerErrorIsReported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Invalid Custom template type") {
 		t.Errorf("error = %v, want it to carry the server's own message", err)
+	}
+}
+
+// TestUnit_CustomTemplateListPath_MatchesTheVendoredSpecification pins the one
+// route this domain writes by hand against the route the vendored
+// specification declares for the same operation.
+//
+// customTemplateList bypasses the generated client — it has to, because the
+// client comma-joins the repeated `type` parameter Portainer requires (see
+// handlers.go and docs/api-divergences.md §6.7) — and a hand-built path is
+// the one thing `make gen-client` cannot keep honest. Regenerating against a
+// Portainer whose route moved would leave this handler pointing at the old
+// path, compile cleanly, pass every unit test that pins the same literal it
+// uses, and fail only against a live server. internal/apiversion's table is
+// generated from the specifications themselves, so comparing against it is
+// the cheapest thing that actually notices.
+func TestUnit_CustomTemplateListPath_MatchesTheVendoredSpecification(t *testing.T) {
+	for _, ed := range []edition.Edition{edition.CE, edition.EE} {
+		t.Run(string(ed), func(t *testing.T) {
+			op, ok := apiversion.ByOperationID(ed, "CustomTemplateList")
+			if !ok {
+				t.Fatalf("CustomTemplateList is not in the generated applicability table for %s", ed)
+			}
+			if op.Method != http.MethodGet {
+				t.Errorf("specification declares %s for CustomTemplateList, handler issues GET", op.Method)
+			}
+			if op.Path != customTemplateListPath {
+				t.Errorf("handler builds %q, specification declares %q: the hand-written path has drifted from the route it stands in for",
+					customTemplateListPath, op.Path)
+			}
+		})
 	}
 }
