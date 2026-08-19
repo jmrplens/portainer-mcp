@@ -252,9 +252,18 @@ mechanical but must land in the same commit as the domain, never a follow-up.
    domain packages by hand: `internal/wiring` (the real server), and each of
    `cmd/audit_1to1`, `cmd/audit_e2e_gaps` and `cmd/audit_discovery`'s own
    `allCatalogSpecs`/`allSpecs` functions. That is four places, no more —
-   there is no single registry yet, each of these currently lists domains by
-   hand, and a wave that forgets one gets a build that compiles and an audit
-   that silently ignores the new domain.
+   there is no single registry yet, and each of these currently lists domains
+   by hand.
+
+   Forgetting one is no longer silent, and this checklist said it was for
+   longer than it was true. `internal/wiring/registration_parity_test.go`
+   (wave 1) parses each of the three audits' own spec-collecting function and
+   compares the set of domains it names against `wiring.AllSpecs()`, failing
+   with both sets printed and naming the file that is out of step. It catches
+   the omission in either direction — a domain wired into the server but
+   missing from an audit, and a domain in an audit but missing from the
+   server. It does not remove the need to edit all four places; it removes
+   the possibility of finding out three waves later.
 
    `internal/wiring/server_test.go` is deliberately **not** a fifth place to
    edit: its meta-surface test derives its expected tool list from

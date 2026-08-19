@@ -644,20 +644,16 @@ PUT /api/stacks/3/git/redeploy?endpointId=1  {}   → 200   (no new commit; file
 against an implementation that fetches nothing at all. The same is true of
 both webhook routes, which answer `204` with no body either way.
 
-### 2.10 `GET /teams`'s two filters both return an empty list for an administrator
+### 2.10 `GET /teams`'s `onlyLedTeams` filter returns an empty list for an administrator
 
 **Evidence: probed live** against Portainer 2.44.0, Community and Business
-Edition, 2026-08-19 (wave 2 stage A, `teams`).
+Edition, 2026-08-19 (wave 2 stage A, `teams`); the non-administrator half
+measured in review round 1 the same day and independently reproduced on both
+editions before being written here.
 
-`GET /teams` declares two optional query parameters: `onlyLedTeams` ("Only
-list teams that the user is leader of") and `environmentId` ("Identifier of
-the environment(endpoint) that will be used to filter the authorized
-teams"). Both answer `200` with `[]` for an administrator, including for a
-team that administrator demonstrably leads.
-
-The measurement, run identically on both editions (CE `19000`, EE `19001`),
-with the administrator holding a `Role: 1` — team leader — membership in
-team 3:
+`GET /teams` declares `onlyLedTeams` — "Only list teams that the user is
+leader of". For an **administrator** it answers `200 []`, including for a
+team that administrator demonstrably leads:
 
 ```text
 POST /teams {"Name":"task4-led-ce","TeamLeaders":[1]}  -> 200 {"Id":3,...}
@@ -666,7 +662,6 @@ GET  /team_memberships   -> 200 [{"Id":3,"UserID":1,"TeamID":3,"Role":1}]
 GET  /teams              -> 200 [{"Id":3,...},{"Id":4,...}]
 GET  /teams?onlyLedTeams=true   -> 200 []
 GET  /teams?onlyLedTeams=false  -> 200 [{"Id":3,...},{"Id":4,...}]
-GET  /teams?environmentId=1     -> 200 []          (environment 1 exists)
 ```
 
 `onlyLedTeams=false` returns the full list, so the parameter is parsed and
@@ -675,18 +670,50 @@ with a JWT (`Authorization: Bearer`) instead of the `X-API-Key` the rest of
 this project uses, on both editions, with the same result, so it is not an
 artefact of the API-key authentication path either.
 
-Unexplained, and deliberately left in "measured, not diagnosed": the
-plausible reading is that the filter resolves the caller's led teams from
-something other than the membership table, and an administrator — who
-reaches every team by role rather than by membership — falls outside
-whatever that is. Nothing was read of Portainer's source to confirm it. Both
-filters are described as unreliable-for-an-administrator in `teams.list`'s
-own narrative, which tells a model to filter the unfiltered list itself.
+**It is the administrator that is special, not the resolution path.** A
+non-administrator leading a team gets that team back. Measured on both
+editions with a `Role: 2` user created for the probe and deleted after it:
 
-Not probed: whether either filter works for a non-administrator user. The
-estate provisions exactly one user (`admin`), and creating a second one to
-answer this is a `users` domain concern that wave 2 stage A does not yet
-own.
+```text
+POST /teams {"Name":"r1-envfilter-ce"}                  -> 200 {"Id":13,...}
+POST /teams {"Name":"r1-noaccess-ce"}                   -> 200 {"Id":14,...}
+POST /users {"Username":"r1probece","Role":2}           -> 200 {"Id":3,...}
+POST /team_memberships {"UserID":3,"TeamID":13,"Role":1}-> 200 {"Id":8,...}
+POST /team_memberships {"UserID":1,"TeamID":14,"Role":1}-> 200 {"Id":9,...}
+[jwt as user 3]   GET /teams?onlyLedTeams=true -> 200 [{"Id":13,"Name":"r1-envfilter-ce",...}]
+[apikey as admin] GET /teams?onlyLedTeams=true -> 200 []
+```
+
+Both callers hold a `Role: 1` membership — user 3 in team 13, the
+administrator in team 14 — and only the non-administrator's led team comes
+back. The membership table **is** what resolves the filter; an earlier
+revision of this entry hypothesised the opposite and was wrong.
+
+Nothing was read of Portainer's source, so no cause is asserted beyond that.
+`teams.list`'s own narrative states the administrator restriction and tells
+an administrator wanting their own led teams to read `team_memberships.list`
+and keep the entries whose `UserID` is theirs and whose `Role` is 1 — which
+works, because that list carries exactly those three fields.
+
+**`environmentId` is not part of this finding, and is not broken.** It is
+documented as filtering the *authorized* teams, and it does: a team appears
+under `environmentId=N` once it holds an access policy on environment N, and
+not before. An earlier revision of this entry recorded
+`environmentId=1 -> 200 []` as a second broken filter; the precondition it
+tested (the environment existing) was simply the wrong one. Measured on both
+editions:
+
+```text
+GET /teams                 -> 200 [{"Id":13,...},{"Id":14,...}]
+GET /teams?environmentId=1 -> 200 []
+PUT /endpoints/1 {"TeamAccessPolicies":{"13":{"RoleId":0}}} -> 200
+GET /teams?environmentId=1 -> 200 [{"Id":13,"Name":"r1-envfilter-ce",...}]
+GET /teams?environmentId=2 -> 200 []          (no policy on environment 2)
+```
+
+Team 14, which holds no policy anywhere, never appears. Recorded here only
+because the retraction is worth being explicit about: this file previously
+told a reader a working filter was unreliable.
 
 ---
 
@@ -1288,7 +1315,7 @@ contributor whose tooling normalises schema names by case and so treats the
 two editions' types as one, could not otherwise learn that Community's own,
 differently-cased schema declares no `Policies` property at all.
 
-### 5.4 The team model: a Business-only *field* on shared routes, and four behaviours neither document records
+### 5.4 The team model: one Business-only *field* on otherwise-shared routes, and three behaviours the documents underdetermine
 
 **Evidence: probed live** against Portainer 2.44.0, Community and Business
 Edition, 2026-08-19 (wave 2 stage A, `teams` / `team_memberships`);
@@ -1297,6 +1324,14 @@ Edition, 2026-08-19 (wave 2 stage A, `teams` / `team_memberships`);
 All ten team and team-membership routes are served by both editions —
 `cmd/audit_spec_reality` reports none of them divergent on either leg — so
 this domain pair's edition asymmetry is not a route, it is a single field.
+
+"Underdetermine" is meant precisely for the three behaviours after it, and
+is weaker than "neither document records" (which an earlier revision of this
+heading claimed): only the deletion cascade is genuinely unrecorded. The
+other two are each *consistent* with what the documents declare — they
+declare no `404` for the memberships route, and they do declare the `409`
+responses — while leaving unstated the thing a caller actually needs, which
+is what the server does in each case and what makes a request a duplicate.
 
 - **`DenyPortainerAccess` is Business-only, and Community accepts it and
   silently ignores it.** The Business document declares the property on

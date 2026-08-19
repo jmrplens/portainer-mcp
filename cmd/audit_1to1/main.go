@@ -9,7 +9,11 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 60 of 441 Business-Edition operations covered, plain run (what `make
+// With 104 of 442 Business-Edition and 82 of 252 Community-Edition
+// operations covered (wave 2 stage A's teams and team_memberships domains;
+// api/coverage-baseline.yaml is the committed record, and the figure here
+// goes stale by design between waves — treat this sentence as an order of
+// magnitude, never as the source of truth), plain run (what `make
 // audit-1to1` calls, and what a human asking "are we done" wants) fails
 // today and keeps failing for most of P3 — that is correct, not a bug to
 // work around.

@@ -60,7 +60,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "TeamMembershipList":
 		return toolutil.ActionNarrative{
 			Title:       "List every team membership",
-			Description: "Returns EVERY team membership on this Portainer server, across all teams — this is the server-wide list. For the memberships of one team, use team_memberships.list_for_team instead; the two names are close and this is the difference between them. Each entry is Id, UserID, TeamID and Role (1 team leader, 2 member), so this is also how a user's own team roles are discovered: filter by UserID. An administrator sees all of them; a team leader sees only the teams they lead.",
+			Description: "Returns EVERY team membership on this Portainer server, across all teams — this is the server-wide list. For the memberships of one team, use team_memberships.list_for_team instead; the two names are close and this is the difference between them. Each entry is Id, UserID, TeamID and Role (1 team leader, 2 member), so this is also how a user's own team roles are discovered: filter by UserID. An administrator sees all of them; a team leader sees only the memberships of the teams they lead — measured on both editions: a non-administrator leading one of two teams got back that team's membership alone, not the other team's.",
 		}
 	case "TeamMembershipCreate":
 		return toolutil.ActionNarrative{
@@ -80,7 +80,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "TeamMemberships":
 		return toolutil.ActionNarrative{
 			Title:       "List one team's memberships",
-			Description: "Returns the memberships of ONE team, given that team's id — not the server-wide list, which is team_memberships.list; the two names are close and this is the difference between them. Each entry is Id, UserID, TeamID and Role (1 team leader, 2 member), so this is how a team's roster is read: internal/tools/teams returns no membership at all, not even a count. An id no team has answers 200 with an empty array rather than 404 (measured on both editions), so an empty result here does NOT prove the team exists — use teams.inspect, which does answer 404, for that question.",
+			Description: "Returns the memberships of ONE team, given that team's id — not the server-wide list, which is team_memberships.list; the two names are close and this is the difference between them. Each entry is Id, UserID, TeamID and Role (1 team leader, 2 member), so this is how a team's roster is read: internal/tools/teams returns no membership at all, not even a count. An id no team has answers 200 with an empty array rather than 404 (measured on both editions), so an empty result here does NOT prove the team exists — use teams.inspect, which does answer 404, for that question. An empty result also does not mean access was refused: a team leader asking for a team they do not lead gets 403 \"Access denied to team\", not an empty list (measured on both editions).",
 		}
 	default:
 		return toolutil.ActionNarrative{}
