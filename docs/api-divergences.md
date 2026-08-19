@@ -2137,21 +2137,47 @@ question for a settled fact.
 8. **A Kubernetes pod that claims `nvidia.com/gpu` still cannot start one**
    (§10.3). Node capacity is reliable; a scheduled GPU workload through
    Kubernetes is not yet, and the root cause is not confirmed.
+9. **How many published body field names disagree with the property name
+   the vendored document declares is not known.** §9.6 enumerates five, but
+   they were found by searching for one shape only — a trailing capital `S`.
+   `bodyJSONTag` and `goFieldName` diverge wherever one special-cases an
+   initialism and the other does not, and no audit compares a published tag
+   against the raw specification property name, because `audit_spec_drift`
+   renders the specification side through the same `bodyJSONTag`. Until
+   something compares against the raw name, "five" is a floor, not a count.
+10. **Whether the seven domains written before wave 2 stage A describe the
+    catalog or the raw API in their narratives is unmeasured.** This project
+    measures the raw Portainer API but writes narratives about the catalog,
+    and the catalog's own `ValidateInput` can refuse a call the raw API
+    would have accepted (per-field edition pruning, an `EnumParams`
+    constraint, `additionalProperties: false`). A narrative can therefore be
+    a true statement about Portainer and a false statement about the action
+    a model can actually reach — §5.4 documents the raw behaviour that two
+    `teams` narratives quoted as if it were the catalog's. Three claims
+    across `teams`/`team_memberships` shipped that way and were corrected in
+    this stage (commit `3619869`), and three more of the same class were
+    corrected in `resource_controls` and `roles` (`de44649`). Every domain
+    carrying an `edition:"EE"` field or an `EnumParams` constraint is a
+    candidate; only
+    the five stage-A domains (`endpoint_groups`, `teams`,
+    `team_memberships`, `roles`, `resource_controls`) have been swept.
+    Tracked in `docs/open-follow-ups.md`.
 
 ---
 
 ## 9. Tooling/process caveats recorded permanently (not API divergences)
 
-Two findings from the freeze that retired the generated-code freshness check
-(P3.2). Neither is a Portainer API divergence — both are properties of this
-project's own tooling — but each was, until now, recorded only in a
-gitignored working document (`.superpowers/sdd/.../task-4-report.md`) whose
-own `.gitignore` excludes it entirely from the repository. A citation to that
-path from tracked source (`.github/workflows/ci.yml`,
-`internal/toolutil/narrative.go`) dangles the moment this branch merges: the
-file that citation points to does not exist in the clone anyone else has.
-Recorded here instead, permanently, alongside this file's other durable
-findings.
+This section opened with two findings from the freeze that retired the
+generated-code freshness check (P3.2), and has grown since as later waves
+found more of the same shape. None of them is a Portainer API divergence —
+every one is a property of this project's own tooling — but each was, when
+it was found, recorded only in a gitignored working document under
+`.superpowers/sdd/`, whose own `.gitignore` excludes it entirely from the
+repository. A citation to such a path from tracked source
+(`.github/workflows/ci.yml`, `internal/toolutil/narrative.go`) dangles the
+moment the branch that wrote it merges: the file that citation points to
+does not exist in the clone anyone else has. Recorded here instead,
+permanently, alongside this file's other durable findings.
 
 ### 9.1 The freshness check's replacement is proven equivalent on one real case, not universally
 
@@ -2476,6 +2502,77 @@ lockstep walk, over `toolutil.FieldEditions` and `actioncatalog.Build`
 rather than over these two constraint interfaces, and none of wave 1's
 domains is affected by it — so it was left alone here rather than folded
 into a change that is already two coupled defects wide.
+
+### 9.6 Five published body fields carry a capital `S` no caller would guess, and the audit that should catch it is blind to it
+
+**Evidence: probed live and diagnosed.** The refusal is asserted on every
+surface and every edition by
+`TestResourceControls_SubResourceIdsFieldName_IsRefusedUnlessSpelledAsPublished`
+(`test/e2e/suite/resource_controls_test.go`), so it is re-measured on every
+e2e run rather than resting on a transcript; the root cause below comes from
+running `splitWords`, `goFieldName` and `bodyJSONTag` over the real property
+names.
+
+The catalog publishes five body field names that no Portainer document
+spells that way, one capital letter off in each case:
+
+| Domain | Published wire name | What a caller writes |
+|---|---|---|
+| `endpoints` | `tagIdS` | `tagIds` |
+| `endpoints` | `endpointIdS` | `endpointIds` |
+| `endpoint_groups` | `tagIdS` (×2, create and update) | `tagIds` |
+| `resource_controls` | `subResourceIdS` | `subResourceIds` |
+
+This is not cosmetic. Every action's input schema is reflected from its
+`Input` struct with `additionalProperties: false`, and
+`toolutil.ActionSpec.ValidateInput` (called by `internal/tools/register.go`
+on every execution path, on all three surfaces) checks arguments against it.
+So the natural spelling is refused *by this project*, before any request is
+built:
+
+```
+resource_controls.create: validating root: unexpected additional properties ["subResourceIds"]
+```
+
+Portainer never sees the call and has nothing to say about it. Two of the
+five are already on `main`; the other three arrived with wave 2 stage A,
+which is when the class was noticed at all.
+
+**Root cause.** `cmd/gen_action_inputs/naming.go` derives the JSON tag from
+the specification's property name rather than carrying that name through
+verbatim, and its two derivations disagree. `splitWords` is correct: a
+fully-matched initialism run leaves the pluralising `s` as its own word, so
+`SubResourceIDs` splits as `["Sub" "Resource" "ID" "s"]`. `goFieldName`
+special-cases that lone `s` (`isPluralSuffixWord`) and produces
+`SubResourceIDs`. `bodyJSONTag` has no such branch — its loop is `title(w)`
+for every word after the first — so the `s` becomes `S`. The defect
+therefore fires only when the wire name spells the initialism in full:
+`TagIDs` renders as `tagIdS` and is wrong, `TagIds` renders as `tagIds` and
+is right. `internal/tools/resource_controls/resource_controls.go`'s package
+doc carries the full derivation, function by function.
+
+**Why no audit reports it.** `cmd/audit_spec_drift` compares the catalog's
+body field names against the specification's — but it renders the
+specification side through `internal/specdiff/naming.go`'s mirrored copy of
+the same `bodyJSONTag`. Both sides are mangled identically, so the
+comparison is clean. It is the blind spot wave 1 kept walking into in a new
+place: an audit that checks the catalog against something that is itself
+wrong reports agreement, not the error. The e2e suite is no help either — it
+writes the mangled name, because that is the name the schema accepts, so it
+proves the refusal is real without ever asking whether the published name
+should have been that one.
+
+**Why a one-domain fix is worse than none.** Renaming a single domain's
+field makes `audit_spec_drift` report one field added and one removed on an
+operation nobody touched (measured), which is the bogus-allow-list trap that
+audit's own doc comment warns about. The fix has to change `bodyJSONTag` in
+both `cmd/gen_action_inputs/naming.go` and `internal/specdiff/naming.go` in
+one commit — `TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation` pins the
+two copies to each other — and rename all five published fields in the same
+commit. The durable version of the fix is to stop deriving the tag at all
+and emit the specification's property name verbatim, which removes the whole
+class rather than this instance of it. Tracked in
+`docs/open-follow-ups.md`.
 
 ---
 

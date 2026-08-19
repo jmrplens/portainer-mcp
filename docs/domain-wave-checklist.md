@@ -356,9 +356,19 @@ must be green, and `make audit-e2e-gaps` should show every new action
 referenced (it is informational, not a gate, but a name it reports as
 unreferenced is a real gap in this step, not a tool defect).
 
+**Proving a guard by mutating it: mutate the domain's own files, not shared
+code.** A guard is only proven when it has been seen to fail, so mutating
+one and re-running is right. But the mutation runs against the live shared
+estate. In wave 2 stage A, `internal/tools/register.go` was mutated to prove
+one domain's guard; every domain shares that file, so the mutation disabled
+the check for all of them at once and three teams leaked into the live
+estate, to be deleted by hand afterwards. Prefer mutating the file the guard
+lives beside; if the proof genuinely needs shared code, revert it and check
+the estate immediately afterwards, before running anything else.
+
 ### Step 6 — Record divergences and move the ratchet, in the same commit
 
-1. Record what this wave's Steps 2-5 found, in whichever of two files it
+1. Record what this wave's Steps 2-5 found, in whichever of three files it
    belongs to. The division of labour is fixed, not a matter of taste:
 
    - **`docs/api-divergences.md` — committed, permanent, the destination.**
@@ -374,6 +384,13 @@ unreferenced is a real gap in this step, not a tool defect).
      contributor implementing a different domain later would need the fact
      and could not derive it themselves, it goes here, in this wave's own
      commit.
+   - **`docs/open-follow-ups.md` — committed, the work rather than the
+     fact.** A measurement that a later wave has to *act* on, rather than
+     merely know, gets an entry here naming the evidence and what closing it
+     requires, cross-referenced to its `docs/api-divergences.md` entry
+     rather than restating it. Delete the entry when the work lands. This
+     file exists because a stage's real findings had been living only in
+     gitignored working notes, where the point below applies to them.
    - **`plan/carry-forward.md` — gitignored, a working scratch pad, never a
      destination.** In-progress reasoning that is not yet settled enough to
      distil: raw probe transcripts, hypotheses still being tested, a

@@ -23,16 +23,25 @@ A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server 
 
 | | Covered | Total |
 |---|---|---|
-| Business Edition operations | **35** | 442 |
-| Community Edition operations | **27** | 252 |
+| Business Edition operations | **108** | 442 |
+| Community Edition operations | **86** | 252 |
+
+Every figure in that table is printed by `make audit-1to1`, which compares
+the catalog against the two vendored OpenAPI documents and reports
+`covered: N of Total` for each edition — the **Covered** column is that `N`,
+the **Total** its denominator. The same two covered counts are committed as
+the ratchet in
+[`api/coverage-baseline.yaml`](api/coverage-baseline.yaml), so coverage
+cannot fall without CI failing, and `make audit-1to1-ratchet` prints the
+current pair beside the committed one. Re-derive the table from either
+command rather than trusting it; a number in prose goes stale and a number a
+tool prints does not.
 
 The totals were 441 and 251 until 2026-08-18, when `cmd/audit_1to1` stopped
 skipping routes the vendored documents leave without an `operationId`; see
-[§6.2 of the divergence notes](docs/api-divergences.md). The **Covered**
-column is stale and understates the real figures — run `make audit-1to1` for
-the current ones.
+[§6.2 of the divergence notes](docs/api-divergences.md).
 
-Five domains are live: `system`, `tags`, `registries`, `docker` and `custom_templates` — 36 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
+Twelve domains are live: `system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks`, `endpoints`, `endpoint_groups`, `teams`, `team_memberships`, `roles` and `resource_controls` — 109 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
 
 There are no releases, no published container image and no pre-built binaries yet. Build from source.
 

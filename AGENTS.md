@@ -8,19 +8,22 @@ design specification are being built phase by phase.
 
 ## Current state
 
-Wave 1 of the action catalog is complete. Seven domains are declared —
-`system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks` and
-`endpoints` — for **88 actions**, covering 87 of Business Edition's 441
-operations and 66 of Community Edition's 251 (`api/coverage-baseline.yaml`
-is the ratchet, `make audit-1to1` the "are we done" report). All three tool
-surfaces (`dynamic`, `meta`, `individual`) are live and exercised end to end
-against a real estate.
+Wave 2 stage A — the access model — is complete. Twelve domains are declared
+— `system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks`,
+`endpoints`, `endpoint_groups`, `teams`, `team_memberships`, `roles` and
+`resource_controls` — for **109 actions**, covering 108 of Business
+Edition's 442 operations and 86 of Community Edition's 252
+(`api/coverage-baseline.yaml` is the ratchet, `make audit-1to1` the "are we
+done" report; take every figure from the tool, not from this paragraph). All
+three tool surfaces (`dynamic`, `meta`, `individual`) are live and exercised
+end to end against a real estate.
 
 A domain is scaffolded once from the vendored specification and owned as
 ordinary Go source from then on; nothing regenerates it. See
-`docs/domain-wave-checklist.md` for the procedure and
+`docs/domain-wave-checklist.md` for the procedure,
 `docs/api-divergences.md` for every recorded disagreement between Portainer
-and the documents that describe it.
+and the documents that describe it, and `docs/open-follow-ups.md` for the
+work this project already knows it owes.
 
 ## Build & run
 
