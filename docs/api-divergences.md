@@ -126,6 +126,13 @@ unnamed, the Business document 442 of which 1 is unnamed; unnamed operations
 are skipped because there is nothing to look up for them. Re-verified
 against the committed specs on 2026-08-03; the counts reconcile exactly.
 
+These two figures are `cmd/audit_spec_reality`'s own, and they still read 251
+and 441 deliberately. `cmd/audit_1to1` stopped skipping the nameless on
+2026-08-18 and now reads 252 and 442 (§6.2); this audit has not been changed
+with it, so the one route `internal/specnaming` names has never been probed
+against a live server by *this* command. That is a known remaining gap, not
+an inconsistency between the two numbers.
+
 ### 1.2 The full list, by domain
 
 **`kubernetes` tag — 7 operations, both editions**
@@ -636,6 +643,77 @@ PUT /api/stacks/3/git/redeploy?endpointId=1  {}   → 200   (no new commit; file
 — so a redeploy test against an unchanged repository passes identically
 against an implementation that fetches nothing at all. The same is true of
 both webhook routes, which answer `204` with no body either way.
+
+### 2.10 `GET /teams`'s `onlyLedTeams` filter returns an empty list for an administrator
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `teams`); the non-administrator half
+measured in review round 1 the same day and independently reproduced on both
+editions before being written here.
+
+`GET /teams` declares `onlyLedTeams` — "Only list teams that the user is
+leader of". For an **administrator** it answers `200 []`, including for a
+team that administrator demonstrably leads:
+
+```text
+POST /teams {"Name":"task4-led-ce","TeamLeaders":[1]}  -> 200 {"Id":3,...}
+POST /teams {"Name":"task4-unled-ce"}                  -> 200 {"Id":4,...}
+GET  /team_memberships   -> 200 [{"Id":3,"UserID":1,"TeamID":3,"Role":1}]
+GET  /teams              -> 200 [{"Id":3,...},{"Id":4,...}]
+GET  /teams?onlyLedTeams=true   -> 200 []
+GET  /teams?onlyLedTeams=false  -> 200 [{"Id":3,...},{"Id":4,...}]
+```
+
+`onlyLedTeams=false` returns the full list, so the parameter is parsed and
+acted on — this is not "the server ignores an unknown query key". Repeated
+with a JWT (`Authorization: Bearer`) instead of the `X-API-Key` the rest of
+this project uses, on both editions, with the same result, so it is not an
+artefact of the API-key authentication path either.
+
+**It is the administrator that is special, not the resolution path.** A
+non-administrator leading a team gets that team back. Measured on both
+editions with a `Role: 2` user created for the probe and deleted after it:
+
+```text
+POST /teams {"Name":"r1-envfilter-ce"}                  -> 200 {"Id":13,...}
+POST /teams {"Name":"r1-noaccess-ce"}                   -> 200 {"Id":14,...}
+POST /users {"Username":"r1probece","Role":2}           -> 200 {"Id":3,...}
+POST /team_memberships {"UserID":3,"TeamID":13,"Role":1}-> 200 {"Id":8,...}
+POST /team_memberships {"UserID":1,"TeamID":14,"Role":1}-> 200 {"Id":9,...}
+[jwt as user 3]   GET /teams?onlyLedTeams=true -> 200 [{"Id":13,"Name":"r1-envfilter-ce",...}]
+[apikey as admin] GET /teams?onlyLedTeams=true -> 200 []
+```
+
+Both callers hold a `Role: 1` membership — user 3 in team 13, the
+administrator in team 14 — and only the non-administrator's led team comes
+back. The membership table **is** what resolves the filter; an earlier
+revision of this entry hypothesised the opposite and was wrong.
+
+Nothing was read of Portainer's source, so no cause is asserted beyond that.
+`teams.list`'s own narrative states the administrator restriction and tells
+an administrator wanting their own led teams to read `team_memberships.list`
+and keep the entries whose `UserID` is theirs and whose `Role` is 1 — which
+works, because that list carries exactly those three fields.
+
+**`environmentId` is not part of this finding, and is not broken.** It is
+documented as filtering the *authorized* teams, and it does: a team appears
+under `environmentId=N` once it holds an access policy on environment N, and
+not before. An earlier revision of this entry recorded
+`environmentId=1 -> 200 []` as a second broken filter; the precondition it
+tested (the environment existing) was simply the wrong one. Measured on both
+editions:
+
+```text
+GET /teams                 -> 200 [{"Id":13,...},{"Id":14,...}]
+GET /teams?environmentId=1 -> 200 []
+PUT /endpoints/1 {"TeamAccessPolicies":{"13":{"RoleId":0}}} -> 200
+GET /teams?environmentId=1 -> 200 [{"Id":13,"Name":"r1-envfilter-ce",...}]
+GET /teams?environmentId=2 -> 200 []          (no policy on environment 2)
+```
+
+Team 14, which holds no policy anywhere, never appears. Recorded here only
+because the retraction is worth being explicit about: this file previously
+told a reader a working filter was unreliable.
 
 ---
 
@@ -1185,6 +1263,190 @@ Three facts a caller meets and neither specification mentions:
   credentials"`. Worth recording because an Azure registration looks, from
   the document, like the cheapest environment type to create in a test.
 
+### 5.3 `endpointGroupResponse.Policies` is declared required, and Community omits the key entirely
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-18 (wave 2, `endpoint_groups`); independently reproduced
+twice against the same estate.
+
+`components.schemas.endpointgroups.endpointGroupResponse` — the response
+type of both `GET /endpoint_groups` and `GET /endpoint_groups/{id}` —
+declares `Policies` a **required** property (`"required": ["Description",
+"Id", "Name", "Policies"]`, read directly from
+`api/specs/ee-2.44.0.json`). Measured against the built-in "Unassigned"
+group on both editions:
+
+| Edition | `GET /endpoint_groups` element keys |
+|---|---|
+| Community | `Description, Id, Name, Total, TypeInfo` |
+| Business | `Description, Id, Name, Policies, Total, TypeInfo` |
+
+Community does not send `Policies` as `null` or `[]` — the key is **absent**
+from the JSON object outright, on both the list and the single-group route.
+Business sends `"Policies":[]`, honouring the schema's own `required` array.
+
+Unlike §5's four lossy schemas above, this is not one shared schema Business
+extends and Community truncates: **the two documents declare two different
+schemas whose type names differ only in the case of their first letter.**
+Community's is `endpointgroups.EndpointGroupResponse` — capital `E` —
+`required: ["Description", "Id", "Name"]`, with no `Policies` property at
+all, declared or undeclared. Business's is
+`endpointgroups.endpointGroupResponse` — lowercase `e` — with `Policies`
+both declared and required (both read directly from their respective
+vendored documents). Community's own document predicts Community's
+behaviour exactly; there is no `required`-vs-actual disagreement *within*
+either document, only *between* the two documents' differently-cased,
+differently-shaped types for what the live API treats as one and the same
+response. This is plausibly why a name-keyed schema diff — the kind that
+already found the four lossy schemas above — never surfaced it: comparing
+schemas by exact name treats `EndpointGroupResponse` and
+`endpointGroupResponse` as two unrelated types, never as one shared schema
+differing between editions.
+
+**Why this does not touch this domain's code.** Every `endpoint_groups`
+Input struct is built from a request body or a path/query parameter, never
+from a response — `endpoint_groups.list`'s handler returns `resp.JSON200`
+unmodified, whatever shape that happens to be, and the MCP transport encodes
+it as JSON same as any other value. A Community caller reading the list
+simply sees no `Policies` field for any group; nothing decodes the response
+into a Go struct that would need the field to exist. Recorded here because a
+later domain reading `endpointgroups.endpointGroupResponse`, or a
+contributor whose tooling normalises schema names by case and so treats the
+two editions' types as one, could not otherwise learn that Community's own,
+differently-cased schema declares no `Policies` property at all.
+
+### 5.4 The team model: one Business-only *field* on otherwise-shared routes, and three behaviours the documents underdetermine
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `teams` / `team_memberships`);
+**vendored spec** for what each document declares.
+
+All ten team and team-membership routes are served by both editions —
+`cmd/audit_spec_reality` reports none of them divergent on either leg — so
+this domain pair's edition asymmetry is not a route, it is a single field.
+
+"Underdetermine" is meant precisely for the three behaviours after it, and
+is weaker than "neither document records" (which an earlier revision of this
+heading claimed): only the deletion cascade is genuinely unrecorded. The
+other two are each *consistent* with what the documents declare — they
+declare no `404` for the memberships route, and they do declare the `409`
+responses — while leaving unstated the thing a caller actually needs, which
+is what the server does in each case and what makes a request a duplicate.
+
+- **`DenyPortainerAccess` is Business-only, and Community accepts it and
+  silently ignores it.** The Business document declares the property on
+  `teams.teamCreatePayload` and `teams.teamUpdatePayload`; the Community
+  document declares neither. `portainer.Team` — the *response* schema —
+  declares it in both, its own description reading "(EE only)". Measured:
+
+  ```text
+  EE  PUT /teams/2 {"Name":"task4-renamed-ee","DenyPortainerAccess":true}
+      -> 200 {"Id":2,"Name":"task4-renamed-ee","DenyPortainerAccess":true}
+  CE  PUT /teams/2 {"Name":"task4-renamed-ce","DenyPortainerAccess":true}
+      -> 200 {"Id":2,"Name":"task4-renamed-ce","DenyPortainerAccess":false}
+  ```
+
+  Community answers `200`, applies the name, and leaves the flag `false`.
+  It does not reject the field, so a caller gets no signal that the half of
+  the request it cared about did nothing. The scaffolded Input structs are
+  built from the Business document, so the field is offered on both
+  editions with an `edition:"EE"` tag; `teams.create`'s and
+  `teams.update`'s narratives state what Community does with it.
+
+- **Deleting a team deletes that team's memberships with it.** Neither
+  document says what becomes of them, and the two readings — a cascade, or
+  rows left pointing at a team id that no longer resolves — are very
+  different things to tell a model. Measured on both editions:
+
+  ```text
+  POST   /teams {"Name":"task4-measure-ce"}            -> 200 {"Id":1,...}
+  POST   /team_memberships {"UserID":1,"TeamID":1,"Role":2}
+                                                       -> 200 {"Id":1,...}
+  GET    /team_memberships   -> 200 [{"Id":1,"UserID":1,"TeamID":1,"Role":2}]
+  DELETE /teams/1            -> 204
+  GET    /team_memberships   -> 200 []
+  GET    /teams/1/memberships-> 200 []
+  DELETE /team_memberships/1 -> 404 (bucket=team_membership, key=1)
+  ```
+
+  The membership is gone from the database, not merely unreachable: the
+  later delete of its own id answers `404` naming the bucket and key.
+
+- **`GET /teams/{id}/memberships` answers `200 []` for a team id that never
+  existed**, on both editions (`GET /teams/9999/memberships -> 200 []`),
+  while `GET /teams/9999` answers `404`. Consistent with the documents,
+  which declare no `404` for the memberships route — recorded because the
+  two routes look interchangeable as an existence check and are not.
+
+- **Both `POST /teams` and `POST /team_memberships` refuse a duplicate with
+  `409`.** A team name is effectively unique (`"A team with the same name
+  already exists"`), and a user may hold at most one membership per team
+  (`"Team membership already registered"`) regardless of the `Role` the
+  second attempt names — so promoting a member to leader is a `PUT` on the
+  existing membership, never a second `POST`. Both documents declare the
+  `409` response; neither says what makes a request a duplicate.
+
+  One related behaviour that *is* a team action creating a membership:
+  `POST /teams` with `TeamLeaders: [1]` leaves a `Role: 1` membership for
+  user 1 in the new team (measured on both editions). It is the only such
+  case, and only at creation time.
+
+### 5.5 `GET /roles` is served by both editions and answers an empty array on Community
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `roles`); **vendored spec** for what
+each document declares.
+
+Every other entry in this section is a *shape* asymmetry: an operation one
+document declares and the other does not, or a schema that loses fields
+under the Business shape. This one is neither. Both documents declare `GET
+/roles`, both servers serve it, both answer `200`, and
+`cmd/audit_spec_reality` reports it divergent on neither leg. The asymmetry
+is in the **answer**:
+
+```text
+EE  GET /roles -> 200, 6 roles
+      1 Environment Administrator   4 Read-only User
+      2 Helpdesk User               5 Operator
+      3 Standard User               6 Namespace Operator
+CE  GET /roles -> 200 []
+```
+
+Role-based access control is a Business Edition feature; a Community server
+holds no roles, so there is nothing to list. Nothing in this catalog prunes
+or gates the action per edition — `roles.list` is `Edition: edition.CE`, is
+published on all three tool surfaces on both legs, and the emptiness a
+Community caller sees is Portainer's own answer arriving unaltered. Measured
+through each of the three surfaces against both legs, not only with `curl`.
+
+It is recorded here because it is invisible to every mechanism this project
+already has. A route-existence audit sees the route on both editions and is
+right to. The coverage ratchet counts the operation as covered on Community
+and is also right to: the catalog serves the route there, and the call
+succeeds. A schema diff sees one shared schema. Only a caller sees the
+difference, and what a caller sees is an empty array with no explanation —
+indistinguishable, without this, from "the call failed", "you lack
+permission", or "someone deleted the roles".
+
+Two related facts, both measured, that decide how much this costs:
+
+- **Portainer does not validate `RoleId`.** On Business Edition, `PUT
+  /endpoint_groups/{id}` carrying `userAccessPolicies {"1":{"RoleId":99}}` —
+  an id no role has — answered `200` and stored `RoleId: 99` verbatim. So
+  `roles.list` is the only way to learn which identifiers are real, and a
+  wrong one is never refused; it simply grants an access level that resolves
+  to nothing.
+
+- **The two documents disagree about who may call it.** Community's declares
+  `**Access policy**: administrator`, Business's declares `**Access policy**:
+  authenticated`. Not probed — this estate has only its administrator — so
+  neither `roles.list`'s narrative nor this entry claims anything about a
+  non-administrator caller.
+
+`roles.list`'s narrative states the edition split and the unvalidated
+`RoleId` in the terms a caller meets. `api/coverage-baseline.yaml`'s own
+header records why the ratchet counts the Community leg as covered anyway.
+
 ## 6. Defects in the vendored document itself
 
 **Evidence: vendored spec**, re-verified 2026-08-03.
@@ -1200,11 +1462,12 @@ rule, with its test, when the `kubernetes` domain is implemented.
 ### 6.2 Operations with no `operationId`
 
 The Community document has 14 path-item operations with no `operationId`,
-the Business document 1. Every tool in `cmd/` that reads these documents
-skips them: there is no name to derive a client method, a catalog entry or
-an audit key from. They are therefore invisible to coverage figures as well
-as to the reality audit, and are the reason the probed totals are 251 and
-441 rather than 265 and 442.
+the Business document 1. There is no name to derive a client method, a
+catalog entry or an audit key from, so every tool in `cmd/` that reads these
+documents used to skip them outright — which is why the probed totals were
+251 and 441 rather than 265 and 442. Both halves of that have since been
+repaired; see "Named where a name exists" and "Counted, or named as
+uncounted" below.
 
 **Evidence: vendored spec**, over all 38 Community and 38 Business
 specifications in `api/specs/history`; measured 2026-08-18 (wave 1,
@@ -1238,9 +1501,96 @@ compares them against a fresh fetch byte for byte. The four domains this
 un-blocks in advance — `endpoint_groups`, `edge_agent`, `webhooks`,
 `websocket` — are not yet written, so nothing else changed today.
 
-The one operation this cannot help is `GET /endpoint_groups/{id}`, which
-*neither* edition names: there is no name to borrow, and it stays absent from
-both indexes and from both coverage totals.
+The one operation borrowing cannot help is `GET /endpoint_groups/{id}`, which
+*neither* edition names: there is nothing to borrow.
+
+**Named where a name exists.** *Route behaviour below is **measured against a
+live Community and a live Business server, 2026-08-18 (wave 2 stage A, task
+1)** — see that task's report for the `curl` invocations and full response
+bodies. The naming and counting change described from here on is task 8, and
+made no server call of its own; its own measurements are of the vendored
+documents and of this repository's toolchain.*
+
+`GET /endpoint_groups/{id}` answers **200 on both editions** — Community
+returns
+`{"Id":1,"Name":"Unassigned","Description":"Unassigned environments",
+"Total":0,"TypeInfo":{...}}`, Business the same plus `"Policies":[]`.
+**Evidence: vendored spec**, 2026-08-18 (task 8), for what follows: it is the
+*only* one of the 442 routes that neither document names; the intersection of
+Community's 14 nameless operations and Business's 1 is exactly this route,
+and borrowing already resolves the other 13.
+
+Because nothing named it, nothing could declare it: `actioncatalog.Build`
+resolves an action's edition through `apiversion.ByOperationID` and refuses
+one that resolves in neither edition, so no `endpoint_groups` action could
+carry this route however the domain package was written. It now gets a name
+from `internal/specnaming`'s `SyntheticOperationID` — an **explicit** table,
+one entry, with a stated `Reason`, in the shape `cmd/gen_action_inputs`'s
+`actionNameOverrides` already uses. A mechanical name derived from method and
+path would invent one for every unnamed route in every future document, and
+naming is a judgement. The name is `EndpointGroupInspect`, following its five
+siblings in the same document and the catalog-wide `*Inspect` convention;
+`cmd/gen_applicability`'s `applySyntheticIDs` applies it after
+`borrowIDsAcrossEditions` (a published name always wins over an invented
+one), adding one entry to `operationIDs[CE]` and one to `operationIDs[EE]`.
+Both callers refuse rather than overwrite if a future document ever publishes
+that name for another route.
+
+The rule lives in a package rather than in either command because
+`cmd/gen_applicability` and `cmd/audit_1to1` must agree on the name exactly
+and, both being `package main`, cannot import each other — the same argument
+that put the parameter/body collision rule there.
+
+**Counted, or named as uncounted.** The deeper defect was not the missing
+name but its invisibility. `cmd/audit_1to1` *skipped* an operation with no
+`operationId`, so it never entered the denominator: a working route could be
+dropped from a domain's plan with every gate green, which is exactly what
+happened to this one. The parser now consults the table first, and a route
+nothing names is still uncounted — there is no key to count it against — but
+is returned and **printed by name** in the report, under "routes with no
+operationId, not counted above". An uncovered operation is honest; an
+invisible one is not.
+
+The measured effect on the audit, 2026-08-18: the denominators rose from 251
+to **252** (CE) and from 441 to **442** (EE) as `EndpointGroupInspect`
+entered both; covered stayed at 71 and 93 at that point, so the ratchet
+baseline was unchanged and the operation was reported as an uncovered gap.
+The remaining 13 Community routes are now listed by name in the report
+instead of vanishing from it.
+
+**And then it was covered** (task 9, the same day). `endpoint_groups.inspect`
+now declares the route under that synthetic name, with a hand-written handler
+(`internal/tools/endpoint_groups/handlers.go`) because `oapi-codegen` emits no
+method at all for an operation without an `operationId` — there is no
+generated client call to make, not merely one under an unexpected name.
+Covered rose 71 → **72** (CE) and 93 → **94** (EE) and
+`api/coverage-baseline.yaml` moved with it.
+
+One further seam had to learn the same rule to let that happen, and it is
+worth recording because it was the *third* place the name had to be
+understood, after `cmd/audit_1to1` and `cmd/gen_applicability`.
+`cmd/audit_spec_drift`'s own `parseSpecOperations` also skipped operations
+with no `operationId`, so the moment the catalog declared the action the
+drift audit refused outright — `action "endpoint_groups.inspect": OperationID
+"EndpointGroupInspect" resolves in neither vendored spec` — for an operation
+both documents describe *completely* apart from its name: summary,
+description, both parameters (`id` path, `size` query) and a response schema
+are all there. It consults `internal/specnaming` first now, and the audit
+compares the action's two published parameters against the document exactly
+as it does the six generated siblings'. `internal/specdiff.LoadSpecOperation`
+was taught the same rule for the same reason, so this package and the audits
+that share its inputs cannot disagree about what one document declares. The
+alternative — an `api/spec-drift-allowlist.yaml` entry, or dropping the
+`OperationID` from the `ActionSpec` — would have restored precisely the
+invisibility this section exists to end.
+
+Measured against a live server of each edition (2026-08-18, task 9):
+`GET /endpoint_groups/{id}` also honours `size` exactly as
+`GET /endpoint_groups` does. Against a group holding one environment,
+`Total` reads `0` without the parameter and `1` with `size=true`, on both
+editions. An unknown identifier answers **404** (`"Unable to find an
+environment group with the specified identifier inside the database"`) and a
+non-numeric one **400**, on both.
 
 ### 6.3 Five identifiers declared `integer` that Portainer never treats as a number
 
@@ -1711,6 +2061,66 @@ only asks whether a route exists. Unlike §6.8 it is not even a verb
 question — the route is served, answers `200`, and simply sends a different
 shape from the one documented. Only decoding the answer finds it.
 
+### 6.10 `ResourceControlType` is described by two contradictory tables, and the catalog publishes the one the machine-readable evidence supports
+
+**Evidence: vendored spec**, both editions, 2026-08-19 (wave 2 stage A,
+`resource_controls`). No live measurement is needed to establish the
+contradiction — it is between two parts of the same document — and only one
+of the ten values has been probed against a server.
+
+`resourcecontrols.resourceControlCreatePayload`'s `Type` property describes
+the enum one way:
+
+```text
+Type of Resource. Valid values are: 1 - container, 2 - service
+3 - volume, 4 - network, 5 - secret, 6 - stack, 7 - config, 8 - custom template, 9 - azure-container-group
+```
+
+`portainer.ResourceControl`'s own `Type` property, in the same document,
+describes it another:
+
+```text
+Type of Docker resource. Valid values are: 1- container, 2 -service
+3 - volume, 4 - secret, 5 - stack, 6 - config or 7 - custom template
+```
+
+They agree on 1, 2 and 3 and disagree on everything above: the second table
+has no `network`, so every value from 4 up is shifted down by one, and it
+stops at 7 where the first reaches 9.
+
+The referenced schema itself, `portainer.ResourceControlType`, carries **no
+description at all** — only the enum and its variable names. Those names are
+the tie-breaker, and they side with the create payload:
+
+```text
+enum:             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+x-enum-varnames:  ["_", "ContainerResourceControl", "ServiceResourceControl",
+                   "VolumeResourceControl", "NetworkResourceControl",
+                   "SecretResourceControl", "StackResourceControl",
+                   "ConfigResourceControl", "CustomTemplateResourceControl",
+                   "ContainerGroupResourceControl"]
+```
+
+`NetworkResourceControl` is 4, `SecretResourceControl` is 5, and the enum
+runs to 9 — the create payload's table exactly. So the evidence is two to
+one, not a coin toss, and `oapi-codegen` bakes the same reading into the
+generated constants (`PortainerResourceControlTypeNetworkResourceControl = 4`).
+
+**What the catalog publishes:** the create payload's table, in
+`resource_controls.create`'s `type` description and in its `EnumParams`
+constraint of 1 to 9. That is also the table `internal/tools/resource_controls`
+enforces before any call is made — a value outside 1-9 is refused by the
+action's own schema, naming the enum, and never reaches Portainer.
+
+**What is actually measured:** type `3` (volume) only, end to end on both
+editions, through all three tool surfaces. Types 1, 2 and 4 through 9 were not
+probed: doing so would have meant creating a container, network, secret and
+config on the shared estate for no assertion the wave needed. So this entry
+records a documentation defect and the reasoning behind the choice, not a
+behavioural measurement — if a future wave probes the upper half of the range
+and finds Portainer disagreeing with `x-enum-varnames`, that belongs in §2 and
+this entry should point at it.
+
 ## 7. Adjacent constraint, not an API divergence
 
 Worth knowing when choosing parameter types for a new domain, though it is a
@@ -1754,21 +2164,46 @@ question for a settled fact.
 8. **A Kubernetes pod that claims `nvidia.com/gpu` still cannot start one**
    (§10.3). Node capacity is reliable; a scheduled GPU workload through
    Kubernetes is not yet, and the root cause is not confirmed.
+9. **How many published body field names disagree with the property name
+   the vendored document declares is not known.** §9.6 enumerates five, but
+   they were found by searching for one shape only — a trailing capital `S`.
+   `bodyJSONTag` and `goFieldName` diverge wherever one special-cases an
+   initialism and the other does not, and no audit compares a published tag
+   against the raw specification property name, because `audit_spec_drift`
+   renders the specification side through the same `bodyJSONTag`. Until
+   something compares against the raw name, "five" is a floor, not a count.
+10. **Whether the seven domains written before wave 2 stage A describe the
+    catalog or the raw API in their narratives is unmeasured.** This project
+    measures the raw Portainer API but writes narratives about the catalog,
+    and the catalog's own `ValidateInput` can refuse a call the raw API
+    would have accepted (per-field edition pruning, an `EnumParams`
+    constraint, `additionalProperties: false`). A narrative can therefore be
+    a true statement about Portainer and a false statement about the action
+    a model can actually reach — §5.4 documents the raw behaviour that two
+    `teams` narratives quoted as if it were the catalog's. Three claims
+    across `teams`/`team_memberships` shipped that way and were corrected in
+    this stage (commit `3619869`), and three more of the same class were
+    corrected in `resource_controls` and `roles` (`de44649`). Every domain
+    carrying an `edition:"EE"` field or an `EnumParams` constraint is a
+    candidate; only
+    the five stage-A domains (`endpoint_groups`, `teams`,
+    `team_memberships`, `roles`, `resource_controls`) have been swept.
 
 ---
 
 ## 9. Tooling/process caveats recorded permanently (not API divergences)
 
-Two findings from the freeze that retired the generated-code freshness check
-(P3.2). Neither is a Portainer API divergence — both are properties of this
-project's own tooling — but each was, until now, recorded only in a
-gitignored working document (`.superpowers/sdd/.../task-4-report.md`) whose
-own `.gitignore` excludes it entirely from the repository. A citation to that
-path from tracked source (`.github/workflows/ci.yml`,
-`internal/toolutil/narrative.go`) dangles the moment this branch merges: the
-file that citation points to does not exist in the clone anyone else has.
-Recorded here instead, permanently, alongside this file's other durable
-findings.
+This section opened with two findings from the freeze that retired the
+generated-code freshness check (P3.2), and has grown since as later waves
+found more of the same shape. None of them is a Portainer API divergence —
+every one is a property of this project's own tooling — but each was, when
+it was found, recorded only in a gitignored working document under
+`.superpowers/sdd/`, whose own `.gitignore` excludes it entirely from the
+repository. A citation to such a path from tracked source
+(`.github/workflows/ci.yml`, `internal/toolutil/narrative.go`) dangles the
+moment the branch that wrote it merges: the file that citation points to
+does not exist in the clone anyone else has. Recorded here instead,
+permanently, alongside this file's other durable findings.
 
 ### 9.1 The freshness check's replacement is proven equivalent on one real case, not universally
 
@@ -2094,6 +2529,76 @@ rather than over these two constraint interfaces, and none of wave 1's
 domains is affected by it — so it was left alone here rather than folded
 into a change that is already two coupled defects wide.
 
+### 9.6 Five published body fields carry a capital `S` no caller would guess, and the audit that should catch it is blind to it
+
+**Evidence: probed live and diagnosed.** The refusal is asserted on every
+surface and every edition by
+`TestResourceControls_SubResourceIdsFieldName_IsRefusedUnlessSpelledAsPublished`
+(`test/e2e/suite/resource_controls_test.go`), so it is re-measured on every
+e2e run rather than resting on a transcript; the root cause below comes from
+running `splitWords`, `goFieldName` and `bodyJSONTag` over the real property
+names.
+
+The catalog publishes five body field names that no Portainer document
+spells that way, one capital letter off in each case:
+
+| Domain | Published wire name | What a caller writes |
+|---|---|---|
+| `endpoints` | `tagIdS` | `tagIds` |
+| `endpoints` | `endpointIdS` | `endpointIds` |
+| `endpoint_groups` | `tagIdS` (×2, create and update) | `tagIds` |
+| `resource_controls` | `subResourceIdS` | `subResourceIds` |
+
+This is not cosmetic. Every action's input schema is reflected from its
+`Input` struct with `additionalProperties: false`, and
+`toolutil.ActionSpec.ValidateInput` (called by `internal/tools/register.go`
+on every execution path, on all three surfaces) checks arguments against it.
+So the natural spelling is refused *by this project*, before any request is
+built:
+
+```text
+resource_controls.create: validating root: unexpected additional properties ["subResourceIds"]
+```
+
+Portainer never sees the call and has nothing to say about it. Two of the
+five are already on `main`; the other three arrived with wave 2 stage A,
+which is when the class was noticed at all.
+
+**Root cause.** `cmd/gen_action_inputs/naming.go` derives the JSON tag from
+the specification's property name rather than carrying that name through
+verbatim, and its two derivations disagree. `splitWords` is correct: a
+fully-matched initialism run leaves the pluralising `s` as its own word, so
+`SubResourceIDs` splits as `["Sub" "Resource" "ID" "s"]`. `goFieldName`
+special-cases that lone `s` (`isPluralSuffixWord`) and produces
+`SubResourceIDs`. `bodyJSONTag` has no such branch — its loop is `title(w)`
+for every word after the first — so the `s` becomes `S`. The defect
+therefore fires only when the wire name spells the initialism in full:
+`TagIDs` renders as `tagIdS` and is wrong, `TagIds` renders as `tagIds` and
+is right. `internal/tools/resource_controls/resource_controls.go`'s package
+doc carries the full derivation, function by function.
+
+**Why no audit reports it.** `cmd/audit_spec_drift` compares the catalog's
+body field names against the specification's — but it renders the
+specification side through `internal/specdiff/naming.go`'s mirrored copy of
+the same `bodyJSONTag`. Both sides are mangled identically, so the
+comparison is clean. It is the blind spot wave 1 kept walking into in a new
+place: an audit that checks the catalog against something that is itself
+wrong reports agreement, not the error. The e2e suite is no help either — it
+writes the mangled name, because that is the name the schema accepts, so it
+proves the refusal is real without ever asking whether the published name
+should have been that one.
+
+**Why a one-domain fix is worse than none.** Renaming a single domain's
+field makes `audit_spec_drift` report one field added and one removed on an
+operation nobody touched (measured), which is the bogus-allow-list trap that
+audit's own doc comment warns about. The fix has to change `bodyJSONTag` in
+both `cmd/gen_action_inputs/naming.go` and `internal/specdiff/naming.go` in
+one commit — `TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation` pins the
+two copies to each other — and rename all five published fields in the same
+commit. The durable version of the fix is to stop deriving the tag at all
+and emit the specification's property name verbatim, which removes the whole
+class rather than this instance of it.
+
 ---
 
 ## 10. GPU passthrough through nested virtualisation (not an API divergence, but a permanent finding)
@@ -2238,7 +2743,7 @@ domain exists; `test/e2e/suite/gpu_kubernetes_test.go`'s
 passes — a pod that *requests* `nvidia.com/gpu: 1` still fails at container
 creation:
 
-```
+```text
 unresolvable CDI devices k8s.device-plugin.nvidia.com/gpu=<uuid>
 ```
 

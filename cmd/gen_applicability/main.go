@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 )
 
 type operation struct {
@@ -86,8 +88,9 @@ func run(args []string) error {
 	// pass over presence.
 	opIDsByEdition := map[string]map[string]operation{}
 	// edition -> every operation that edition documents in any version, kept
-	// so borrowIDsAcrossEditions below can tell "this edition serves the
-	// route but never named it" from "this edition does not serve it".
+	// so borrowIDsAcrossEditions and applySyntheticIDs below can tell "this
+	// edition serves the route but never named it" from "this edition does
+	// not serve it".
 	allByEdition := map[string]map[operation]bool{}
 	for _, ed := range sortedKeys(presence) {
 		versions := sortedKeys(presence[ed])
@@ -178,6 +181,14 @@ func run(args []string) error {
 		return err
 	}
 
+	// After borrowing, not before: a name some edition publishes is always
+	// preferred to one this project invented, so the synthetic table only
+	// ever sees the routes nothing anywhere names.
+	synthesised, err := applySyntheticIDs(allByEdition, opIDsByEdition, specnaming.SyntheticOperationID)
+	if err != nil {
+		return err
+	}
+
 	buf.WriteString("\n// operationIDs maps an operation's OpenAPI operationId to the operation it\n")
 	buf.WriteString("// identifies. oapi-codegen derives every generated Go method name from the\n")
 	buf.WriteString("// operationId, so this is the only machine-checkable link between a generated\n")
@@ -208,6 +219,11 @@ func run(args []string) error {
 		fmt.Fprintf(os.Stderr, "  borrowed id: %s\n", b)
 	}
 	fmt.Fprintf(os.Stderr, "%d operationId(s) borrowed across editions\n", len(borrowed))
+
+	for _, s := range synthesised {
+		fmt.Fprintf(os.Stderr, "  synthetic id: %s\n", s)
+	}
+	fmt.Fprintf(os.Stderr, "%d operationId(s) taken from internal/specnaming's table for routes no document names\n", len(synthesised))
 
 	for _, gap := range gaps {
 		fmt.Fprintf(os.Stderr, "  gap: %s\n", gap)
@@ -345,8 +361,9 @@ func sortedKeys[V any](m map[string]V) []string {
 // `make check-spec` still compares them against a fresh fetch, byte for byte.
 //
 // The one operation this cannot help is GET /endpoint_groups/{id}, which
-// neither edition names; there is no name to borrow, and it stays absent
-// from both indexes.
+// neither edition names; there is no name to borrow. applySyntheticIDs runs
+// after this one and takes that route's name from internal/specnaming's
+// explicit table instead.
 func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsByEdition map[string]map[string]operation) ([]string, error) {
 	// operation -> the id some edition publishes for it.
 	named := map[operation]string{}
@@ -398,4 +415,84 @@ func borrowIDsAcrossEditions(allByEdition map[string]map[operation]bool, opIDsBy
 		}
 	}
 	return borrowed, nil
+}
+
+// applySyntheticIDs gives an operation the name internal/specnaming's table
+// holds for it, when neither the edition's own documents nor any other
+// edition's name it at all.
+//
+// This is borrowIDsAcrossEditions's last resort, and it runs after it for
+// that reason: thirteen of Community's fourteen unnamed operations are named
+// by the Business document, and a borrowed name — one Portainer itself
+// publishes — is always to be preferred to one this project decided on. What
+// is left is the route *neither* document names, GET /endpoint_groups/{id},
+// which both editions serve and which therefore has no name to borrow. Until
+// this pass existed it stayed absent from operationIDs in both editions, and
+// since internal/tools/actioncatalog resolves an action's edition through
+// that index, actioncatalog.Build refused any action carrying it as
+// "resolves in neither edition" — so the route could not be declared at all,
+// however the domain package was written.
+//
+// nameFor is a parameter rather than a direct call to
+// specnaming.SyntheticOperationID so that a test can drive this with a
+// synthetic table as well as the real one. A test asserting only what the
+// real single-entry table produces would pass just as happily against an
+// implementation that hardcoded that one entry, or against one that never
+// consulted a table at all — the same reason resolveActionName in
+// cmd/gen_action_inputs takes its override table as an argument.
+//
+// Nothing is written for a route an edition does not serve: the (method,
+// path) must be in this edition's own operation set, gathered from that
+// edition's documents' paths. An edition that already resolves the name —
+// its own or a borrowed one — is never overridden.
+func applySyntheticIDs(
+	allByEdition map[string]map[operation]bool,
+	opIDsByEdition map[string]map[string]operation,
+	nameFor func(method, path string) (string, bool),
+) ([]string, error) {
+	var synthesised []string
+	for _, ed := range sortedKeys(allByEdition) {
+		own := map[operation]bool{}
+		for _, op := range opIDsByEdition[ed] {
+			own[op] = true
+		}
+		ops := make([]operation, 0, len(allByEdition[ed]))
+		for op := range allByEdition[ed] {
+			ops = append(ops, op)
+		}
+		sort.Slice(ops, func(i, j int) bool {
+			if ops[i].Path != ops[j].Path {
+				return ops[i].Path < ops[j].Path
+			}
+			return ops[i].Method < ops[j].Method
+		})
+		for _, op := range ops {
+			if own[op] {
+				continue
+			}
+			id, ok := nameFor(op.Method, op.Path)
+			if !ok {
+				continue
+			}
+			// Refuse rather than overwrite, exactly as borrowing does. A
+			// synthetic name colliding with one a document publishes would
+			// move an action's edition on the strength of a name this
+			// project invented, which is worse than the gap it was invented
+			// to close. The table records that no collision existed when
+			// each entry was written; this is what keeps that true when a
+			// future specification names something new.
+			if existing, taken := opIDsByEdition[ed][id]; taken && existing != op {
+				return nil, fmt.Errorf(
+					"edition %s: operationId %q already resolves to %s %s, so internal/specnaming's synthetic name for %s %s cannot be used; "+
+						"a vendored document now names an operation this project had to name itself — remove the table entry",
+					ed, id, existing.Method, existing.Path, op.Method, op.Path)
+			}
+			if opIDsByEdition[ed] == nil {
+				opIDsByEdition[ed] = map[string]operation{}
+			}
+			opIDsByEdition[ed][id] = op
+			synthesised = append(synthesised, fmt.Sprintf("%s %s %s -> %s", ed, op.Method, op.Path, id))
+		}
+	}
+	return synthesised, nil
 }

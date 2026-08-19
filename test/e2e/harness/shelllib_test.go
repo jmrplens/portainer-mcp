@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -334,6 +335,505 @@ func runLib(t *testing.T, script string) (string, error) {
 	cmd.Env = append(os.Environ(), "PORTAINER_E2E_REMOTE=")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// licenceLockPath mirrors licence_lock_path's own construction (repo_root +
+// "/test/e2e/.licence.lock"), so a test can read or stat the lock file
+// directly without sourcing lib.sh a second time just to ask it for the
+// path.
+func licenceLockPath(repoRoot string) string {
+	return filepath.Join(repoRoot, "test", "e2e", ".licence.lock")
+}
+
+// licenceLockRepoRoot returns a fresh temporary directory shaped the way
+// every real caller's repo root already is: with test/e2e/ present, so
+// take_licence_lock's own ">" write has somewhere to land. Every real
+// invocation runs from inside an actual checkout, where that directory is
+// simply part of the repository and always exists; a bare t.TempDir() does
+// not have it, and take_licence_lock's atomic write then fails for a reason
+// that has nothing to do with the lock itself (a missing parent directory,
+// not an existing file) -- its own doc says as much: that failure is
+// indistinguishable from "already locked" from inside the function, which is
+// exactly why the test fixture must not manufacture it by accident.
+func licenceLockRepoRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "test", "e2e"), 0o755); err != nil {
+		t.Fatalf("creating test/e2e under the fixture repo root: %v", err)
+	}
+	return root
+}
+
+// licenceLockStubMode selects one of licence_lock_holder_running's three
+// possible answers for a stubbed docker/k3d: the check ran cleanly and
+// found the leg up, ran cleanly and found nothing, or could not run at all
+// (a daemon that refuses the connection, or a "not installed" tool -- see
+// licence_lock_holder_running's own doc for why round 2 exists specifically
+// to keep this third case from reading the same as the second).
+type licenceLockStubMode int
+
+const (
+	licenceLockStubRunning licenceLockStubMode = iota
+	licenceLockStubAbsent
+	licenceLockStubFails
+)
+
+// licenceLockDockerStub writes a stub `docker` binary onto PATH that answers
+// licence_lock_holder_running's own `docker ps --filter
+// label=com.docker.compose.project=portainer-mcp-e2e ...` call, so these
+// tests never depend on what containers actually exist on the machine
+// running `go test` -- exactly the ambient-state problem
+// licence_lock_holder_running's own doc names as the reason it matches on
+// the compose project label rather than a container name substring. Mirrors
+// dockerSwarmStub's technique above. licenceLockStubFails exits non-zero
+// with stderr text shaped like the real "Cannot connect to the Docker
+// daemon" failure, exercising the branch round 2 added: a command that
+// fails outright, not one that merely answers empty.
+func licenceLockDockerStub(t *testing.T, dir string, mode licenceLockStubMode) {
+	t.Helper()
+	var answer string
+	switch mode {
+	case licenceLockStubRunning:
+		answer = "echo portainer-mcp-e2e-portainer-ce-1"
+	case licenceLockStubAbsent:
+		answer = ":"
+	case licenceLockStubFails:
+		answer = `echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1`
+	}
+	body := "#!/usr/bin/env bash\n" +
+		"case \"$*\" in\n" +
+		"    *'com.docker.compose.project=portainer-mcp-e2e'*)\n" +
+		"        " + answer + "\n" +
+		"        ;;\n" +
+		"    *)\n" +
+		"        echo \"unexpected docker invocation: $*\" >&2\n" +
+		"        exit 1\n" +
+		"        ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing docker stub: %v", err)
+	}
+}
+
+// licenceLockK3DStub mirrors licenceLockDockerStub for the Kubernetes leg's
+// own `k3d cluster list -o json` check. licenceLockStubFails answers
+// `cluster list` itself failing (a daemon it cannot reach); the OTHER way
+// this leg's check can be unable to run -- k3d missing from PATH entirely --
+// is exercised separately (TestUnit_LicenceLockHolderRunning_KubernetesK3DNotInstalled),
+// since that failure mode has no docker/k3d stub to write at all.
+func licenceLockK3DStub(t *testing.T, dir string, mode licenceLockStubMode) {
+	t.Helper()
+	var body string
+	switch mode {
+	case licenceLockStubFails:
+		body = "#!/usr/bin/env bash\n" +
+			"case \"$*\" in\n" +
+			"    *'cluster list -o json'*)\n" +
+			"        echo 'Error: failed to connect to docker' >&2\n" +
+			"        exit 1\n" +
+			"        ;;\n" +
+			"    *)\n" +
+			"        echo \"unexpected k3d invocation: $*\" >&2\n" +
+			"        exit 1\n" +
+			"        ;;\n" +
+			"esac\n"
+	default:
+		list := "[]"
+		if mode == licenceLockStubRunning {
+			list = `[{"name":"portainer-mcp-e2e"}]`
+		}
+		body = "#!/usr/bin/env bash\n" +
+			"case \"$*\" in\n" +
+			"    *'cluster list -o json'*)\n" +
+			"        echo '" + list + "'\n" +
+			"        ;;\n" +
+			"    *)\n" +
+			"        echo \"unexpected k3d invocation: $*\" >&2\n" +
+			"        exit 1\n" +
+			"        ;;\n" +
+			"esac\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "k3d"), []byte(body), 0o700); err != nil {
+		t.Fatalf("writing k3d stub: %v", err)
+	}
+}
+
+// licenceLockHolderRunningExitCode runs licence_lock_holder_running(leg)
+// under runLib and returns its exact exit code -- 0/1/2, not merely
+// zero/non-zero -- via *exec.ExitError. A plain err==nil/err!=nil check
+// would pass just as well whether the guard folded "unknown" into "not
+// running" or kept the two apart, which is precisely the collapse round 2
+// exists to catch; only the exact code proves it did not happen.
+func licenceLockHolderRunningExitCode(t *testing.T, script string) int {
+	t.Helper()
+	lib, err := filepath.Abs("../scripts/lib.sh")
+	if err != nil {
+		t.Fatalf("resolving lib.sh: %v", err)
+	}
+	cmd := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", "source "+lib+"\n"+script)
+	cmd.Env = append(os.Environ(), "PORTAINER_E2E_REMOTE=")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("running %q did not fail with a process exit error: %v\noutput:\n%s", script, err, out)
+	}
+	return exitErr.ExitCode()
+}
+
+// TestUnit_LicenceLockHolderRunning_MatchesEachLegsOwnSignal proves all
+// THREE outcomes licence_lock_holder_running reports for both legs it
+// switches on -- running (0), confirmed not running (1), and could not be
+// determined (2) -- each independently, with the real docker/k3d binaries
+// never consulted. The third state is round 2's whole point: a re-review
+// found that a stubbed docker/k3d failure read back identically to "not
+// running" before this change, which is exactly the distinction this table
+// exists to pin down going forward.
+func TestUnit_LicenceLockHolderRunning_MatchesEachLegsOwnSignal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		leg  string
+		mode licenceLockStubMode
+		want int
+	}{
+		{"compose running", "compose", licenceLockStubRunning, 0},
+		{"compose confirmed not running", "compose", licenceLockStubAbsent, 1},
+		{"compose check fails (daemon unreachable)", "compose", licenceLockStubFails, 2},
+		{"kubernetes running", "kubernetes", licenceLockStubRunning, 0},
+		{"kubernetes confirmed not running", "kubernetes", licenceLockStubAbsent, 1},
+		{"kubernetes check fails (cluster list unreachable)", "kubernetes", licenceLockStubFails, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			licenceLockDockerStub(t, dir, tc.mode)
+			licenceLockK3DStub(t, dir, tc.mode)
+			script := "PATH=" + dir + ":$PATH\nlicence_lock_holder_running " + tc.leg
+			got := licenceLockHolderRunningExitCode(t, script)
+			if got != tc.want {
+				t.Errorf("licence_lock_holder_running(%q) = exit %d, want %d", tc.leg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUnit_LicenceLockHolderRunning_KubernetesK3DNotInstalled covers the
+// OTHER way the Kubernetes leg's check can be unable to run: k3d missing
+// from PATH entirely, which says nothing about whether a cluster exists --
+// only that this machine cannot ask. A PATH containing nothing at all
+// guarantees k3d is absent regardless of what the machine running the test
+// actually has, mirroring TestUnit_DetectGPUName_ReportsNothingWhenTheHostHasNoNvidiaSmi's
+// own technique for the identical "tool absent" shape.
+func TestUnit_LicenceLockHolderRunning_KubernetesK3DNotInstalled(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	got := licenceLockHolderRunningExitCode(t, "PATH="+dir+" licence_lock_holder_running kubernetes")
+	if got != 2 {
+		t.Errorf("licence_lock_holder_running(\"kubernetes\") with k3d missing from PATH = exit %d, want 2 (could not determine)", got)
+	}
+}
+
+// TestUnit_LicenceLockHolderRunning_UnrecognisedLegIsConfirmedNotRunning
+// pins the default case's own reasoning, not merely its return value: an
+// unrecognised leg (a blank or garbled HOLDER, reachable only via an
+// interrupted write) is 1 (confirmed not running), never 2 (unknown) --
+// no leg by that name is ever a candidate to be running, so there is
+// nothing uncertain to report.
+func TestUnit_LicenceLockHolderRunning_UnrecognisedLegIsConfirmedNotRunning(t *testing.T) {
+	t.Parallel()
+	got := licenceLockHolderRunningExitCode(t, `licence_lock_holder_running ""`)
+	if got != 1 {
+		t.Errorf("licence_lock_holder_running(\"\") = exit %d, want 1 (confirmed not running)", got)
+	}
+}
+
+// TestUnit_TakeLicenceLock_FirstCallWritesHolderTakenAtAndEstate is the
+// success path: with no existing lock, take_licence_lock must record all
+// three fields the refusal message (and licence-check.sh's staleness check)
+// both depend on.
+func TestUnit_TakeLicenceLock_FirstCallWritesHolderTakenAtAndEstate(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("take_licence_lock on an unlocked repo failed: %v", err)
+	}
+	data, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("reading the lock file: %v", err)
+	}
+	for _, want := range []string{"HOLDER=compose", "TAKEN_AT=", "ESTATE="} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("lock file missing %q; content:\n%s", want, data)
+		}
+	}
+}
+
+// TestUnit_TakeLicenceLock_SecondCallRefusesWhileHolderIsRunning is the
+// guard's whole reason to exist: a second leg must not be able to take the
+// lock while the first leg is still using it, and the refusal must name the
+// running holder rather than report it as merely stale.
+func TestUnit_TakeLicenceLock_SecondCallRefusesWhileHolderIsRunning(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, licenceLockStubRunning)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"take_licence_lock " + repoRoot + " compose\n" +
+		"take_licence_lock " + repoRoot + " compose"
+	out, err := runLib(t, script)
+	if err == nil {
+		t.Fatalf("second take_licence_lock call succeeded; want a non-zero exit. output:\n%s", out)
+	}
+	if !strings.Contains(out, "already held by 'compose'") {
+		t.Errorf("refusal did not name the running holder; output:\n%s", out)
+	}
+}
+
+// TestUnit_TakeLicenceLock_StaleHolderRefusesAndLeavesTheLockOnDisk is Step
+// 2's central rule, proven at the function level: a lock naming a leg that
+// is not actually running must still refuse -- never silently clear itself
+// -- and the refusal must point at `make e2e-licence-release` rather than
+// any command that deletes the lock outright.
+func TestUnit_TakeLicenceLock_StaleHolderRefusesAndLeavesTheLockOnDisk(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	// The first take below succeeds with no docker/k3d call at all (there is
+	// no existing lock yet to check a holder against); this stub only has to
+	// answer for the SECOND call, which evaluates licence_lock_holder_running
+	// against the lock the first call just wrote.
+	licenceLockDockerStub(t, dir, licenceLockStubAbsent)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"take_licence_lock " + repoRoot + " compose\n" +
+		"take_licence_lock " + repoRoot + " compose"
+	out, err := runLib(t, script)
+	if err == nil {
+		t.Fatalf("take_licence_lock against a stale holder succeeded; want a non-zero exit. output:\n%s", out)
+	}
+	if !strings.Contains(out, "stale") || !strings.Contains(out, "make e2e-licence-release") {
+		t.Errorf("stale refusal missing the expected diagnostic; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); err != nil {
+		t.Errorf("stale refusal removed the lock file; it must be reported, never auto-removed: %v", err)
+	}
+}
+
+// TestUnit_TakeLicenceLock_UnknownHolderRefusesWithoutAssertingStaleness is
+// round 2's fix, proven at take_licence_lock's own refusal message: when
+// licence_lock_holder_running cannot tell whether the holder is running at
+// all (its docker/k3d check itself failed), the refusal must say so --
+// never call the lock "stale", and never point at `make e2e-licence-release`
+// the way the confirmed-stale message does, since that command is exactly
+// what would delete a lock that may still be protecting a live estate.
+func TestUnit_TakeLicenceLock_UnknownHolderRefusesWithoutAssertingStaleness(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, licenceLockStubFails)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"take_licence_lock " + repoRoot + " compose\n" +
+		"take_licence_lock " + repoRoot + " compose"
+	out, err := runLib(t, script)
+	if err == nil {
+		t.Fatalf("second take_licence_lock call succeeded despite an unresolvable holder check; want a non-zero exit. output:\n%s", out)
+	}
+	if !strings.Contains(out, "could not be determined") {
+		t.Errorf("refusal did not say the check itself could not be resolved; output:\n%s", out)
+	}
+	if strings.Contains(out, "reported as stale") {
+		t.Errorf("refusal asserted staleness it never established; output:\n%s", out)
+	}
+	if strings.Contains(out, "run 'make e2e-licence-release'") {
+		t.Errorf("refusal recommended the command that deletes the lock, on an answer that may not mean the holder is gone; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); err != nil {
+		t.Errorf("unknown-holder refusal removed the lock file; it must be reported, never auto-removed: %v", err)
+	}
+}
+
+// licenceCheckLockTailScript extracts, verbatim, licence-check.sh's own
+// lock-clearing tail -- from its "lock_path=$(licence_lock_path ...)" line
+// through the matching top-level "fi" -- so a test exercises the REAL
+// script's current decision logic rather than a hand-copied duplicate that
+// could silently drift from it if that file changes. The rest of
+// licence-check.sh (a real `docker run`, a real
+// `go run ./harness/cmd/provision -recover-licence` against a throwaway
+// server) cannot be run from a unit test at all -- and must not be, per
+// this task's own standing constraint never to touch the live estate or its
+// licence -- so this extracted tail is the only piece of the script's
+// actual behavior a test here can exercise.
+func licenceCheckLockTailScript(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../scripts/licence-check.sh")
+	if err != nil {
+		t.Fatalf("reading licence-check.sh: %v", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, `lock_path=$(licence_lock_path`) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		t.Fatalf("licence-check.sh's lock_path=$(licence_lock_path ...) line was not found; has it moved or been renamed?")
+	}
+	end := -1
+	for i := start; i < len(lines); i++ {
+		if lines[i] == "fi" {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		t.Fatalf("could not find the closing \"fi\" for licence-check.sh's lock-clearing tail")
+	}
+	return strings.Join(lines[start:end+1], "\n")
+}
+
+// TestUnit_LicenceCheckLockTail_RunningHolderWarnsAndKeepsTheLock,
+// TestUnit_LicenceCheckLockTail_AbsentHolderClearsTheLock and
+// TestUnit_LicenceCheckLockTail_UnknownHolderWarnsAndKeepsTheLock are the
+// three cases round 2 asked for by name, run against the real script's own
+// extracted tail (see licenceCheckLockTailScript): a stub that reports the
+// holder running, one that reports it confirmed absent, and one that fails
+// outright -- each must reach ITS OWN outcome. The failing case is the
+// re-reviewer's exact reachable accident: `make e2e-licence-release` run
+// while docker is unreachable (or DOCKER_HOST points at the wrong machine)
+// used to read as "confirmed not running" and delete the lock out from
+// under a genuinely live estate; it must now warn and leave the file on
+// disk, identically to the running case, not identically to the absent one.
+
+func TestUnit_LicenceCheckLockTail_RunningHolderWarnsAndKeepsTheLock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, licenceLockStubRunning)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"repo_root=" + repoRoot + "\n" +
+		"take_licence_lock \"$repo_root\" compose\n" +
+		licenceCheckLockTailScript(t)
+	out, err := runLib(t, script)
+	if err != nil {
+		t.Fatalf("licence-check.sh's tail failed against a running holder: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "appears to be running right now") {
+		t.Errorf("tail did not warn about the running holder; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); err != nil {
+		t.Errorf("licence-check.sh's tail deleted a running holder's lock: %v", err)
+	}
+}
+
+func TestUnit_LicenceCheckLockTail_AbsentHolderClearsTheLock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, licenceLockStubAbsent)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"repo_root=" + repoRoot + "\n" +
+		"take_licence_lock \"$repo_root\" compose\n" +
+		licenceCheckLockTailScript(t)
+	out, err := runLib(t, script)
+	if err != nil {
+		t.Fatalf("licence-check.sh's tail failed against a confirmed-absent holder: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "cleared the stale licence lock") {
+		t.Errorf("tail did not report clearing the lock; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); !os.IsNotExist(err) {
+		t.Errorf("licence-check.sh's tail left a confirmed-stale lock in place: err=%v", err)
+	}
+}
+
+func TestUnit_LicenceCheckLockTail_UnknownHolderWarnsAndKeepsTheLock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repoRoot := licenceLockRepoRoot(t)
+	licenceLockDockerStub(t, dir, licenceLockStubFails)
+	script := "PATH=" + dir + ":$PATH\n" +
+		"repo_root=" + repoRoot + "\n" +
+		"take_licence_lock \"$repo_root\" compose\n" +
+		licenceCheckLockTailScript(t)
+	out, err := runLib(t, script)
+	if err != nil {
+		t.Fatalf("licence-check.sh's tail failed when the holder check itself failed: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "could not determine") {
+		t.Errorf("tail did not say the check itself could not be resolved; output:\n%s", out)
+	}
+	if strings.Contains(out, "cleared the stale licence lock") {
+		t.Errorf("tail cleared the lock on an unresolvable check; output:\n%s", out)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); err != nil {
+		t.Errorf("licence-check.sh's tail deleted the lock when the holder check itself failed -- the exact accident round 2 exists to prevent: %v", err)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_ToleratesAnAbsentLock is Ruling 1's central
+// case: the very first `make e2e-down` on a machine where a lock was never
+// taken (this task did not exist yet, or a Community-only run never created
+// one) must warn and succeed, never fail teardown.
+func TestUnit_ReleaseLicenceLock_ToleratesAnAbsentLock(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	out, err := runLib(t, `release_licence_lock `+repoRoot+` compose`)
+	if err != nil {
+		t.Fatalf("release_licence_lock against an absent lock failed; want success: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning:") {
+		t.Errorf("release_licence_lock against an absent lock did not warn; output:\n%s", out)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_LeavesAForeignHolderInPlace proves a leg's own
+// teardown can never remove a lock it does not own: down.sh releasing the
+// compose leg's lock must not be able to clear one the Kubernetes leg
+// holds, or vice versa.
+func TestUnit_ReleaseLicenceLock_LeavesAForeignHolderInPlace(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` kubernetes`); err != nil {
+		t.Fatalf("setup: take_licence_lock failed: %v", err)
+	}
+	before, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("reading the lock file after setup: %v", err)
+	}
+	out, err := runLib(t, `release_licence_lock `+repoRoot+` compose`)
+	if err != nil {
+		t.Fatalf("release_licence_lock against a foreign holder failed; want a warned success: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning:") {
+		t.Errorf("release_licence_lock against a foreign holder did not warn; output:\n%s", out)
+	}
+	after, err := os.ReadFile(licenceLockPath(repoRoot))
+	if err != nil {
+		t.Fatalf("lock file removed by a release call for a leg that does not own it: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("lock file content changed by a foreign release; before:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestUnit_ReleaseLicenceLock_RemovesItsOwn is the ordinary teardown path:
+// the leg that took the lock is the one releasing it.
+func TestUnit_ReleaseLicenceLock_RemovesItsOwn(t *testing.T) {
+	t.Parallel()
+	repoRoot := licenceLockRepoRoot(t)
+	if _, err := runLib(t, `take_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("setup: take_licence_lock failed: %v", err)
+	}
+	if _, err := runLib(t, `release_licence_lock `+repoRoot+` compose`); err != nil {
+		t.Fatalf("release_licence_lock for the owning leg failed: %v", err)
+	}
+	if _, err := os.Stat(licenceLockPath(repoRoot)); !os.IsNotExist(err) {
+		t.Errorf("lock file still present after its own leg released it: err=%v", err)
+	}
 }
 
 func TestUnit_OnDockerHost_EmptyDestinationRunsLocally(t *testing.T) {

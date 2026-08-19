@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestAudit_OperationWithNoAction_IsReportedAndFails(t *testing.T) {
 	}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil, nil)
+	result, err := auditCoverage(doc(ce), doc(ee), actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v, want a result to report on", err)
 	}
@@ -72,7 +73,7 @@ func TestAudit_AllowListedOperation_IsExcludedButCounted(t *testing.T) {
 		{OperationID: "WebsocketExec", Reason: "MCP cannot carry a websocket upgrade.", Added: "2026-08-03"},
 	}
 
-	result, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList, nil)
+	result, err := auditCoverage(doc(nil), doc(ee), actions, allowList, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -111,7 +112,7 @@ func TestAudit_AllowListEntryForAnUnknownOperation_IsAnError(t *testing.T) {
 		{OperationID: "LongRemovedOperation", Reason: "no longer exists", Added: "2026-08-03"},
 	}
 
-	_, err := auditCoverage(map[string]specOperation{}, ee, actions, allowList, nil)
+	_, err := auditCoverage(doc(nil), doc(ee), actions, allowList, nil)
 	if err == nil {
 		t.Fatal("auditCoverage() = nil error, want an error for the stale allow-list entry")
 	}
@@ -135,7 +136,7 @@ func TestAudit_ActionNamingAnOperationNotInEitherSpec_IsAnError(t *testing.T) {
 		action("tags.typo", "TagLisst"),
 	}
 
-	_, err := auditCoverage(map[string]specOperation{}, ee, actions, nil, nil)
+	_, err := auditCoverage(doc(nil), doc(ee), actions, nil, nil)
 	if err == nil {
 		t.Fatal("auditCoverage() = nil error, want an error for the action naming an unresolvable operation")
 	}
@@ -154,7 +155,7 @@ func TestAudit_EveryOperationCovered_NoGap(t *testing.T) {
 	ee := map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil, nil)
+	result, err := auditCoverage(doc(ce), doc(ee), actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -176,7 +177,7 @@ func TestAudit_ActionCoveringBothEditions_CountsInBoth(t *testing.T) {
 	ee := map[string]specOperation{"TagList": shared}
 	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
 
-	result, err := auditCoverage(ce, ee, actions, nil, nil)
+	result, err := auditCoverage(doc(ce), doc(ee), actions, nil, nil)
 	if err != nil {
 		t.Fatalf("auditCoverage() error = %v", err)
 	}
@@ -232,5 +233,125 @@ func TestUnit_BuildReport_FullCoverage_StatesSo(t *testing.T) {
 	report := buildReport(result)
 	if !strings.Contains(report, "Every operation in both vendored specs has a catalog action") {
 		t.Errorf("buildReport() does not state full coverage:\n%s", report)
+	}
+}
+
+// TestUnit_BuildReport_UnnamedRoutes_AreNamedNotJustCounted is the report
+// half of this audit's honesty contract, and the one that was missing.
+//
+// A route with no operationId cannot be counted — there is no key to count it
+// against — so it appears in neither the numerator nor the denominator.
+// Before this, that was the end of it: the route appeared nowhere at all, and
+// the report's bottom line could say every operation was accounted for while
+// a route Portainer serves was accounted for nowhere. The three assertions
+// below are what a fix that merely counted them differently would not
+// satisfy: the section exists, every route in it is named individually, and
+// the bottom line says the totals above are not the whole surface.
+func TestUnit_BuildReport_UnnamedRoutes_AreNamedNotJustCounted(t *testing.T) {
+	t.Parallel()
+	result := &auditResult{
+		EE: editionReport{Name: "Business Edition (EE)", Total: 1, Covered: 1},
+		CE: editionReport{
+			Name: "Community Edition (CE)", Total: 1, Covered: 1,
+			Unnamed: []unnamedOperation{
+				{Method: "GET", Path: "/websocket/exec", Domain: "websocket"},
+				{Method: "POST", Path: "/webhooks", Domain: "webhooks"},
+			},
+		},
+	}
+	report := buildReport(result)
+
+	for _, want := range []string{
+		"routes with no operationId, not counted above (2):",
+		"    - GET /websocket/exec [websocket]\n",
+		"    - POST /webhooks [webhooks]\n",
+		"2 route(s) across both editions carry no operationId and are outside the totals above",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("buildReport() does not contain %q:\n%s", want, report)
+		}
+	}
+}
+
+// TestUnit_BuildReport_NoUnnamedRoutes_SaysNothingAboutThem keeps the section
+// from becoming noise on the day the documents name everything: the whole
+// point of naming these routes is that a reader notices them, which stops
+// being true if an empty section is printed on every run.
+func TestUnit_BuildReport_NoUnnamedRoutes_SaysNothingAboutThem(t *testing.T) {
+	t.Parallel()
+	result := &auditResult{
+		CE: editionReport{Name: "Community Edition (CE)", Total: 1, Covered: 1},
+		EE: editionReport{Name: "Business Edition (EE)", Total: 1, Covered: 1},
+	}
+	if report := buildReport(result); strings.Contains(report, "no operationId") {
+		t.Errorf("buildReport() mentions unnamed routes when there are none:\n%s", report)
+	}
+}
+
+// TestUnit_AuditCoverage_UnnamedRoutes_ReachTheReport closes the seam
+// between the two halves this task added, and review found it open.
+//
+// parseSpecOperations carries a route nothing names out of the document, and
+// buildReport prints one when the result holds it. Each half had a test.
+// What nothing exercised was the wire between them — buildEditionReport
+// copying doc.Unnamed onto the edition report — so deleting that one field
+// assignment left every test green while the real report silently lost all
+// 13 routes. That is this task's own defect class one layer up: a change
+// that re-hides the routes passing every gate.
+//
+// The doc(...) helper the migrated call sites use is what made it invisible:
+// it supplies Unnamed: nil, so no auditCoverage-level test ever carried an
+// unnamed route end to end. This one does, through the real function, and
+// asserts both that the result holds them and that the rendered report names
+// them.
+func TestUnit_AuditCoverage_UnnamedRoutes_ReachTheReport(t *testing.T) {
+	t.Parallel()
+	ceUnnamed := []unnamedOperation{
+		{Method: "GET", Path: "/websocket/exec", Domain: "websocket"},
+		{Method: "POST", Path: "/webhooks", Domain: "webhooks"},
+	}
+	eeUnnamed := []unnamedOperation{
+		{Method: "GET", Path: "/websocket/pod", Domain: "websocket"},
+	}
+	ce := specDocument{
+		Operations: map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")},
+		Unnamed:    ceUnnamed,
+	}
+	ee := specDocument{
+		Operations: map[string]specOperation{"TagList": op("TagList", "GET", "/tags", "tags")},
+		Unnamed:    eeUnnamed,
+	}
+	actions := []toolutil.ActionSpec{action("tags.list", "TagList")}
+
+	result, err := auditCoverage(ce, ee, actions, nil, nil)
+	if err != nil {
+		t.Fatalf("auditCoverage() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(result.CE.Unnamed, ceUnnamed) {
+		t.Errorf("auditCoverage().CE.Unnamed = %+v, want %+v", result.CE.Unnamed, ceUnnamed)
+	}
+	if !reflect.DeepEqual(result.EE.Unnamed, eeUnnamed) {
+		t.Errorf("auditCoverage().EE.Unnamed = %+v, want %+v", result.EE.Unnamed, eeUnnamed)
+	}
+	// Unnamed routes have no key, so they must not have moved the totals or
+	// turned into gaps: coverage is still complete over what is countable.
+	if result.CE.Total != 1 || result.EE.Total != 1 {
+		t.Errorf("auditCoverage() totals = CE:%d EE:%d, want 1 and 1: an unnamed route has no key and must not enter the denominator", result.CE.Total, result.EE.Total)
+	}
+	if result.HasGap() {
+		t.Errorf("auditCoverage().HasGap() = true, want false: %v / %v", result.CE.Uncovered, result.EE.Uncovered)
+	}
+
+	report := buildReport(result)
+	for _, want := range []string{
+		"    - GET /websocket/exec [websocket]\n",
+		"    - POST /webhooks [webhooks]\n",
+		"    - GET /websocket/pod [websocket]\n",
+		"3 route(s) across both editions carry no operationId and are outside the totals above",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("buildReport(auditCoverage(...)) does not contain %q:\n%s", want, report)
+		}
 	}
 }

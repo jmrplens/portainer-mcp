@@ -97,6 +97,18 @@ if [[ -n "$licence" && -f "$estate_file" ]]; then
         go run ./harness/cmd/provision -release-licence \
         || echo "warning: could not release the business edition licence; continuing teardown" >&2
 fi
+# Released unconditionally, OUTSIDE the block above, not merely on the path
+# where the release call ran or warned: up.sh takes this leg's lock BEFORE
+# `docker compose up` ever runs, well before the estate file this block also
+# gates on exists. A run that dies anywhere between those two points --
+# including a plain Ctrl-C -- leaves a lock this compose leg genuinely took
+# but no estate file for "$licence && -f $estate_file" to ever see again, and
+# the block above would then never run at all. release_licence_lock is
+# already holder-gated and warn-only (see its own doc), so calling it
+# unconditionally here can neither remove a lock some OTHER leg holds nor
+# fail this teardown -- including a Community-only run, where it simply
+# warns that there was never a lock to release.
+release_licence_lock "$repo_root" compose
 
 # --profile edge: the edge agent only ever runs under that profile (up.sh
 # starts it in a second pass, once EDGE_ID/EDGE_KEY exist), and without

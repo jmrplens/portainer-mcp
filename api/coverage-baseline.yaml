@@ -16,5 +16,39 @@
 # the diff, rather than left for the ratchet to silently absorb. Never lower
 # either number to make a regression pass — that defeats the one thing this
 # file exists to catch.
-ce_covered: 66
-ee_covered: 87
+#
+# Only the covered counts are committed here, never the totals, and 2026-08-18
+# is why that distinction is worth stating. The audit stopped skipping routes
+# with no operationId that day: GET /endpoint_groups/{id} is named by neither
+# vendored document, so it had been silently absent from both denominators,
+# and internal/specnaming names it now. The totals moved — CE 251 -> 252, EE
+# 441 -> 442 — while these two numbers held at 71 and 93, because at that
+# moment the newly visible route was uncovered, not covered. A ratchet keyed
+# on totals would have gone red for a change that only made the real surface
+# visible.
+#
+# Later the same day, endpoint_groups.inspect covered that very route on both
+# editions, which is what moved these two numbers to CE 72 / EE 94. One route
+# made visible, then actually served — the pair of numbers moving for the
+# reason this file exists.
+#
+# Wave 2 stage A's teams and team_memberships domains then covered ten more
+# operations, five each, every one of them served by both editions: CE
+# 72 -> 82 and EE 94 -> 104, the same +10 on both sides because no team route
+# is exclusive to either edition. (The Business-only part of this domain pair
+# is a *field*, teams.create/update's DenyPortainerAccess, not a route — a
+# Community server accepts it and ignores it — and a field difference moves
+# neither number.)
+#
+# Wave 2 stage A's roles and resource_controls domains closed the stage with
+# four more, one and three: CE 82 -> 86 and EE 104 -> 108, again the same +4
+# on both sides because both documents declare all four routes and both
+# servers serve them. GET /roles is the interesting one, and it is the case
+# this file's header already argued for keeping totals out: it is *covered* on
+# Community Edition — the action is published there, the call succeeds, the
+# ratchet counts it — and it answers an empty array, because Community has no
+# roles to list. Coverage measures whether the catalog serves the route, not
+# whether the server has anything to say through it (docs/api-divergences.md
+# §5).
+ce_covered: 86
+ee_covered: 108

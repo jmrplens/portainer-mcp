@@ -206,6 +206,23 @@ type Estate struct {
 	EdgeKey        string `json:"edge_key"`
 }
 
+// HasCommunityEdition reports whether the compose Community Edition leg was
+// provisioned — the CE twin of HasBusinessEdition and HasKubernetes below,
+// requiring both fields for the same reason they do: a base URL with no API
+// key names a server nothing can actually call.
+//
+// It exists because the Community Edition leg stopped being unconditional.
+// The single Business Edition licence this project runs on permits one
+// Portainer instance at a time, so `.github/workflows/e2e.yml` brings the
+// compose legs and the Kubernetes leg up in two separate, sequential jobs,
+// each with the estate to itself. The Kubernetes job's estate therefore
+// carries a Kubernetes leg and no compose leg at all — a legitimately
+// provisioned estate, not an interrupted one, and every caller that used to
+// treat "CE" as always present has to ask instead.
+func (e Estate) HasCommunityEdition() bool {
+	return e.CE.BaseURL != "" && e.CE.Creds.APIKey != ""
+}
+
 // HasBusinessEdition reports whether the Business Edition leg was provisioned.
 // It is false when no licence was available, and suites skip rather than fail
 // in that case — a contributor without the licence must still be able to run
@@ -269,7 +286,17 @@ type Leg struct {
 // ranges over this instead of repeating that list a P3 domain would
 // otherwise have copied roughly 88 more times.
 func (e Estate) Legs() []Leg {
-	legs := []Leg{{Name: "CE", Server: e.CE}}
+	var legs []Leg
+	// CE is derived like the other two rather than prepended unconditionally.
+	// It was unconditional while every estate began with `make e2e-up`; the
+	// CI split described on HasCommunityEdition made a Kubernetes-only estate
+	// a normal shape, and an unconditional entry here would have handed every
+	// caller a leg whose BaseURL and API key are both empty — a client that
+	// builds and then fails on the first request, instead of a leg the caller
+	// can see is absent.
+	if e.HasCommunityEdition() {
+		legs = append(legs, Leg{Name: "CE", Server: e.CE})
+	}
 	if e.HasBusinessEdition() {
 		legs = append(legs, Leg{Name: "EE", Server: e.EE})
 	}
@@ -401,8 +428,23 @@ func LoadEstate(path string) (Estate, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return Estate{}, fmt.Errorf("decode estate %s: %w", cleaned, err)
 	}
-	if e.CE.BaseURL == "" {
-		return Estate{}, fmt.Errorf("estate %s has no Community Edition server: was provisioning interrupted?", cleaned)
+	// "No leg at all", not "no Community Edition leg". The stricter rule this
+	// replaces predates the CI split described on HasCommunityEdition, which
+	// made a Kubernetes-only estate a legitimate shape: under the old rule
+	// k3d-down.sh's own licence release (releaseKubernetesLicence, which
+	// loads the estate before it can name the server to release against)
+	// read that shape as a broken estate, reported "nothing to release" and
+	// returned successfully — stranding the Business Edition licence on a
+	// server `k3d cluster delete` was about to make unreachable for good.
+	//
+	// What the old rule was actually protecting is kept: an estate naming no
+	// server at all is still refused, so an interrupted provisioning run, or
+	// a suite pointed at an empty file, still fails loudly instead of
+	// passing by measuring nothing.
+	if len(e.Legs()) == 0 {
+		return Estate{}, fmt.Errorf(
+			"estate %s provisions no server at all (no Community Edition, Business Edition or Kubernetes leg): was provisioning interrupted?",
+			cleaned)
 	}
 	return e, nil
 }
@@ -415,7 +457,7 @@ func LoadEstate(path string) (Estate, error) {
 // harness's own scripts (a temp file k3d-up.sh wrote, for instance), not from
 // anything an adversary controls. It is a general-purpose read, unlike
 // LoadEstate, which additionally knows the shape of an Estate and refuses one
-// missing a Community Edition server.
+// that provisions no server at all.
 func ReadTrustedFile(path string) ([]byte, error) {
 	cleaned := filepath.Clean(path)
 	if err := rejectEscapingPath("trusted file", path, cleaned); err != nil {

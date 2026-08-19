@@ -45,6 +45,27 @@ for tool in k3d kubectl helm; do
     command -v "$tool" >/dev/null || { echo "$tool is required but not installed" >&2; exit 1; }
 done
 
+# Same gitignored .env the compose legs (up.sh) read. Its absence is not an
+# error: the Kubernetes leg still comes up, just as Community Edition, and the
+# estate records that so suites skip the Business Edition assertions.
+licence=$(read_licence "$repo_root")
+if [[ -z "$licence" ]]; then
+    echo "no PORTAINER_LICENSE in .env: Kubernetes leg will be Community Edition only" >&2
+fi
+
+# Same rule as up.sh, and same ordering fix: the lock is taken only when a
+# licence is actually in play, and taken here -- before
+# refuse_docker_host_switch/record_docker_host below, and long before k3d
+# creates anything -- so a refusal costs genuinely nothing, including this
+# leg's own .docker-host-kubernetes marker, which record_docker_host would
+# otherwise rewrite to name a destination nothing was ever created at. Still
+# after the tool-presence check above, which deliberately runs first and
+# touches no state at all: see its own comment for why that ordering is
+# separate from this one.
+if [[ -n "$licence" ]]; then
+    take_licence_lock "$repo_root" kubernetes
+fi
+
 # The Kubernetes leg records its OWN marker, never the compose one. The two
 # legs are brought up by separate targets and can legitimately live in
 # different places — `make e2e-k8s-up` (local) alongside `make e2e-up-remote`
@@ -59,14 +80,6 @@ done
 # cluster that marker is the only record of.
 refuse_docker_host_switch "$ssh_dest" kubernetes
 record_docker_host "$ssh_dest" kubernetes
-
-# Same gitignored .env the compose legs (up.sh) read. Its absence is not an
-# error: the Kubernetes leg still comes up, just as Community Edition, and the
-# estate records that so suites skip the Business Edition assertions.
-licence=$(read_licence "$repo_root")
-if [[ -z "$licence" ]]; then
-    echo "no PORTAINER_LICENSE in .env: Kubernetes leg will be Community Edition only" >&2
-fi
 
 # --api-port is pinned rather than left to k3d because a remote cluster is
 # only reachable through an SSH tunnel (the k3s serving certificate covers

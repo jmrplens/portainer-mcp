@@ -23,10 +23,25 @@ A [Model Context Protocol](https://modelcontextprotocol.io/introduction) server 
 
 | | Covered | Total |
 |---|---|---|
-| Business Edition operations | **35** | 441 |
-| Community Edition operations | **27** | 251 |
+| Business Edition operations | **108** | 442 |
+| Community Edition operations | **86** | 252 |
 
-Five domains are live: `system`, `tags`, `registries`, `docker` and `custom_templates` — 36 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
+Every figure in that table is printed by `make audit-1to1`, which compares
+the catalog against the two vendored OpenAPI documents and reports
+`covered: N of Total` for each edition — the **Covered** column is that `N`,
+the **Total** its denominator. The same two covered counts are committed as
+the ratchet in
+[`api/coverage-baseline.yaml`](api/coverage-baseline.yaml), so coverage
+cannot fall without CI failing, and `make audit-1to1-ratchet` prints the
+current pair beside the committed one. Re-derive the table from either
+command rather than trusting it; a number in prose goes stale and a number a
+tool prints does not.
+
+The totals were 441 and 251 until 2026-08-18, when `cmd/audit_1to1` stopped
+skipping routes the vendored documents leave without an `operationId`; see
+[§6.2 of the divergence notes](docs/api-divergences.md).
+
+Twelve domains are live: `system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks`, `endpoints`, `endpoint_groups`, `teams`, `team_memberships`, `roles` and `resource_controls` — 109 catalog actions in all. Every one of them is exercised against a disposable Portainer estate, on every edition it applies to, before it ships — not all of them apply to both; see [End-to-end testing](#end-to-end-e2e-testing).
 
 There are no releases, no published container image and no pre-built binaries yet. Build from source.
 
@@ -132,6 +147,14 @@ make e2e-down        # tear the compose estate down
 `make e2e-up` and `make e2e-down` need only Docker and Docker Compose. `make e2e-k8s-up` /
 `make e2e-k8s-down` additionally need `k3d`, `kubectl` and `helm` on `PATH` — the scripts fail with
 a named message if any is missing rather than doing something partial.
+
+Either leg can be brought up on its own: `make e2e-k8s-up` with no compose estate provisions a
+Kubernetes-only one, and the suite runs against whatever it finds. A leg that is absent is never
+silently ignored — `make test-e2e` prints which legs the estate provisions and which are **absent**,
+and every suite that needs a missing one skips by name (`go test` is run with `-v` for exactly that
+reason). With one Business Edition licence permitting one Portainer instance at a time, bringing up
+one leg at a time is the normal way to work; `test/e2e/.licence.lock` refuses the second activation
+if you forget.
 
 ### Running the estate on another machine
 
@@ -249,6 +272,16 @@ reason, and the build does not go red for a secret a contributor cannot supply. 
 available, the key is written to `.env` from the environment, never as a
 command-line argument or an echoed value, and the file is removed on every exit path, including a
 failed run.
+
+That workflow runs the two legs as **two sequential jobs** — the compose estate first, then the
+Kubernetes leg, with `needs:` between them — and the whole workflow is behind a `concurrency` group
+so only one run holds the licence at a time across the repository. Both exist for the same reason:
+the licence permits one instance, and `test/e2e/.licence.lock` is a file on one runner's own
+filesystem, so it cannot see another runner. Ordering, not the lock, is what keeps two live
+Portainer servers from activating the same key. Each job therefore measures half an estate and says
+so in its own log; between them the two halves are covered — but only when the workflow finishes
+green. `needs:` means a failed or cancelled compose job skips the Kubernetes one entirely, so a red
+run has measured the compose half at most, never both.
 
 ### Security
 

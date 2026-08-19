@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/jmrplens/portainer-mcp/internal/specdiff"
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 )
 
 // specOperation is one operation declared by a vendored OpenAPI document,
@@ -60,10 +61,29 @@ func exportedName(id string) string {
 // every operation it declares, keyed by its exported operationId, ready for
 // specdiff.ShapeFromSpec.
 //
-// An operation with no operationId is skipped, mirroring cmd/audit_1to1's
-// parseSpecOperations: neither vendored spec's handful of such entries
-// (mostly webhook and websocket routes) can ever become a catalog action, so
-// there is no name for this audit to compare a shape against either.
+// An operation with no operationId is looked up in internal/specnaming's
+// table first, and skipped only if that table does not name it either —
+// mirroring cmd/audit_1to1's parseSpecOperations, which was taught the same
+// rule for the same reason, and cmd/gen_applicability's applySyntheticIDs,
+// which writes the same names into internal/apiversion's operationIDs index.
+//
+// Skipping unconditionally, which this function used to do, is not merely a
+// missing feature: it is the same invisibility internal/specnaming exists to
+// end, one gate further along. A route neither document names can still be
+// declared as a catalog action (the name comes from that table, and
+// cmd/gen_applicability puts it in the edition index so actioncatalog can
+// resolve it), and when one is, this audit refused to run at all —
+// "OperationID ... resolves in neither vendored spec" — for an operation the
+// documents describe completely apart from its name. Both parameters, the
+// response schema and the descriptions are all there to compare against; only
+// the key to find them by was missing.
+//
+// The one thing that must not happen is a synthetic name quietly displacing a
+// published one. It cannot: a name arrived at either way goes through the same
+// duplicate check below, which refuses outright rather than overwriting —
+// exactly as cmd/audit_1to1's own collisionError does, and what keeps
+// internal/specnaming's "verified collision-free" claim honest against a
+// future respec.
 func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 	var doc struct {
 		Paths      map[string]map[string]json.RawMessage `json:"paths"`
@@ -112,18 +132,23 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 			if err := json.Unmarshal(methods[method], &op); err != nil {
 				return nil, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
 			}
-			if op.OperationID == "" {
-				continue
-			}
 			name := exportedName(op.OperationID)
+			if name == "" {
+				synthetic, named := specnaming.SyntheticOperationID(method, path)
+				if !named {
+					continue
+				}
+				name = synthetic
+			}
 			domain := ""
 			if len(op.Tags) > 0 {
 				domain = op.Tags[0]
 			}
 			if existing, dup := ops[name]; dup {
 				return nil, fmt.Errorf(
-					"operationId %q (exported %q) is declared for both %s %s and %s %s",
-					op.OperationID, name, existing.Op.Method, existing.Op.Path, strings.ToUpper(method), path)
+					"operationId %q is declared for both %s %s and %s %s (%s)",
+					name, existing.Op.Method, existing.Op.Path, strings.ToUpper(method), path,
+					nameOrigin(op.OperationID))
 			}
 			ops[name] = specOperation{
 				Op: specdiff.SpecOperation{
@@ -144,6 +169,18 @@ func parseSpecOperations(data []byte) (map[string]specOperation, error) {
 		}
 	}
 	return ops, nil
+}
+
+// nameOrigin describes where the second of two colliding names came from, so
+// the refusal above tells a published operationId apart from one
+// internal/specnaming's table supplied. Getting that backwards would send a
+// reader to remove the wrong thing — the same reasoning cmd/audit_1to1's
+// collisionError records for its own, richer version of this message.
+func nameOrigin(rawOperationID string) string {
+	if rawOperationID == "" {
+		return "the second is named by internal/specnaming's table, the document leaving it unnamed"
+	}
+	return fmt.Sprintf("the second declares operationId %q", rawOperationID)
 }
 
 // resolveSpecOperation looks up operationID in eeOps first, falling back to

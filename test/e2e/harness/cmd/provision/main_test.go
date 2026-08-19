@@ -273,7 +273,7 @@ func TestUnit_RunKubernetes_PreservesAlreadyRecordedComposeGPU(t *testing.T) {
 		estatePath := filepath.Join(t.TempDir(), "estate.json")
 		wantGPU := harness.GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
 		seed := harness.Estate{
-			CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
+			CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example", Creds: harness.Credentials{APIKey: "ce-key"}},
 			GPU: wantGPU,
 		}
 		if err := seed.SaveTo(estatePath); err != nil {
@@ -347,7 +347,7 @@ func TestUnit_RunKubernetes_RecordsItsOwnGPUFromEnvironment(t *testing.T) {
 			server, caFile := fakeKubernetesServer(t)
 			estatePath := filepath.Join(t.TempDir(), "estate.json")
 			seed := harness.Estate{
-				CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example"},
+				CE:  harness.Server{Edition: "CE", BaseURL: "http://ce.example", Creds: harness.Credentials{APIKey: "ce-key"}},
 				GPU: tc.composeGPU,
 			}
 			if err := seed.SaveTo(estatePath); err != nil {
@@ -509,5 +509,53 @@ func TestUnit_Run_RecordsSwarmServiceIDFromEnvironment(t *testing.T) {
 				t.Errorf("HasSwarm() = %v, want %v", got.HasSwarm(), tc.wantHasSwarm)
 			}
 		})
+	}
+}
+
+// TestUnit_RunKubernetes_NoEstateFile_ProvisionsAKubernetesOnlyEstate pins
+// the shape CI's split into two sequential jobs made normal: the Kubernetes
+// job runs on its own runner, where `make e2e-up` never ran, so
+// PORTAINER_E2E_ESTATE names a file that does not exist yet.
+//
+// Before the split this was a hard failure, and a silent one in the place it
+// mattered most: k3d-down.sh's licence release loads the same estate and
+// treats a load failure as "nothing to release", so a Kubernetes leg that
+// could not write an estate would take the single Business Edition licence
+// with it when `k3d cluster delete` destroyed the server holding it.
+//
+// The mutation this is written against is the obvious "simplification":
+// restoring the bare `return fmt.Errorf("load estate: %w", err)` makes this
+// test fail with exactly that error.
+func TestUnit_RunKubernetes_NoEstateFile_ProvisionsAKubernetesOnlyEstate(t *testing.T) {
+	server, caFile := fakeKubernetesServer(t)
+
+	// Named inside a fresh temp dir and never created: the file's absence is
+	// the whole scenario.
+	estatePath := filepath.Join(t.TempDir(), "estate.json")
+	if _, err := os.Stat(estatePath); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist, Stat() err = %v", estatePath, err)
+	}
+
+	t.Setenv(k8sBaseURLEnv, server.URL)
+	t.Setenv(envK8sSetup, "the-setup-token")
+	t.Setenv(k8sCAFileEnv, caFile)
+	t.Setenv(licenceEnv, "")
+
+	if err := runKubernetes(estatePath); err != nil {
+		t.Fatalf("runKubernetes() with no estate file error = %v, want it to provision one", err)
+	}
+
+	got, err := harness.LoadEstate(estatePath)
+	if err != nil {
+		t.Fatalf("LoadEstate() after a Kubernetes-only provisioning error = %v", err)
+	}
+	if !got.HasKubernetes() {
+		t.Error("HasKubernetes() = false: the leg this run provisioned is not on file")
+	}
+	if got.HasCommunityEdition() {
+		t.Errorf("HasCommunityEdition() = true: a compose leg was invented that never ran, CE = %+v", got.CE)
+	}
+	if len(got.Legs()) != 1 {
+		t.Errorf("Legs() = %+v, want exactly the Kubernetes leg", got.Legs())
 	}
 }

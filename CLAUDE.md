@@ -1,20 +1,32 @@
 # portainer-mcp — Project Intelligence
 
-MCP server in Go exposing the Portainer REST API. Rewrite in progress: the
-canonical action catalog, generated client and tool surfaces described in the
-design specification are being built phase by phase.
+MCP server in Go that exposes the Portainer REST API as a catalog of named
+actions. A model calls `teams.create` or `stacks.deploy` rather than an HTTP
+route: the server validates the input against a published schema, calls
+Portainer, and redacts credential-shaped fields out of the response.
+
+The two safety modes are not the same mechanism, and the difference is worth
+knowing. Read-only drops every mutating action from the catalog outright, so
+a model never sees one. Safe mode keeps them and intercepts the call,
+answering with a preview of what it would have done.
 
 > Canonical source: `AGENTS.md`. This file is the Claude-formatted version.
 
-## Current state
+## The action catalog
 
-Wave 1 of the action catalog is complete. Seven domains are declared —
-`system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks` and
-`endpoints` — for **88 actions**, covering 87 of Business Edition's 441
-operations and 66 of Community Edition's 251 (`api/coverage-baseline.yaml`
-is the ratchet, `make audit-1to1` the "are we done" report). All three tool
-surfaces (`dynamic`, `meta`, `individual`) are live and exercised end to end
-against a real estate.
+Actions are grouped into domains. Twelve are declared — `system`, `tags`,
+`registries`, `docker`, `custom_templates`, `stacks`, `endpoints`,
+`endpoint_groups`, `teams`, `team_memberships`, `roles` and
+`resource_controls` — for **109 actions**.
+
+They cover part of Portainer's REST surface, not all of it: 108 of Business
+Edition's 442 operations and 86 of Community Edition's 252.
+`api/coverage-baseline.yaml` is the ratchet that stops those numbers falling,
+and `make audit-1to1` reports which operations are still uncovered — take
+every figure from the tool, never from this paragraph.
+
+All three tool surfaces (`dynamic`, `meta`, `individual`) are live and
+exercised end to end against a real estate.
 
 A domain is scaffolded once from the vendored specification and owned as
 ordinary Go source from then on; nothing regenerates it. See
@@ -39,8 +51,12 @@ and the documents that describe it.
 - Module path is `github.com/jmrplens/portainer-mcp`, no version suffix.
 - MCP SDK is `github.com/modelcontextprotocol/go-sdk` v1.7.0.
 - All project artefacts are written in English.
-- `plan/`, `docs/superpowers/`, `.env` and `*.license` are gitignored working
-  artefacts and must never be committed.
+- **Plans and progress live outside the repository.** `plan/` and
+  `docs/superpowers/` are gitignored, as are `.env` and `*.license`. What is
+  committed is documentation for developers and for users of the MCP — never
+  this project's own planning, progress or working notes. A fact worth
+  keeping goes to `docs/api-divergences.md`, complete enough to stand alone;
+  the work built on that fact stays local.
 
 ## Layout
 

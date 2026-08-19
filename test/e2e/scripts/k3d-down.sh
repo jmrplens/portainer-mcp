@@ -53,6 +53,19 @@ if [[ -n "$licence" && -f "$estate_file" ]]; then
         echo "warning: could not read the portainer certificate to release the licence; continuing teardown" >&2
     fi
 fi
+# Released unconditionally, OUTSIDE the block above, not merely on a path
+# that reaches it: k3d-up.sh takes this leg's lock BEFORE `k3d cluster
+# create` ever runs, roughly two minutes plus a Helm install before the
+# estate file this block also gates on exists. A run that dies anywhere in
+# that window -- cluster creation, Helm, reading the setup token -- leaves a
+# lock this leg genuinely took but no estate file for
+# "$licence && -f $estate_file" to ever see again, and the block above would
+# then never run at all. release_licence_lock is already holder-gated and
+# warn-only (see its own doc), so calling it unconditionally here can
+# neither remove a lock the compose leg holds nor fail this teardown --
+# including a Community-only run, where it simply warns that there was never
+# a lock to release.
+release_licence_lock "$repo_root" kubernetes
 
 k3d cluster delete "$cluster" 2>/dev/null || true
 

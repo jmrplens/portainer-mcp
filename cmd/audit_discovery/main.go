@@ -50,11 +50,16 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/actioncatalog"
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
+	"github.com/jmrplens/portainer-mcp/internal/tools/endpoint_groups"
 	"github.com/jmrplens/portainer-mcp/internal/tools/endpoints"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/resource_controls"
+	"github.com/jmrplens/portainer-mcp/internal/tools/roles"
 	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
+	"github.com/jmrplens/portainer-mcp/internal/tools/team_memberships"
+	"github.com/jmrplens/portainer-mcp/internal/tools/teams"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -94,6 +99,11 @@ func allSpecs() []toolutil.ActionSpec {
 	specs = append(specs, custom_templates.Specs()...)
 	specs = append(specs, endpoints.Specs()...)
 	specs = append(specs, stacks.Specs()...)
+	specs = append(specs, endpoint_groups.Specs()...)
+	specs = append(specs, teams.Specs()...)
+	specs = append(specs, team_memberships.Specs()...)
+	specs = append(specs, roles.Specs()...)
+	specs = append(specs, resource_controls.Specs()...)
 	return specs
 }
 

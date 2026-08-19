@@ -1,6 +1,18 @@
-// Package specnaming holds the one rule that decides what an operation's
-// top-level fields are called on the wire when two different parts of the
-// same operation want the same name.
+// Package specnaming holds the naming rules that two independent
+// derivations of the same specification must agree on exactly, in one place
+// rather than mirrored on both sides.
+//
+// There are two today, each with its own file:
+//
+//   - collision.go (this file) decides what an operation's top-level fields
+//     are called on the wire when two different parts of the same operation
+//     want the same name.
+//   - unnamed.go decides what a route no vendored document gives an
+//     operationId is called at all, so that it can be declared and counted
+//     instead of dropped.
+//
+// The rest of this comment is the first rule; see unnamed.go's own header
+// for the second, including why its table is explicit rather than derived.
 //
 // Why a package of its own, rather than a function in either caller: two
 // independent derivations of an operation's field names already exist and

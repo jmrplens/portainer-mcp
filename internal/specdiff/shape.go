@@ -840,6 +840,23 @@ var httpMethods = map[string]bool{
 // components, find one operation by operationId, and (like the generator)
 // carry its raw Summary/Description forward — here so ShapeFromSpec can
 // clean them into Title/Description via CleanTitleAndDescription.
+//
+// "By operationId" includes a name internal/specnaming's table supplies. A
+// path item whose operation declares no operationId of its own is matched
+// against specnaming.SyntheticOperationID(method, path) instead, which is
+// the identical rule cmd/audit_1to1's parseSpecOperations,
+// cmd/gen_applicability's applySyntheticIDs and cmd/audit_spec_drift's own
+// parseSpecOperations all apply — the reason that rule lives in a package
+// every one of them can import rather than in any single one of them.
+// Without it, a route neither vendored document names resolves here to
+// "operation not found" even though the document describes it completely
+// apart from its name, and this package would disagree with the audits that
+// share its inputs about what the same document declares.
+//
+// One consequence worth stating: LoadSpecOperation(data, "") no longer
+// matches GET /endpoint_groups/{id}, because that route now has a name. It
+// still matches the first unnamed operation the table does not name, as
+// before.
 func LoadSpecOperation(data []byte, operationID string) (SpecOperation, error) {
 	var doc struct {
 		Paths      map[string]map[string]json.RawMessage `json:"paths"`
@@ -884,11 +901,17 @@ func LoadSpecOperation(data []byte, operationID string) (SpecOperation, error) {
 			if err := json.Unmarshal(methods[method], &op); err != nil {
 				return SpecOperation{}, fmt.Errorf("decode %s %s: %w", strings.ToUpper(method), path, err)
 			}
-			if op.OperationID != operationID {
+			name := op.OperationID
+			if name == "" {
+				if synthetic, named := specnaming.SyntheticOperationID(method, path); named {
+					name = synthetic
+				}
+			}
+			if name != operationID {
 				continue
 			}
 			return SpecOperation{
-				OperationID:   op.OperationID,
+				OperationID:   name,
 				Method:        strings.ToUpper(method),
 				Path:          path,
 				Summary:       op.Summary,

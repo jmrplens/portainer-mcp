@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/jmrplens/portainer-mcp/internal/specnaming"
 )
 
 func TestUnit_ExportedName_UppercasesFirstRuneOnly(t *testing.T) {
@@ -79,8 +81,13 @@ func TestUnit_ParseSpecOperations_DecodesEveryOperation(t *testing.T) {
 
 // TestUnit_ParseSpecOperations_SkipsOperationsWithNoOperationID mirrors both
 // vendored specs' own handful of webhook/websocket routes that carry no
-// operationId at all: those can never become a catalog action, so there is
+// operationId at all AND no entry in internal/specnaming's table: nothing
+// names those, so they can never become a catalog action and there is
 // nothing for this audit to compare their shape against.
+//
+// POST /webhooks/{id} is a real such route and deliberately one
+// internal/specnaming does not name, so this stays a test of the skip rather
+// than becoming a second test of the synthetic-name lookup below.
 func TestUnit_ParseSpecOperations_SkipsOperationsWithNoOperationID(t *testing.T) {
 	t.Parallel()
 	t.Run("ParseSpecOperations SkipsOperationsWithNoOperationID", func(t *testing.T) {
@@ -93,6 +100,168 @@ func TestUnit_ParseSpecOperations_SkipsOperationsWithNoOperationID(t *testing.T)
 			t.Errorf("parseSpecOperations() = %v, want no operations for a path with no operationId", ops)
 		}
 	})
+}
+
+// unnamedInspectSpec is GET /endpoint_groups/{id} as both vendored documents
+// actually declare it: fully described — summary, description, both
+// parameters, a response schema — and carrying no operationId at all. It is
+// the one route internal/specnaming's table names, and the reason
+// parseSpecOperations consults that table instead of skipping.
+const unnamedInspectSpec = `{
+  "paths": {
+    "/endpoint_groups/{id}": {
+      "get": {
+        "tags": ["endpoint_groups"],
+        "summary": "Inspect an Environment(Endpoint) group",
+        "description": "Retrieve details about an environment(endpoint) group.\n**Access policy**: administrator",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}, "description": "Environment(Endpoint) group identifier"},
+          {"name": "size", "in": "query", "schema": {"type": "boolean"}, "description": "If true, include the number of environments and breakdown by type"}
+        ]
+      }
+    }
+  }
+}`
+
+// TestUnit_ParseSpecOperations_UnnamedRouteTakesItsNameFromSpecnaming is the
+// guard for the seam this audit refused at.
+//
+// GET /endpoint_groups/{id} carries no operationId in either vendored
+// document, so parseSpecOperations used to skip it outright — and
+// auditDrift then refused to run at all the moment the catalog declared
+// endpoint_groups.inspect against internal/specnaming's name for it:
+// `action "endpoint_groups.inspect": OperationID "EndpointGroupInspect"
+// resolves in neither vendored spec`. The documents describe the operation
+// completely apart from its name; only the key to find it by was missing.
+//
+// Delete the specnaming lookup in parseSpecOperations and this fails on the
+// length check, before any field is examined.
+func TestUnit_ParseSpecOperations_UnnamedRouteTakesItsNameFromSpecnaming(t *testing.T) {
+	t.Parallel()
+	t.Run("ParseSpecOperations UnnamedRouteTakesItsNameFromSpecnaming", func(t *testing.T) {
+		want, named := specnaming.SyntheticOperationID(http.MethodGet, "/endpoint_groups/{id}")
+		if !named {
+			t.Fatal("internal/specnaming no longer names GET /endpoint_groups/{id}; this test and cmd/audit_spec_drift's lookup both assume it does")
+		}
+
+		ops, err := parseSpecOperations([]byte(unnamedInspectSpec))
+		if err != nil {
+			t.Fatalf("parseSpecOperations() error = %v", err)
+		}
+		if len(ops) != 1 {
+			t.Fatalf("parseSpecOperations() = %d operation(s) (%v), want 1: the route carries no operationId but internal/specnaming names it", len(ops), ops)
+		}
+
+		op, ok := ops[want]
+		if !ok {
+			t.Fatalf("parseSpecOperations() has no %q entry; got %v", want, ops)
+		}
+		if op.Op.OperationID != want {
+			t.Errorf("OperationID = %q, want %q: the synthetic name must be carried on the operation too, not only used as the map key", op.Op.OperationID, want)
+		}
+		if op.Op.Method != http.MethodGet || op.Op.Path != "/endpoint_groups/{id}" {
+			t.Errorf("Method=%q Path=%q, want GET /endpoint_groups/{id}", op.Op.Method, op.Op.Path)
+		}
+		if op.Domain != "endpoint_groups" {
+			t.Errorf("Domain = %q, want %q", op.Domain, "endpoint_groups")
+		}
+		// The whole point of resolving the name is that there is a real shape
+		// behind it to compare against. An entry keyed correctly but carrying
+		// no parameters would satisfy every check above and audit nothing.
+		if len(op.Op.Parameters) != 2 {
+			t.Errorf("Parameters = %d, want 2 (id and size): the audit compares this shape against the catalog's Input struct", len(op.Op.Parameters))
+		}
+		if op.Op.Summary != "Inspect an Environment(Endpoint) group" {
+			t.Errorf("Summary = %q, want the document's own summary", op.Op.Summary)
+		}
+	})
+}
+
+// TestUnit_ParseSpecOperations_SyntheticNameCollidingWithAPublishedOne_ReturnsError
+// is what keeps internal/specnaming's "verified collision-free" claim true
+// against a future respec, on this side of the fence: if some later document
+// starts publishing EndpointGroupInspect for a different route, the two must
+// not silently shadow each other, or this audit would compare the catalog
+// action against the wrong operation's shape.
+//
+// Two rows, and the reason there are two is the reason nameOrigin exists.
+// parseSpecOperations walks paths in sorted order (sort.Strings, above), so
+// whichever route sorts first becomes the incumbent and the other is the one
+// nameOrigin describes. One row therefore reaches nameOrigin's published
+// branch and the other its synthetic branch, and with only the first row
+// written the synthetic branch was reachable by no test at all.
+//
+// Each row asserts the phrase that DISTINGUISHES its branch, and asserts the
+// other branch's phrase is absent. Asserting merely that the message
+// mentions the operationId does not discriminate: the message's own leading
+// clause names it whatever nameOrigin returns, so that assertion passes with
+// nameOrigin's body replaced by any string at all — which is exactly the
+// distinction spec.go's own doc comment says the function exists to make.
+func TestUnit_ParseSpecOperations_SyntheticNameCollidingWithAPublishedOne_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	synthetic, named := specnaming.SyntheticOperationID(http.MethodGet, "/endpoint_groups/{id}")
+	if !named {
+		t.Fatal("internal/specnaming no longer names GET /endpoint_groups/{id}")
+	}
+
+	const (
+		publishedPhrase = `the second declares operationId`
+		syntheticPhrase = `internal/specnaming's table`
+	)
+
+	for _, tc := range []struct {
+		name string
+		// otherPath is the route that publishes the colliding name. Its
+		// position relative to "/endpoint_groups/{id}" in sort order is what
+		// decides which of the two is met second, and so which branch of
+		// nameOrigin describes it.
+		otherPath  string
+		wantPhrase string
+		notPhrase  string
+	}{
+		{
+			name:       "the published name is met second",
+			otherPath:  "/somewhere/else",
+			wantPhrase: publishedPhrase,
+			notPhrase:  syntheticPhrase,
+		},
+		{
+			name: "the synthetic name is met second",
+			// Sorts before "/endpoint_groups/{id}", so the published route is
+			// the incumbent and the nameless one is the collision reported.
+			otherPath:  "/a-route-that-sorts-first",
+			wantPhrase: syntheticPhrase,
+			notPhrase:  publishedPhrase,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spec := `{"paths": {
+				"/endpoint_groups/{id}": {"get": {"tags": ["endpoint_groups"]}},
+				"` + tc.otherPath + `": {"get": {"operationId": "` + synthetic + `", "tags": ["x"]}}
+			}}`
+
+			_, err := parseSpecOperations([]byte(spec))
+			if err == nil {
+				t.Fatalf("parseSpecOperations() = nil error, want a refusal: %q is both published and synthetic here", synthetic)
+			}
+			if !strings.Contains(err.Error(), synthetic) {
+				t.Errorf("parseSpecOperations() error = %v, want it to name %q", err, synthetic)
+			}
+			if !strings.Contains(err.Error(), "/endpoint_groups/{id}") || !strings.Contains(err.Error(), tc.otherPath) {
+				t.Errorf("parseSpecOperations() error = %v, want it to name both colliding routes", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantPhrase) {
+				t.Errorf("parseSpecOperations() error = %v, want it to contain %q: the message must say which of the two names came from where, or a reader sent to fix it removes the wrong one",
+					err, tc.wantPhrase)
+			}
+			if strings.Contains(err.Error(), tc.notPhrase) {
+				t.Errorf("parseSpecOperations() error = %v, must NOT contain %q: it describes the other branch, and a message carrying both distinguishes nothing",
+					err, tc.notPhrase)
+			}
+		})
+	}
 }
 
 // TestUnit_ParseSpecOperations_DuplicateOperationID_ReturnsError proves a

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Bring up the ephemeral Portainer estate and provision it.
 #
-# Idempotent: running it twice replaces the estate rather than accumulating
-# one. Safe by construction: every resource is named under the compose project
-# portainer-mcp-e2e, so nothing here can touch a Portainer the developer
-# already runs.
+# Idempotent for a Community Edition run: running it twice replaces the
+# estate rather than accumulating one. That is no longer true once a
+# Business Edition licence is in play: take_licence_lock below refuses a
+# second `up.sh` for the SAME leg while its own first run's lock is still
+# held, exactly like it refuses a different leg's -- a licensed estate has to
+# come down (`make e2e-down`) before it can be brought up again, not simply
+# rerun on top of itself. See docs/domain-wave-checklist.md's "One Business
+# Edition licence at a time" section. Safe by construction either way: every
+# resource is named under the compose project portainer-mcp-e2e, so nothing
+# here can touch a Portainer the developer already runs.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -23,6 +29,29 @@ if [[ -n "$ssh_dest" ]]; then
     export DOCKER_HOST="ssh://$ssh_dest"
     echo "running the estate on $ssh_dest via $DOCKER_HOST" >&2
 fi
+# The Business Edition licence lives in a gitignored .env at the repository
+# root. Its absence is not an error: the Community Edition legs still run, and
+# the estate records that Business Edition is unavailable so suites skip.
+licence=$(read_licence "$repo_root")
+if [[ -z "$licence" ]]; then
+    echo "no PORTAINER_LICENSE in .env: provisioning Community Edition only" >&2
+fi
+
+# The lock is taken only when a licence is actually in play -- a
+# Community-only run reads none above and must neither be blocked by a lock
+# nor create one. Taken here, BEFORE refuse_docker_host_switch/
+# record_docker_host below, so a refusal costs genuinely nothing: not only
+# has docker compose not run yet, but this leg's .docker-host marker has not
+# been touched either. Taking the lock any later -- it used to sit after
+# both calls -- meant a refused run on the remote path had already let
+# record_docker_host rewrite the marker to name the destination THIS run
+# would have used, even though nothing was ever created there: a marker
+# claiming an estate exists somewhere it does not, which is exactly the
+# confusion refuse_docker_host_switch itself exists to prevent.
+if [[ -n "$licence" ]]; then
+    take_licence_lock "$repo_root" compose
+fi
+
 # Refuses rather than silently orphaning a still-running estate this run would
 # otherwise stop being able to find: see refuse_docker_host_switch's own doc
 # for the plain-`make e2e-up`-after-`make e2e-up-remote` scenario this exists
@@ -32,14 +61,6 @@ refuse_docker_host_switch "$ssh_dest"
 # Recorded before anything is created, not after: a run that dies half way
 # through still has to be tearable down against the right daemon.
 record_docker_host "$ssh_dest"
-
-# The Business Edition licence lives in a gitignored .env at the repository
-# root. Its absence is not an error: the Community Edition legs still run, and
-# the estate records that Business Edition is unavailable so suites skip.
-licence=$(read_licence "$repo_root")
-if [[ -z "$licence" ]]; then
-    echo "no PORTAINER_LICENSE in .env: provisioning Community Edition only" >&2
-fi
 
 # A GPU on the Docker host is an optional capability, discovered the same way
 # the licence is: absent means the GPU suites skip, never that the estate

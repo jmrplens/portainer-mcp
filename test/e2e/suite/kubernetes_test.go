@@ -58,8 +58,16 @@ const (
 // against a live in-cluster server: system.version returns exactly
 // {"ServerVersion":"2.44.0","ServerEdition":"EE","DatabaseVersion":"2.44.0"}.
 func TestKubernetesLeg_ReachableThroughEveryMCPSurface(t *testing.T) {
+	// A skip, not a failure, and now the ordinary outcome rather than the
+	// unusual one: CI's compose job (see .github/workflows/e2e.yml) never
+	// brings this leg up, because the two legs share one single-instance
+	// Business Edition licence and take it in turns. The message names both
+	// what is absent and what provisions it, and TestMain's own summary line
+	// names this leg among the ABSENT ones, so a green compose run cannot be
+	// mistaken for one that measured the Kubernetes leg too.
 	if !estate.HasKubernetes() {
-		t.Skip("no Kubernetes leg provisioned in this estate: run `make e2e-k8s-up` first")
+		t.Skip("no Kubernetes leg provisioned in this estate: `make e2e-k8s-up` provisions it, " +
+			"and CI's own Kubernetes job runs this suite against it separately")
 	}
 
 	logger := logging.New(slog.LevelWarn)

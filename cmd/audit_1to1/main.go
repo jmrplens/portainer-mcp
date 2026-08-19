@@ -9,7 +9,12 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 60 of 441 Business-Edition operations covered, plain run (what `make
+// With 108 of 442 Business-Edition and 86 of 252 Community-Edition
+// operations covered (the endpoint_groups, teams, team_memberships, roles
+// and resource_controls domains;
+// api/coverage-baseline.yaml is the committed record, and the figure here
+// goes stale by design between waves — treat this sentence as an order of
+// magnitude, never as the source of truth), plain run (what `make
 // audit-1to1` calls, and what a human asking "are we done" wants) fails
 // today and keeps failing for most of P3 — that is correct, not a bug to
 // work around.
@@ -48,11 +53,16 @@ import (
 
 	"github.com/jmrplens/portainer-mcp/internal/tools/custom_templates"
 	"github.com/jmrplens/portainer-mcp/internal/tools/docker"
+	"github.com/jmrplens/portainer-mcp/internal/tools/endpoint_groups"
 	"github.com/jmrplens/portainer-mcp/internal/tools/endpoints"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/resource_controls"
+	"github.com/jmrplens/portainer-mcp/internal/tools/roles"
 	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
+	"github.com/jmrplens/portainer-mcp/internal/tools/team_memberships"
+	"github.com/jmrplens/portainer-mcp/internal/tools/teams"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 )
 
@@ -229,6 +239,11 @@ func allCatalogSpecs() []toolutil.ActionSpec {
 	specs = append(specs, custom_templates.Specs()...)
 	specs = append(specs, endpoints.Specs()...)
 	specs = append(specs, stacks.Specs()...)
+	specs = append(specs, endpoint_groups.Specs()...)
+	specs = append(specs, teams.Specs()...)
+	specs = append(specs, team_memberships.Specs()...)
+	specs = append(specs, roles.Specs()...)
+	specs = append(specs, resource_controls.Specs()...)
 	return specs
 }
 

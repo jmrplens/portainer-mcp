@@ -394,9 +394,18 @@ func kubernetesClient() (*http.Client, error) {
 	return client, nil
 }
 
-// runKubernetes provisions the Kubernetes leg into an estate the compose legs
-// have already written, and merges the result back in rather than
-// overwriting it.
+// runKubernetes provisions the Kubernetes leg, merging it into an estate the
+// compose legs have already written when there is one and starting a fresh
+// estate when there is not.
+//
+// Both shapes are ordinary. Locally the documented sequence is `make e2e-up`
+// then `make e2e-k8s-up`, and the merge is what stops this leg from
+// discarding the compose legs already on file. In CI the two legs are brought
+// up by two separate, sequential jobs on two separate runners — one Business
+// Edition licence, one Portainer instance at a time, see
+// .github/workflows/e2e.yml — so the Kubernetes job's runner has no estate
+// file at all, and refusing to provision without one would leave that job
+// with nothing to run the suite against.
 //
 // The design specification claims the in-cluster server acquires its own
 // Kubernetes environment automatically. Measured against a live deploy: it
@@ -415,9 +424,20 @@ func runKubernetes(estatePath string) error {
 	}
 	licence := os.Getenv(licenceEnv)
 
+	// A missing estate file is the Kubernetes-only shape described above, not
+	// a failure: start from an empty Estate and let the merge below write the
+	// first leg into it. Only os.ErrNotExist is forgiven — a file that exists
+	// and cannot be read or decoded, or one that decodes to no leg at all,
+	// still aborts, because those are the interrupted-provisioning cases
+	// LoadEstate's own guard exists to catch and continuing past them would
+	// overwrite whatever they were the evidence of.
 	estate, err := harness.LoadEstate(estatePath)
 	if err != nil {
-		return fmt.Errorf("load estate: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("load estate: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "no estate at %s yet: provisioning a Kubernetes-only estate\n", estatePath)
+		estate = harness.Estate{}
 	}
 	// estate.GPU is deliberately left untouched here. k3d-up.sh does not
 	// export gpuNameEnv or gpuCDIDeviceEnv — the GPU belongs to the Docker

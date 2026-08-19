@@ -159,15 +159,26 @@ func run(w io.Writer, estatePath, specsDir, specVersion string, timeout time.Dur
 	ctx := context.Background()
 	var results []legResult
 
-	ceOps, err := loadSpecOperations(specsDir, fmt.Sprintf("ce-%s.json", specVersion))
-	if err != nil {
-		return err
+	// Guarded, like the Business Edition block below, rather than
+	// unconditional. A Community Edition leg used to be the one thing every
+	// estate carried; since CI provisions the compose legs and the Kubernetes
+	// leg in two separate jobs (see .github/workflows/e2e.yml), an estate can
+	// legitimately carry neither compose leg, and probing a leg that is not
+	// there produced a connection error reported as "audit CE leg" — a
+	// failure that names the wrong thing.
+	if estate.HasCommunityEdition() {
+		ceOps, err := loadSpecOperations(specsDir, fmt.Sprintf("ce-%s.json", specVersion))
+		if err != nil {
+			return err
+		}
+		ceResult, err := auditLeg(ctx, w, "CE", apiBaseURL(estate.CE.BaseURL), ceOps, timeout)
+		if err != nil {
+			return fmt.Errorf("audit CE leg: %w", err)
+		}
+		results = append(results, ceResult)
+	} else if _, err := fmt.Fprintln(w, "no Community Edition leg in this estate: CE operations not probed this run."); err != nil {
+		return fmt.Errorf("write report: %w", err)
 	}
-	ceResult, err := auditLeg(ctx, w, "CE", apiBaseURL(estate.CE.BaseURL), ceOps, timeout)
-	if err != nil {
-		return fmt.Errorf("audit CE leg: %w", err)
-	}
-	results = append(results, ceResult)
 
 	if estate.HasBusinessEdition() {
 		eeOps, err := loadSpecOperations(specsDir, fmt.Sprintf("ee-%s.json", specVersion))
@@ -183,6 +194,16 @@ func run(w io.Writer, estatePath, specsDir, specVersion string, timeout time.Dur
 		if _, err := fmt.Fprintln(w, "no Business Edition leg in this estate (no licence provisioned): EE operations not probed this run."); err != nil {
 			return fmt.Errorf("write report: %w", err)
 		}
+	}
+
+	// An estate with no compose leg at all probes nothing, and a report of
+	// nothing must not read as a clean one: this audit exists to compare a
+	// live server against the vendored documents, so "there was no server"
+	// is a reason it could not run, which is what its own doc comment says an
+	// error is for.
+	if len(results) == 0 {
+		return fmt.Errorf("this estate provisions no compose leg to probe " +
+			"(the Kubernetes leg is deliberately not audited here): run `make e2e-up` first")
 	}
 
 	if _, err := fmt.Fprint(w, buildReport(results)); err != nil {

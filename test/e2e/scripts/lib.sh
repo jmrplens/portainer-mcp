@@ -17,6 +17,227 @@ read_licence() {
     read_env_var "$1" PORTAINER_LICENSE
 }
 
+# licence_lock_path echoes the path to the licence lock: the artefact that
+# records which leg (compose or kubernetes) currently holds the single-use
+# Business Edition licence, so a second leg refuses to activate the same key
+# instead of colliding with the first. Rooted at repo_root, like
+# read_licence's own .env, rather than $PWD -- take_licence_lock and
+# release_licence_lock are called from both up.sh (cwd test/e2e) and
+# k3d-up.sh/k3d-down.sh (also cwd test/e2e today, but nothing here should
+# depend on that staying true), and a path anchored on the one thing every
+# caller already resolved identically avoids yet another place the two
+# legs could quietly disagree.
+licence_lock_path() {
+    local repo_root="$1"
+    echo "$repo_root/test/e2e/.licence.lock"
+}
+
+# licence_lock_holder_running reports, via a THREE-way exit status, whether
+# the leg named in an existing lock is actually still running right now --
+# separate from anything the lock file itself claims:
+#
+#   0  running       the check ran cleanly and found the leg up
+#   1  not running   the check ran cleanly and found nothing
+#   2  unknown       the check itself could not run at all
+#
+# The distinction between 1 and 2 is the whole point, and callers MUST NOT
+# collapse it back into a plain zero/non-zero test. "Unknown" is genuinely
+# reachable, not a theoretical edge case: a Docker daemon that is briefly
+# unreachable, `DOCKER_HOST` pointed at a different machine than the one the
+# lock's holder is actually running on (see take_licence_lock's own callers
+# for exactly this scenario on the remote path), or `k3d` simply not being on
+# PATH, all make it impossible to tell "genuinely gone" apart from "cannot
+# see it from here" -- and those two must never read the same to a caller
+# deciding whether to delete something. Reported this way rather than, say,
+# writing to a global or a second output stream, because bash's own exit
+# status is already a first-class three-or-more-way channel every caller in
+# this file already knows how to read without a second mechanism to keep in
+# sync.
+#
+# take_licence_lock uses this only to choose which of three refusal messages
+# to print -- it never deletes anything regardless of the answer. But
+# licence-check.sh's cleanup (see its own comment) uses it to gate an actual
+# `rm -f`, so a caller that quietly treated 2 as "confirmed absent" would
+# turn "the check is unreliable right now" into "the check said clear it".
+#
+# The compose leg is matched on the compose project label rather than a
+# container name substring: `docker ps --filter name=portainer-mcp-e2e`
+# (what docs/domain-wave-checklist.md uses for a human-read report) also
+# matches the Kubernetes leg's own node containers, which k3d names
+# k3d-portainer-mcp-e2e-server-0 -- a substring match here would report the
+# compose leg as running because the OTHER leg is up, which is exactly
+# backwards for a check whose only job is telling the two apart.
+licence_lock_holder_running() {
+    local leg="$1"
+    case "$leg" in
+        compose)
+            local out
+            # docker's own exit status is read directly, not folded into the
+            # grep below: a daemon that cannot be reached at all ("Cannot
+            # connect to the Docker daemon...") must report unknown (2), not
+            # be indistinguishable from a daemon that answered cleanly with
+            # an empty list (not running, 1).
+            if ! out=$(docker ps --filter "label=com.docker.compose.project=portainer-mcp-e2e" \
+                    --format '{{.Names}}' 2>/dev/null); then
+                return 2
+            fi
+            [[ -n "$out" ]] && return 0
+            return 1
+            ;;
+        kubernetes)
+            local cluster="${E2E_K3D_CLUSTER:-portainer-mcp-e2e}" out
+            # k3d simply missing from PATH is unknown, not "not running": it
+            # says nothing about whether a cluster exists, only that this
+            # machine cannot ask. The original `command -v k3d && ...` chain
+            # folded that into the same false as an empty cluster list,
+            # which is exactly the collapse this rewrite exists to undo.
+            command -v k3d >/dev/null 2>&1 || return 2
+            if ! out=$(k3d cluster list -o json 2>/dev/null); then
+                return 2
+            fi
+            # -F, because the cluster name is data, not a pattern:
+            # E2E_K3D_CLUSTER is caller-supplied, and a name carrying a
+            # regex metacharacter would otherwise match a cluster that is
+            # not the one asked about — reporting a holder as running when
+            # it is not, in the one check that decides whether a lock is
+            # reported stale.
+            printf '%s\n' "$out" | grep -qF "\"name\":\"$cluster\"" && return 0
+            return 1
+            ;;
+        *)
+            # An unrecognised leg (a blank or garbled HOLDER, reachable only
+            # via an interrupted write -- see take_licence_lock's own "|| true"
+            # comment) is not "unknown": no leg by that name is ever a
+            # candidate to be running, checked or not, so this can be
+            # answered with confidence rather than punting to 2.
+            return 1
+            ;;
+    esac
+}
+
+# licence_lock_resolve_command echoes the exact command that frees the named
+# leg's licence, so a refusal can tell the operator precisely what to run
+# instead of just what is wrong.
+licence_lock_resolve_command() {
+    local leg="$1"
+    case "$leg" in
+        kubernetes) echo "make e2e-k8s-down" ;;
+        *)          echo "make e2e-down" ;;
+    esac
+}
+
+# take_licence_lock refuses (returns 1, prints why to stderr) when the lock
+# already names a holder, otherwise records this leg as the new holder and
+# returns 0. Callers take it only when a licence is actually in play -- a
+# Community-only run reads none and must neither be blocked by a lock nor
+# create one -- and take it BEFORE activating anything, so a refusal costs
+# nothing.
+#
+# A held lock is never auto-cleared here, whether or not
+# licence_lock_holder_running says the holder looks gone: it only reports the
+# distinction, so the operator decides, and `make e2e-licence-release`
+# (licence-check.sh) is the one path allowed to actually remove a lock it did
+# not itself just take, because that path first confirms -- via a live
+# attach-then-release round trip, AND its own check of whether the recorded
+# holder still looks running -- that nothing genuinely holds the licence any
+# more, rather than inferring it from a process list alone.
+#
+# The write is attempted FIRST, under `set -o noclobber`, rather than tested
+# with a separate `[[ -f ]]` and written afterward: noclobber's ">" opens
+# with O_EXCL, so the existence check and the write are one atomic kernel
+# call. Two runs racing to take the lock at the same instant cannot both see
+# "absent" and both proceed to write -- the loser's redirection fails
+# outright instead of silently overwriting the winner's file, which a
+# test-then-write pair, however narrow the window, cannot promise. noclobber
+# is scoped to the subshell below so it never leaks into the caller's own
+# shell options.
+take_licence_lock() {
+    local repo_root="$1" leg="$2" lock_path estate_file
+    lock_path=$(licence_lock_path "$repo_root")
+    estate_file="${PORTAINER_E2E_ESTATE:-$PWD/.estate.json}"
+
+    if (
+        set -o noclobber
+        {
+            echo "HOLDER=$leg"
+            echo "TAKEN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "ESTATE=$estate_file"
+        } > "$lock_path"
+    ) 2>/dev/null; then
+        return 0
+    fi
+
+    # The write above failed. Overwhelmingly that means the lock already
+    # exists -- the ordinary refusal below -- though the identical failure
+    # would also occur if $lock_path's directory were unwritable for some
+    # other reason; this function cannot tell the two apart, and neither
+    # could the `[[ -f ]]` test this replaces (the file existing right up
+    # until immediately before the write is exactly the read that test
+    # performed). The three fields are read with "|| true": a lock file that
+    # exists but is missing or blank on one line (reachable only via a write
+    # interrupted mid-way) must not make this whole function -- and the
+    # caller's `set -e` script -- abort on a grep that legitimately found no
+    # match, the same reason read_env_var's own pipeline ends the same way.
+    local holder taken_at holder_estate resolve_cmd
+    holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    taken_at=$(grep -E '^TAKEN_AT=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    holder_estate=$(grep -E '^ESTATE=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    resolve_cmd=$(licence_lock_resolve_command "$holder")
+
+    # Three-way, not if/else: licence_lock_holder_running's own doc names the
+    # exact accident collapsing 1 (confirmed not running) and 2 (could not
+    # tell) back into a plain truthy test would cause here -- this function
+    # never deletes anything either way, but it must not ASSERT staleness,
+    # or point at `make e2e-licence-release` as though the lock were known
+    # stale, on an answer that may mean nothing of the kind.
+    local holder_status=0
+    licence_lock_holder_running "$holder" || holder_status=$?
+    case "$holder_status" in
+        0)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path is already held by '$holder' (taken $taken_at, estate $holder_estate). The licence permits exactly one instance at a time. Run '$resolve_cmd' first, then retry." >&2
+            ;;
+        1)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate), but '$holder' does not appear to be running right now. This lock is reported as stale, not removed automatically -- the running check above can itself be wrong, and silently clearing it is how two live instances happen again. If you are certain nothing is really using the licence, run 'make e2e-licence-release': it clears the stranded licence and this stale lock together." >&2
+            ;;
+        *)
+            echo "refusing to activate the business edition licence for '$leg': $lock_path names '$holder' (taken $taken_at, estate $holder_estate); whether '$holder' is still running could not be determined right now (the docker/k3d check itself failed -- check DOCKER_HOST and that docker/k3d are reachable from here). An unreliable check is not evidence the holder is gone, so this is treated as still held, not as stale: 'make e2e-licence-release' would delete this lock outright, so do not run it on this basis alone. Fix the check and retry, or confirm by hand that '$holder' is genuinely gone before clearing the lock yourself." >&2
+            ;;
+    esac
+    return 1
+}
+
+# release_licence_lock removes the lock this leg took, and is itself
+# tolerant of the two ways there can be nothing sensible to remove: no lock
+# file at all (nothing ever took it, or a run that never reached the point
+# of taking one -- e.g. a Community-only run, or a crash before the licence
+# was even read), or a lock recorded for a DIFFERENT leg (this leg's own
+# teardown must never remove a lock it does not own). Both are warned, never
+# failed: down.sh and k3d-down.sh call this on every path that reaches their
+# own licence release, including the path where that release itself failed,
+# and a teardown that aborts on a missing or foreign lock would leave the
+# estate it was tearing down still up.
+release_licence_lock() {
+    local repo_root="$1" leg="$2" lock_path
+    lock_path=$(licence_lock_path "$repo_root")
+
+    if [[ ! -f "$lock_path" ]]; then
+        echo "warning: no licence lock at $lock_path to release for '$leg'; continuing" >&2
+        return 0
+    fi
+
+    # "|| true": see take_licence_lock's own doc -- a lock file that exists
+    # but has a missing or blank HOLDER line (an interrupted write) must read
+    # as holder="" here, never abort this function outright.
+    local holder
+    holder=$(grep -E '^HOLDER=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2-) || true
+    if [[ "$holder" != "$leg" ]]; then
+        echo "warning: licence lock at $lock_path is held by '$holder', not '$leg'; leaving it in place" >&2
+        return 0
+    fi
+
+    rm -f "$lock_path"
+}
+
 # fetch_k8s_ca writes the Kubernetes leg's in-cluster Portainer certificate to
 # stdout as PEM.
 #
@@ -136,9 +357,14 @@ recorded_docker_host() {
 # to use. Absence of an existing marker is never a mismatch -- it means no
 # earlier run recorded anything for this leg, so the first run (local or
 # remote) is always free to proceed and record. Re-running against the SAME
-# destination an existing marker already names is also not a mismatch: up.sh's
-# own doc says it is idempotent, and a second `make e2e-up-remote` against the
-# same host is exactly that, not a host switch.
+# destination an existing marker already names is also not a mismatch: this
+# guard's own job is telling a host SWITCH apart from a same-destination
+# re-run, and a second `make e2e-up-remote` against the same host is the
+# latter, not the former -- regardless of whether that re-run goes on to
+# succeed. up.sh's own header now qualifies its "idempotent" claim to
+# Community Edition only: a licensed re-run can still refuse a moment later,
+# at take_licence_lock, for an entirely different reason (the licence, not
+# the host) than anything this function checks.
 #
 # Call this before record_docker_host, never after: record_docker_host with an
 # empty destination DELETES the marker (see its own doc), and up.sh/k3d-up.sh

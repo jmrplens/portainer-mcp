@@ -31,13 +31,19 @@ import (
 // set of actions claiming both cannot grow without someone saying so here.
 var destructiveAndIdempotent = map[string]string{
 	"custom_templates.delete":          "deleting an absent template leaves the same end state",
+	"endpoint_groups.delete":           "deleting an absent group leaves the same end state",
+	"endpoint_groups.delete_endpoint":  "removing an environment already out of the group leaves the same end state",
+	"endpoint_groups.update":           "the request's associatedEndpoints fully replaces the group's membership; a second identical call converges to the same state. Destructive because a partial list silently evicts every unlisted member back to group 1, discarding the access policies and tags it inherited — a real loss of effect even though nothing is deleted and the change is reversible in principle",
 	"endpoints.association_delete":     "the request names one environment and the end state it converges on is \"this environment has no edge association\"; a second call finds nothing left to detach. Destructive because the first call is not reversible from this catalog — the agent's key stops working and the agent must be enrolled and trusted again",
 	"endpoints.delete":                 "deleting an absent environment leaves the same end state",
 	"registries.delete":                "deleting an absent registry leaves the same end state",
 	"registries.ecr_delete_repository": "deleting an absent ECR repository leaves the same end state",
+	"resource_controls.delete":         "deleting an absent resource control answers 404 and leaves the same end state; the request names the control by its own id, so the end state it converges on is \"this control no longer restricts anything\". The resource it guarded is untouched either way — removing a control widens access, it does not delete a container, volume or stack",
 	"stacks.delete":                    "deleting an absent stack answers 404 and leaves the same end state",
 	"stacks.delete_kubernetes_by_name": "deleting absent Kubernetes stacks answers 404 and leaves the same end state; the request names them, so the end state it converges on is \"no stack by this name\"",
 	"tags.delete":                      "deleting an absent tag leaves the same end state",
+	"team_memberships.delete":          "deleting an absent membership answers 404 and leaves the same end state; the request names the membership, so the end state it converges on is \"this user is not in this team\"",
+	"teams.delete":                     "deleting an absent team answers 404 and leaves the same end state; the cascade that takes the team's memberships with it has nothing left to remove on a repeat call",
 }
 
 func TestUnit_DestructiveAndIdempotentActions_MatchTheirRoster(t *testing.T) {

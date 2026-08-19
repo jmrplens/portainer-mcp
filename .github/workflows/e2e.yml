@@ -1,11 +1,14 @@
 name: e2e
 
-# The whole estate is cheap: ~25s for the two compose Portainers, an agent and
-# an edge agent; another ~2 minutes for k3d plus the Helm chart (measured,
-# see plan/carry-forward.md). The sibling project (gitlab-mcp-server) gates
-# its equivalent Kubernetes leg behind workflow_dispatch because GitLab alone
+# The estate is cheap: ~25s for the two compose Portainers, an agent and an
+# edge agent; another ~2 minutes for k3d plus the Helm chart (measured, see
+# plan/carry-forward.md). The sibling project (gitlab-mcp-server) gates its
+# equivalent Kubernetes leg behind workflow_dispatch because GitLab alone
 # takes ~5 minutes to boot; that reasoning does not transfer here, so both
 # legs run on every pull request rather than one being opt-in.
+#
+# They run in two sequential jobs rather than one, and that shape is load
+# bearing — see the `needs:` on the kubernetes job below for why.
 #
 # test/e2e/suite is behind the `e2e` build tag, so it never runs as part of
 # the default `make test` / the main ci.yml workflow, whether or not this one
@@ -18,22 +21,43 @@ on:
 permissions:
   contents: read
 
+# One e2e run at a time, repository-wide. This is about the Business Edition
+# licence, not about runner cost: the key permits exactly one Portainer
+# instance (nodes: 3, multiuseInstancesCount: 0), and every leg that activates
+# it registers that activation against a real, shared account.
+#
+# test/e2e/.licence.lock cannot substitute for this. It is a file on one
+# runner's own filesystem, so it refuses a second activation by *this* run
+# and is blind to every other. Two pull requests open at once are two
+# workflow runs on two runners, and without this group they would activate
+# the same licence simultaneously — the accident the lock was added for,
+# reintroduced one level up. The group name is a constant, deliberately: it
+# is not keyed by ref, because the resource being serialised is not the
+# branch, it is the single licence the whole repository shares.
+#
+# cancel-in-progress is false for the same reason. A cancelled run is a run
+# interrupted mid-estate, with a Portainer server already holding the licence;
+# cancelling it races its own teardown and can leave the key attached to a
+# server that is about to be destroyed, which is unrecoverable in place and
+# needs `make e2e-licence-release` by hand. Queueing behind the running one
+# costs minutes; cancelling it can cost the licence.
+concurrency:
+  group: portainer-e2e-business-licence
+  cancel-in-progress: false
+
 env:
   GO_VERSION: "1.26.6"
 
 jobs:
-  e2e:
-    name: Ephemeral Portainer estate
+  compose:
+    name: Compose estate (Community + Business Edition)
     runs-on: ubuntu-latest
-    # Sized for the suite, not just for image pulls on a cold runner. That was
-    # true when this job only had to stand the estate up — the estate itself
-    # is still ~25s for the compose legs and ~2 minutes for k3d plus the Helm
-    # chart — but the suite is now the long pole: wave 1 stage C's stacks
-    # domain deploys, redeploys and removes real stacks inside the estate's
-    # own Docker daemon, and a full local run measured 706 seconds
+    # Sized for the suite, not just for image pulls on a cold runner. The
+    # estate itself is ~25s, but the suite is the long pole: wave 1 stage C's
+    # stacks domain deploys, redeploys and removes real stacks inside the
+    # estate's own Docker daemon, and a full local run measured 706 seconds
     # (2026-08-18) on top of provisioning. `make test-e2e`'s own -timeout is
-    # 30m; this ceiling has to leave room for that plus both legs' setup and
-    # teardown.
+    # 30m; this ceiling has to leave room for that plus setup and teardown.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -56,6 +80,10 @@ jobs:
         # up.sh/down.sh read it back out through read_licence. chmod 600
         # matches the ownership the harness itself writes secrets with
         # (writeOwnerOnlyAtomic).
+        #
+        # Repeated verbatim in the kubernetes job: the two jobs run on two
+        # separate runners with two separate checkouts, so neither the file
+        # nor the secret survives from one to the other.
         env:
           PORTAINER_LICENSE: ${{ secrets.PORTAINER_LICENSE }}
         run: |
@@ -86,6 +114,117 @@ jobs:
 
       - name: Bring up the compose estate (Community + Business Edition + agent)
         run: make e2e-up
+
+      - name: Run the suite against the compose estate
+        # The Kubernetes leg is not up in this job, by design, so every
+        # Kubernetes suite skips. That is visible rather than silent: TestMain
+        # prints which legs this estate provisions and which are ABSENT,
+        # `make test-e2e` passes -v so each individual skip names itself, and
+        # the Kubernetes job below measures the half this one does not.
+        run: make test-e2e
+
+      - name: Report unexercised catalog actions (informational, not a gate)
+        # Static: it reports which catalog actions no e2e test *references* in
+        # its source, which does not depend on what this estate provisioned.
+        # Run in this job only — a second identical report from the Kubernetes
+        # job would say the same thing and mean nothing more.
+        if: always()
+        run: make audit-e2e-gaps
+
+      - name: Tear down
+        # always(): a failure in any step above — provisioning, the suite,
+        # even a cancelled job — must still release the Business Edition
+        # licence and remove the estate. Teardown is best-effort (`|| true`):
+        # a stuck container must never be the reason the licence fails to
+        # release. The gitignored .env is removed on this same always() path
+        # so it never survives past the job that created it, on the success
+        # path or the failure one.
+        #
+        # This job must give the licence back before the Kubernetes job can
+        # take it, which is the whole reason the two are sequential.
+        if: always()
+        run: |
+          make e2e-down || true
+          rm -f .env
+
+  kubernetes:
+    name: Kubernetes estate (k3d + Portainer via Helm)
+    runs-on: ubuntu-latest
+    # DO NOT REMOVE THIS `needs:` TO RUN THE TWO JOBS IN PARALLEL.
+    #
+    # They look independent — different tooling, different estate, no
+    # artefacts passed between them — and running them concurrently would
+    # halve the wall clock. It would also activate one single-instance
+    # Business Edition licence on two live Portainer servers at once, which is
+    # the exact accident this split exists to prevent: before it, one job
+    # brought both legs up in sequence and did precisely that on every pull
+    # request for as long as the Kubernetes leg has existed.
+    #
+    # test/e2e/.licence.lock does not protect against this. It is a file on
+    # one runner's filesystem; the runner executing this job cannot see the
+    # runner executing the compose job, so the lock would let both proceed.
+    # Ordering is the only thing that serialises the two, exactly as the
+    # workflow-level `concurrency` group is the only thing that serialises
+    # two runs of this workflow. Both are load bearing, and both are cheap
+    # compared with a licence stranded against a real account.
+    #
+    # Plain `needs:`, with no `if: always()` override, so a failed or
+    # cancelled compose job skips this one entirely. That is deliberate and it
+    # does cost coverage: a red compose suite leaves the Kubernetes leg
+    # untested for that run. The alternative costs more. A compose job can
+    # fail *during* its own teardown — that is one of the paths its `|| true`
+    # is written for — and bringing a second estate up against a licence that
+    # may still be attached to the first is precisely the collision this
+    # ordering exists to prevent. Re-run the workflow once the compose job is
+    # green.
+    needs: compose
+    # Same ceiling as the compose job, for the same reason: `make test-e2e`'s
+    # own -timeout is 30m and this job runs the same suite. Most of it skips
+    # today for want of a compose leg, but a Kubernetes domain suite would
+    # land here and grow it, and a job timeout below the test binary's own is
+    # a truncated log instead of a Go failure with a name.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Provide the Business Edition licence
+        # See the compose job's identical step for why an absent secret is not
+        # a failure and why printf is used. This job needs its own copy: it
+        # runs on a fresh runner with a fresh checkout, and the compose job's
+        # .env was removed by that job's own teardown in any case.
+        #
+        # By the time this runs, the compose job has finished and released the
+        # licence — that is what `needs:` above buys, and it is the only
+        # reason writing this file here is safe.
+        env:
+          PORTAINER_LICENSE: ${{ secrets.PORTAINER_LICENSE }}
+        run: |
+          if [ -n "$PORTAINER_LICENSE" ]; then
+            printf 'PORTAINER_LICENSE=%s\n' "$PORTAINER_LICENSE" > .env
+            chmod 600 .env
+            echo "Business Edition enabled for the Kubernetes leg" >&2
+          else
+            echo "no licence secret available: the Kubernetes leg will be Community Edition only" >&2
+          fi
+
+      - name: Confirm the Docker daemon accepts a privileged container
+        # k3d's own node containers run privileged, so this leg needs the same
+        # thing the compose leg's Docker-in-Docker does. Checked here too
+        # rather than inherited from the compose job: this is a different
+        # runner, and a refusal surfaces as an opaque `k3d cluster create`
+        # rollback two minutes later otherwise.
+        run: |
+          if docker run --rm --privileged hello-world >/dev/null; then
+            echo "privileged containers are permitted on this runner" >&2
+          else
+            echo "::error::this runner refuses privileged containers; k3d cannot create a cluster here"
+            exit 1
+          fi
 
       - name: Install the Kubernetes tooling (k3d, kubectl, helm)
         # Every tool is a specific, tagged release rather than whatever a
@@ -123,25 +262,31 @@ jobs:
           rm -rf helm.tar.gz linux-amd64
 
       - name: Bring up the Kubernetes leg (k3d + Portainer via Helm)
+        # No compose estate on this runner, so no estate file exists yet and
+        # k3d-up.sh's provisioner writes a Kubernetes-only one (see
+        # runKubernetes in test/e2e/harness/cmd/provision). k3d creates the
+        # estate's Docker network itself when nothing else has.
         run: make e2e-k8s-up
 
-      - name: Run the pilot-domain suite against the live estate
+      - name: Run the suite against the Kubernetes estate
+        # The compose legs are not up in this job, by design, so the compose
+        # suites skip — and say so, per subtest, next to TestMain's summary of
+        # which legs are ABSENT. A Kubernetes-only run that quietly reported
+        # "ok" while measuring almost nothing is the failure mode this
+        # visibility exists to prevent; the compose job above measures that
+        # half.
         run: make test-e2e
 
-      - name: Report unexercised catalog actions (informational, not a gate)
-        if: always()
-        run: make audit-e2e-gaps
-
       - name: Tear down
-        # always(): a failure in any step above — provisioning, the suite,
-        # even a cancelled job — must still release the Business Edition
-        # licence and remove the estate. Each teardown step is best-effort
-        # (`|| true`): a stuck cluster or container must never be the reason
-        # the licence fails to release, and vice versa. The gitignored .env
-        # is removed on this same always() path so it never survives past
-        # the job that created it, on the success path or the failure one.
+        # always(), best-effort, and for a stricter reason than the compose
+        # job's: k3d-down.sh releases the licence *before* `k3d cluster
+        # delete`, because once the cluster is gone the server holding the
+        # activation is unreachable and the key cannot be released in place at
+        # all — `make e2e-licence-release` against a throwaway server is the
+        # only recovery. It also releases this leg's entry in
+        # test/e2e/.licence.lock, so a stuck cluster never leaves the lock
+        # behind on a runner that is about to be discarded anyway.
         if: always()
         run: |
           make e2e-k8s-down || true
-          make e2e-down || true
           rm -f .env
