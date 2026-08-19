@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
 	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
@@ -58,6 +61,21 @@ func teamIDByName(t *testing.T, ed, name string) int {
 		}
 	}
 	return -1
+}
+
+// rawTeam reads ONE team straight from the Portainer API (GET /teams/{id}),
+// bypassing every surface.
+//
+// This is the raw twin of teams.inspect, and it exists because the list read
+// above cannot answer every question: GET /teams is where a team's name is
+// checked, but DenyPortainerAccess is a per-team flag whose read-back below
+// wants the team itself, unambiguously, rather than a name match over a list
+// every other subtest is concurrently adding to and removing from.
+func rawTeam(t *testing.T, ed string, id int) map[string]any {
+	t.Helper()
+	var out map[string]any
+	rawEndpointsJSON(t, ed, fmt.Sprintf("/teams/%d", id), &out)
+	return out
 }
 
 // rawMembershipsOfTeam reads ONE team's memberships straight from the
@@ -437,12 +455,9 @@ func TestTeams_TeamAndMembershipLifecycle_AcrossSurfacesAndEditions(t *testing.T
 					t.Errorf("teams.inspect(%d) returned Name %q, want %q: it answered about a different team", teamID, got, teamName)
 				}
 
-				// teams.update renames it. DenyPortainerAccess is
-				// deliberately not exercised here: it is a Business Edition
-				// field that Community accepts and silently ignores
-				// (measured on both editions, teams.update's narrative), so
-				// an assertion on it would fail on the Community leg this
-				// matrix also runs.
+				// teams.update renames it. The DenyPortainerAccess half of
+				// the same action follows the rename, below, conditioned on
+				// the edition rather than skipped for depending on it.
 				renamed := uniqueName("team-renamed")
 				callAction[map[string]any](t, session, surface, "teams.update", map[string]any{
 					"id": teamID, "name": renamed,
@@ -453,6 +468,8 @@ func TestTeams_TeamAndMembershipLifecycle_AcrossSurfacesAndEditions(t *testing.T
 				if got := teamIDByName(t, ed, teamName); got != -1 {
 					t.Errorf("team %q is still listed under its old name after teams.update (as %d)", teamName, got)
 				}
+
+				assertDenyPortainerAccessIsBusinessOnly(t, session, surface, ed, teamID, renamed)
 
 				userID := createUserFixture(t, ed, uniqueName("team-user"))
 
@@ -542,6 +559,98 @@ func TestTeams_TeamAndMembershipLifecycle_AcrossSurfacesAndEditions(t *testing.T
 	}
 }
 
+// assertDenyPortainerAccessIsBusinessOnly exercises the one behavioural
+// claim this domain makes that differs by edition, on both editions.
+//
+// It is measured, not documented: docs/api-divergences.md records that the
+// Business document declares DenyPortainerAccess on teams.teamCreatePayload
+// and teams.teamUpdatePayload while the Community document declares neither,
+// and that a live Community server answers 200, applies the name, and leaves
+// the flag false. Both teams.create's and teams.update's narratives promise
+// that behaviour to callers. Without this, the claim those two narratives
+// make most loudly would be the one claim in the domain with no regression
+// test behind it -- and if Community ever started honouring the flag, or
+// Business stopped, nothing here would notice.
+//
+// Conditioned on the edition rather than skipped for depending on one: the
+// idiom endpoints_test.go (`if ed != "EE"`) and stacks_test.go
+// (`if ed == "EE"`) already use. What each edition must do differs in kind,
+// not merely in value, and both halves were measured live before being
+// written down:
+//
+//   - EE: the call succeeds and the flag really lands, so the raw read-back
+//     is true. If Business ever stops applying it, this fails.
+//
+//   - CE: the call never reaches Portainer at all. teamUpdateInput tags the
+//     field `edition:"EE"`; actioncatalog.Build prunes it out of the
+//     Community input schema, and ValidateInput refuses it as an unexpected
+//     additional property before any handler runs. Measured through the
+//     dynamic surface against the live Community leg:
+//
+//     teams.update: validating root: unexpected additional properties
+//     ["denyPortainerAccess"]
+//
+//     That is a better outcome than the silent no-op Portainer itself would
+//     give -- a Community caller is told rather than left guessing -- and it
+//     is what a Community caller actually experiences, so it is what this
+//     asserts.
+//
+// The raw flag is read on BOTH editions regardless of which branch ran, and
+// that is deliberate: it makes the two failure modes independent. Lose the
+// edition pruning and the refusal assertion fails; have Community start
+// honouring the flag and the "still false" assertion fails, even though the
+// refusal it is paired with would still hold.
+//
+// It goes through actionCallParams and a direct CallTool rather than
+// callAction because callAction's own callTool fails the test on any
+// IsError result, which is exactly what the Community half needs to inspect
+// rather than treat as a harness failure -- the reason actionCallParams
+// exists at all (see its doc comment).
+func assertDenyPortainerAccessIsBusinessOnly(t *testing.T, session *mcp.ClientSession, surface, ed string, teamID int, currentName string) {
+	t.Helper()
+
+	// No name in the payload, which pins the partial-update half at the same
+	// time: a PUT carrying DenyPortainerAccess alone must leave the name
+	// exactly as it was (measured on both editions, teams.update's
+	// narrative).
+	toolName, args := actionCallParams(t, surface, "teams.update", map[string]any{
+		"id": teamID, "denyPortainerAccess": true,
+	})
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: toolName, Arguments: args})
+	if err != nil {
+		t.Fatalf("teams.update with denyPortainerAccess on %s: %v", ed, err)
+	}
+	text := toolResultText(res)
+
+	if ed == "EE" {
+		if res.IsError {
+			t.Fatalf("teams.update with denyPortainerAccess was refused on Business Edition, where the field is declared: %s", text)
+		}
+		// Only asserted on the leg whose call actually ran: on Community the
+		// call never reached Portainer, so "the name is unchanged" there
+		// would be an assertion that could not fail.
+		if got, _ := rawTeam(t, ed, teamID)["Name"].(string); got != currentName {
+			t.Errorf("team %d is named %q after a teams.update carrying only denyPortainerAccess, want %q unchanged: "+
+				"that update is partial, not a replace", teamID, got, currentName)
+		}
+	} else if !res.IsError {
+		t.Errorf("teams.update accepted denyPortainerAccess on %s, where teamUpdateInput's edition:\"EE\" tag should have "+
+			"pruned the field out of the schema and ValidateInput should have refused it: %s", ed, text)
+	} else if !strings.Contains(text, "denyPortainerAccess") {
+		t.Errorf("teams.update on %s was refused, but not for the denyPortainerAccess field this call sent: %s", ed, text)
+	}
+
+	wantDeny := ed == "EE"
+	got, ok := rawTeam(t, ed, teamID)["DenyPortainerAccess"].(bool)
+	if !ok {
+		t.Fatalf("team %d carries no DenyPortainerAccess on %s: %v", teamID, ed, rawTeam(t, ed, teamID))
+	}
+	if got != wantDeny {
+		t.Errorf("team %d reads DenyPortainerAccess %v on %s after teams.update asked for true, want %v: "+
+			"Business applies this flag and Community does not (docs/api-divergences.md)", teamID, got, ed, wantDeny)
+	}
+}
+
 // TestTeams_List_ReflectsATeamCreatedDirectly proves teams.list surfaces
 // every team on the server, not only ones this same MCP session happens to
 // have created: createTeamFixture creates directly against the Portainer
@@ -552,9 +661,10 @@ func TestTeams_TeamAndMembershipLifecycle_AcrossSurfacesAndEditions(t *testing.T
 // It asserts the team's presence by name and nothing else -- never a count.
 // The estate is shared and every other subtest in this package creates and
 // deletes teams beside this one, so a length assertion would measure them
-// rather than teams.list. DenyPortainerAccess is likewise untouched: it is
-// a Business Edition field Community reports as false whatever is asked of
-// it (teams.create's narrative), so asserting on it would fail on CE.
+// rather than teams.list. DenyPortainerAccess is not asserted here because
+// this fixture never sets it, not because it is edition-dependent: the
+// lifecycle test above exercises that flag on both editions, conditionally
+// (assertDenyPortainerAccessIsBusinessOnly).
 func TestTeams_List_ReflectsATeamCreatedDirectly(t *testing.T) {
 	for _, ed := range sessions.Editions() {
 		for _, surface := range surfaceNames {
