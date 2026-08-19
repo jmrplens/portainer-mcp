@@ -20,11 +20,18 @@
 //     very different things to tell a model. It is a cascade; see
 //     TeamDelete's narrative for the transcript this claim rests on.
 //   - DenyPortainerAccess exists in the Business Edition's create/update
-//     payload schemas and not in Community's, and a live Community server
-//     accepts the field and silently ignores it rather than rejecting it.
-//     The Input structs are scaffolded from the Business document, so the
-//     field is offered on both editions; TeamCreate's and TeamUpdate's
-//     narratives say what Community actually does with it.
+//     payload schemas and not in Community's. The Input structs are
+//     scaffolded from the Business document, so the field is DECLARED for
+//     both editions — but it carries an `edition:"EE"` tag, and
+//     actioncatalog.Build prunes a tagged field out of the Community input
+//     schema, so it is not offered to a Community caller: passing it there
+//     is refused by ValidateInput before any handler runs. That is the
+//     behaviour TeamCreate's and TeamUpdate's narratives describe, because
+//     it is the one a caller of these actions meets. A live Community
+//     server reached DIRECTLY does something different — it accepts the
+//     field, answers 200 and silently ignores it — which is recorded in
+//     docs/api-divergences.md and is why the field is Business-only here,
+//     but it is not reachable through this package.
 package teams
 
 import (
@@ -60,7 +67,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "TeamCreate":
 		return toolutil.ActionNarrative{
 			Title:       "Create a team",
-			Description: "Creates a team with the given name and returns it. A duplicate name is refused with 409 rather than silently accepted, so the name is effectively the team's unique key. The optional TeamLeaders array is the one and only way a team action itself creates memberships: measured on both editions, creating a team with TeamLeaders [1] left a membership for user 1 in that team with Role 1 (team leader). Every membership after creation — leader or member — goes through team_memberships.create instead. DenyPortainerAccess is Business Edition only: Community accepts the field and ignores it, always reporting the team's DenyPortainerAccess as false (measured on both editions).",
+			Description: "Creates a team with the given name and returns it. A duplicate name is refused with 409 rather than silently accepted, so the name is effectively the team's unique key. The optional TeamLeaders array is the one and only way a team action itself creates memberships: measured on both editions, creating a team with TeamLeaders [1] left a membership for user 1 in that team with Role 1 (team leader). Every membership after creation — leader or member — goes through team_memberships.create instead. DenyPortainerAccess is Business Edition only, and on Community it is not a parameter of this action at all: it is pruned out of the Community input schema, so sending it is refused with `unexpected additional properties [\"denyPortainerAccess\"]` and the call never reaches Portainer — measured on all three tool surfaces. Omit it on Community and the create succeeds, reporting DenyPortainerAccess false. On Business it is accepted and applied: a create carrying it true returned a team reporting true, on all three surfaces. Background, NOT reachable through this action: a Community server addressed directly answers 200 and silently leaves the flag false (docs/api-divergences.md), which is why the field is Business-only here rather than merely undocumented.",
 		}
 	case "TeamInspect":
 		return toolutil.ActionNarrative{
@@ -70,7 +77,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "TeamUpdate":
 		return toolutil.ActionNarrative{
 			Title:       "Update a team",
-			Description: "Updates a team's name, its DenyPortainerAccess flag, or both. Every field is optional and only the ones supplied change: measured on both editions, a PUT carrying DenyPortainerAccess alone left the team's name exactly as it was. This does not touch membership at all — no user joins or leaves a team through this action. DenyPortainerAccess is Business Edition only: on Business a PUT setting it true made the team report DenyPortainerAccess true, while on Community the identical PUT answered 200 and left it false (measured on both editions).",
+			Description: "Updates a team's name and, on Business Edition only, its DenyPortainerAccess flag. Every field is optional and only the ones supplied change — an update carrying DenyPortainerAccess alone left the team's name exactly as it was (measured on Business Edition, on all three tool surfaces). This does not touch membership at all — no user joins or leaves a team through this action. DenyPortainerAccess is not a parameter of this action on Community: it is pruned out of the Community input schema, so sending it is refused with `unexpected additional properties [\"denyPortainerAccess\"]` and the call never reaches Portainer — measured on all three surfaces. A Community caller can therefore change a team's name here and nothing else. Background, NOT reachable through this action: a Community server addressed directly answers 200 to the same field and silently leaves the flag false (docs/api-divergences.md).",
 		}
 	case "TeamDelete":
 		return toolutil.ActionNarrative{

@@ -636,8 +636,26 @@ func assertDenyPortainerAccessIsBusinessOnly(t *testing.T, session *mcp.ClientSe
 	} else if !res.IsError {
 		t.Errorf("teams.update accepted denyPortainerAccess on %s, where teamUpdateInput's edition:\"EE\" tag should have "+
 			"pruned the field out of the schema and ValidateInput should have refused it: %s", ed, text)
-	} else if !strings.Contains(text, "denyPortainerAccess") {
-		t.Errorf("teams.update on %s was refused, but not for the denyPortainerAccess field this call sent: %s", ed, text)
+	} else {
+		// Both fragments, not just the field name: the field name alone
+		// would also be satisfied by an unrelated validation failure that
+		// happened to mention it, which would leave the schema-PRUNING
+		// mechanism -- the thing that makes this field Business-only --
+		// unpinned. All three surfaces already carry both literals, so
+		// requiring both costs nothing: individual is refused by the MCP
+		// SDK's own typed-tool validation (`validating "arguments":
+		// validating root: unexpected additional properties
+		// ["denyPortainerAccess"]`) and meta and dynamic by Execute's
+		// ValidateInput (`teams.update: validating root: ...`, with the
+		// find-action hint appended). The two paths word the prefix
+		// differently and agree on exactly these two fragments, which is
+		// why this matches fragments rather than one fixed message.
+		for _, want := range []string{"unexpected additional properties", "denyPortainerAccess"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("teams.update on %s was refused, but not as an unexpected-additional-property refusal naming the field: "+
+					"the message does not contain %q: %s", ed, want, text)
+			}
+		}
 	}
 
 	wantDeny := ed == "EE"

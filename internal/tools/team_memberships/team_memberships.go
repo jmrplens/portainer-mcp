@@ -65,7 +65,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 	case "TeamMembershipCreate":
 		return toolutil.ActionNarrative{
 			Title:       "Add a user to a team",
-			Description: "Creates a membership: this is how a user joins a team, and there is no action on the team itself that adds one after the team exists. All three fields are required — UserID, TeamID, and Role, which is 1 for team leader and 2 for an ordinary member. A user may hold only one membership per team: a second create for the same UserID and TeamID pair is refused with 409 whatever Role it names, so raising a member to leader is team_memberships.update on the existing membership, not a second create (measured on both editions).",
+			Description: "Creates a membership: this is how a user joins a team, and there is no action on the team itself that adds one after the team exists. All three fields are required — UserID, TeamID, and Role, which is 1 for team leader and 2 for an ordinary member. A user may hold only one membership per team: a second create for the same UserID and TeamID pair is refused with 409 whichever of the two Roles it names, so raising a member to leader is team_memberships.update on the existing membership, not a second create (measured on both editions). Role accepts only 1 or 2 — any other value is refused by this action's own schema before the call is made, so that refusal comes from here and names the enum, not from Portainer.",
 		}
 	case "TeamMembershipUpdate":
 		return toolutil.ActionNarrative{
