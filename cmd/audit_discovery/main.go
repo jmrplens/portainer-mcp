@@ -53,6 +53,8 @@ import (
 	"github.com/jmrplens/portainer-mcp/internal/tools/endpoint_groups"
 	"github.com/jmrplens/portainer-mcp/internal/tools/endpoints"
 	"github.com/jmrplens/portainer-mcp/internal/tools/registries"
+	"github.com/jmrplens/portainer-mcp/internal/tools/resource_controls"
+	"github.com/jmrplens/portainer-mcp/internal/tools/roles"
 	"github.com/jmrplens/portainer-mcp/internal/tools/stacks"
 	"github.com/jmrplens/portainer-mcp/internal/tools/system"
 	"github.com/jmrplens/portainer-mcp/internal/tools/tags"
@@ -100,6 +102,8 @@ func allSpecs() []toolutil.ActionSpec {
 	specs = append(specs, endpoint_groups.Specs()...)
 	specs = append(specs, teams.Specs()...)
 	specs = append(specs, team_memberships.Specs()...)
+	specs = append(specs, roles.Specs()...)
+	specs = append(specs, resource_controls.Specs()...)
 	return specs
 }
 

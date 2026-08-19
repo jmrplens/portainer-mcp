@@ -1391,6 +1391,62 @@ is what the server does in each case and what makes a request a duplicate.
   user 1 in the new team (measured on both editions). It is the only such
   case, and only at creation time.
 
+### 5.5 `GET /roles` is served by both editions and answers an empty array on Community
+
+**Evidence: probed live** against Portainer 2.44.0, Community and Business
+Edition, 2026-08-19 (wave 2 stage A, `roles`); **vendored spec** for what
+each document declares.
+
+Every other entry in this section is a *shape* asymmetry: an operation one
+document declares and the other does not, or a schema that loses fields
+under the Business shape. This one is neither. Both documents declare `GET
+/roles`, both servers serve it, both answer `200`, and
+`cmd/audit_spec_reality` reports it divergent on neither leg. The asymmetry
+is in the **answer**:
+
+```text
+EE  GET /roles -> 200, 6 roles
+      1 Environment Administrator   4 Read-only User
+      2 Helpdesk User               5 Operator
+      3 Standard User               6 Namespace Operator
+CE  GET /roles -> 200 []
+```
+
+Role-based access control is a Business Edition feature; a Community server
+holds no roles, so there is nothing to list. Nothing in this catalog prunes
+or gates the action per edition — `roles.list` is `Edition: edition.CE`, is
+published on all three tool surfaces on both legs, and the emptiness a
+Community caller sees is Portainer's own answer arriving unaltered. Measured
+through each of the three surfaces against both legs, not only with `curl`.
+
+It is recorded here because it is invisible to every mechanism this project
+already has. A route-existence audit sees the route on both editions and is
+right to. The coverage ratchet counts the operation as covered on Community
+and is also right to: the catalog serves the route there, and the call
+succeeds. A schema diff sees one shared schema. Only a caller sees the
+difference, and what a caller sees is an empty array with no explanation —
+indistinguishable, without this, from "the call failed", "you lack
+permission", or "someone deleted the roles".
+
+Two related facts, both measured, that decide how much this costs:
+
+- **Portainer does not validate `RoleId`.** On Business Edition, `PUT
+  /endpoint_groups/{id}` carrying `userAccessPolicies {"1":{"RoleId":99}}` —
+  an id no role has — answered `200` and stored `RoleId: 99` verbatim. So
+  `roles.list` is the only way to learn which identifiers are real, and a
+  wrong one is never refused; it simply grants an access level that resolves
+  to nothing.
+
+- **The two documents disagree about who may call it.** Community's declares
+  `**Access policy**: administrator`, Business's declares `**Access policy**:
+  authenticated`. Not probed — this estate has only its administrator — so
+  neither `roles.list`'s narrative nor this entry claims anything about a
+  non-administrator caller.
+
+`roles.list`'s narrative states the edition split and the unvalidated
+`RoleId` in the terms a caller meets. `api/coverage-baseline.yaml`'s own
+header records why the ratchet counts the Community leg as covered anyway.
+
 ## 6. Defects in the vendored document itself
 
 **Evidence: vendored spec**, re-verified 2026-08-03.

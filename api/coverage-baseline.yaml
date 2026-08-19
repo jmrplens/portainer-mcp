@@ -39,5 +39,16 @@
 # is a *field*, teams.create/update's DenyPortainerAccess, not a route — a
 # Community server accepts it and ignores it — and a field difference moves
 # neither number.)
-ce_covered: 82
-ee_covered: 104
+#
+# Wave 2 stage A's roles and resource_controls domains closed the stage with
+# four more, one and three: CE 82 -> 86 and EE 104 -> 108, again the same +4
+# on both sides because both documents declare all four routes and both
+# servers serve them. GET /roles is the interesting one, and it is the case
+# this file's header already argued for keeping totals out: it is *covered* on
+# Community Edition — the action is published there, the call succeeds, the
+# ratchet counts it — and it answers an empty array, because Community has no
+# roles to list. Coverage measures whether the catalog serves the route, not
+# whether the server has anything to say through it (docs/api-divergences.md
+# §5).
+ce_covered: 86
+ee_covered: 108
