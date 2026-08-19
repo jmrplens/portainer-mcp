@@ -2161,7 +2161,6 @@ question for a settled fact.
     candidate; only
     the five stage-A domains (`endpoint_groups`, `teams`,
     `team_memberships`, `roles`, `resource_controls`) have been swept.
-    Tracked in `docs/open-follow-ups.md`.
 
 ---
 
@@ -2571,8 +2570,7 @@ one commit — `TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation` pins the
 two copies to each other — and rename all five published fields in the same
 commit. The durable version of the fix is to stop deriving the tag at all
 and emit the specification's property name verbatim, which removes the whole
-class rather than this instance of it. Tracked in
-`docs/open-follow-ups.md`.
+class rather than this instance of it.
 
 ---
 

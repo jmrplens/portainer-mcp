@@ -20,10 +20,9 @@ end to end against a real estate.
 
 A domain is scaffolded once from the vendored specification and owned as
 ordinary Go source from then on; nothing regenerates it. See
-`docs/domain-wave-checklist.md` for the procedure,
+`docs/domain-wave-checklist.md` for the procedure and
 `docs/api-divergences.md` for every recorded disagreement between Portainer
-and the documents that describe it, and `docs/open-follow-ups.md` for the
-work this project already knows it owes.
+and the documents that describe it.
 
 ## Build & run
 

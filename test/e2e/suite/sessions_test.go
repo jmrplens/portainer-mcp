@@ -205,8 +205,8 @@ func (s *Sessions) Close() {
 // Edition leg made every EE subtest cease to exist rather than skip. A suite
 // that ranges over nothing passes, silently, and its output is
 // indistinguishable from a run that measured that edition and found it
-// correct. That was carried in docs/open-follow-ups.md until this change
-// closed it.
+// correct. That was a known gap, carried in this project's working notes,
+// until this change closed it.
 //
 // CI's split into two sequential jobs (see .github/workflows/e2e.yml) turned
 // that from an inconvenience into a trap: each job now sees half an estate by

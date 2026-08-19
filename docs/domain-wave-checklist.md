@@ -403,13 +403,21 @@ the estate immediately afterwards, before running anything else.
      contributor implementing a different domain later would need the fact
      and could not derive it themselves, it goes here, in this wave's own
      commit.
-   - **`docs/open-follow-ups.md` — committed, the work rather than the
+   - **`plan/open-follow-ups.md` — gitignored, the work rather than the
      fact.** A measurement that a later wave has to *act* on, rather than
      merely know, gets an entry here naming the evidence and what closing it
      requires, cross-referenced to its `docs/api-divergences.md` entry
-     rather than restating it. Delete the entry when the work lands. This
-     file exists because a stage's real findings had been living only in
-     gitignored working notes, where the point below applies to them.
+     rather than restating it. Delete the entry when the work lands.
+
+     The split is deliberate and the owner's rule: this repository carries
+     documentation for developers and for users of the MCP, never this
+     project's own plans or progress. So the *fact* is committed and
+     survives a fresh clone; the *to-do built on it* is not, and does not.
+     That is a real cost, paid knowingly — which is exactly why the fact
+     must be written to `docs/api-divergences.md` first and be complete
+     enough to stand alone. An entry here that is the only record of
+     something measured is a bug in how the wave recorded it, not a
+     shortcut.
    - **`plan/carry-forward.md` — gitignored, a working scratch pad, never a
      destination.** In-progress reasoning that is not yet settled enough to
      distil: raw probe transcripts, hypotheses still being tested, a
