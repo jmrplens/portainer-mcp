@@ -3,6 +3,7 @@
 package suite
 
 import (
+	"math"
 	"testing"
 )
 
@@ -78,6 +79,13 @@ func TestRoles_List_AnswersSixOnBusinessAndEmptyOnCommunity(t *testing.T) {
 					// Exactly these six, by Id and Name. Checked in both
 					// directions: every expected role present with the right
 					// name, and no unexpected role in the answer.
+					// The count is asserted before the contents, because the
+					// two loops below compare sets and a set cannot see a
+					// duplicate or a seventh record that collided with one of
+					// the six.
+					if len(listed) != len(businessRoles) {
+						t.Errorf("roles.list returned %d role(s), want exactly %d: %v", len(listed), len(businessRoles), listed)
+					}
 					got := map[int]string{}
 					for _, role := range listed {
 						id, ok := role["Id"].(float64)
@@ -85,9 +93,21 @@ func TestRoles_List_AnswersSixOnBusinessAndEmptyOnCommunity(t *testing.T) {
 							t.Errorf("roles.list returned an entry with no numeric Id: %v", role)
 							continue
 						}
+						// JSON has one number type, so an Id arrives as a
+						// float64 and int(id) would silently accept 1.5 as
+						// role 1 — an identifier this catalog would then use
+						// as if it had been given a whole number.
+						if id != math.Trunc(id) {
+							t.Errorf("roles.list returned role Id %v, which is not a whole number: %v", id, role)
+							continue
+						}
 						name, ok := role["Name"].(string)
 						if !ok {
 							t.Errorf("roles.list returned role %v with no Name: %v", id, role)
+							continue
+						}
+						if previous, seen := got[int(id)]; seen {
+							t.Errorf("roles.list returned Id %d twice, as %q and %q; a map would have hidden one of them", int(id), previous, name)
 							continue
 						}
 						got[int(id)] = name

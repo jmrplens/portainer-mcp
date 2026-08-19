@@ -95,7 +95,13 @@ licence_lock_holder_running() {
             if ! out=$(k3d cluster list -o json 2>/dev/null); then
                 return 2
             fi
-            printf '%s\n' "$out" | grep -q "\"name\":\"$cluster\"" && return 0
+            # -F, because the cluster name is data, not a pattern:
+            # E2E_K3D_CLUSTER is caller-supplied, and a name carrying a
+            # regex metacharacter would otherwise match a cluster that is
+            # not the one asked about — reporting a holder as running when
+            # it is not, in the one check that decides whether a lock is
+            # reported stale.
+            printf '%s\n' "$out" | grep -qF "\"name\":\"$cluster\"" && return 0
             return 1
             ;;
         *)
