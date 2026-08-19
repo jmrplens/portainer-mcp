@@ -41,7 +41,7 @@ The totals were 441 and 251 until 2026-08-18, when `cmd/audit_1to1` stopped
 skipping routes the vendored documents leave without an `operationId`; see
 [§6.2 of the divergence notes](docs/api-divergences.md).
 
-Twelve domains are live: `system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks`, `endpoints`, `endpoint_groups`, `teams`, `team_memberships`, `roles` and `resource_controls` — 109 catalog actions in all. Every one of them is exercised against a disposable Portainer estate on both editions before it ships; see [End-to-end testing](#end-to-end-e2e-testing).
+Twelve domains are live: `system`, `tags`, `registries`, `docker`, `custom_templates`, `stacks`, `endpoints`, `endpoint_groups`, `teams`, `team_memberships`, `roles` and `resource_controls` — 109 catalog actions in all. Every one of them is exercised against a disposable Portainer estate, on every edition it applies to, before it ships — not all of them apply to both; see [End-to-end testing](#end-to-end-e2e-testing).
 
 There are no releases, no published container image and no pre-built binaries yet. Build from source.
 
@@ -279,7 +279,9 @@ so only one run holds the licence at a time across the repository. Both exist fo
 the licence permits one instance, and `test/e2e/.licence.lock` is a file on one runner's own
 filesystem, so it cannot see another runner. Ordering, not the lock, is what keeps two live
 Portainer servers from activating the same key. Each job therefore measures half an estate and says
-so in its own log; between them the two halves are covered.
+so in its own log; between them the two halves are covered — but only when the workflow finishes
+green. `needs:` means a failed or cancelled compose job skips the Kubernetes one entirely, so a red
+run has measured the compose half at most, never both.
 
 ### Security
 

@@ -183,22 +183,59 @@ func TestUnit_E2EWorkflow_EachJobBringsUpOneLegOnly(t *testing.T) {
 	compose := runScript(t, wf, "compose")
 	kubernetes := runScript(t, wf, "kubernetes")
 
-	// "make e2e-up" is a prefix of nothing else, but "make e2e-k8s-up" does
-	// not contain it, so the two can be told apart by substring safely.
-	if !strings.Contains(compose, "make e2e-up") {
+	// Every check below matches a whole target, never a prefix. See
+	// runsMakeTarget for why a substring test is not safe here.
+	if !runsMakeTarget(compose, "e2e-up") {
 		t.Error("the compose job never runs `make e2e-up`: it provisions no estate to test against")
 	}
-	if strings.Contains(compose, "make e2e-k8s-up") {
-		t.Error("the compose job brings up the Kubernetes leg too: that is the single-job shape whose " +
-			"two Business Edition activations this split exists to undo")
+	for _, target := range []string{"e2e-k8s-up", "e2e-k8s-up-remote"} {
+		if runsMakeTarget(compose, target) {
+			t.Errorf("the compose job runs `make %s`, bringing up the Kubernetes leg too: that is the "+
+				"single-job shape whose two Business Edition activations this split exists to undo", target)
+		}
 	}
-	if !strings.Contains(kubernetes, "make e2e-k8s-up") {
+	if !runsMakeTarget(kubernetes, "e2e-k8s-up") {
 		t.Error("the kubernetes job never runs `make e2e-k8s-up`: it provisions no Kubernetes leg to test against")
 	}
-	if strings.Contains(kubernetes, "make e2e-up\n") || strings.Contains(kubernetes, "make e2e-up ") {
-		t.Error("the kubernetes job brings the compose estate up as well: with a licence in .env that is " +
-			"a second activation, in the one job that was supposed to hold the licence alone")
+	for _, target := range []string{"e2e-up", "e2e-up-remote"} {
+		if runsMakeTarget(kubernetes, target) {
+			t.Errorf("the kubernetes job runs `make %s`, bringing the compose estate up as well: with a "+
+				"licence in .env that is a second activation, in the one job that was supposed to hold "+
+				"the licence alone", target)
+		}
 	}
+}
+
+// runsMakeTarget reports whether a job's shell script invokes exactly the
+// named make target, rather than one whose name merely begins with it.
+//
+// The distinction is load bearing, and an earlier version of this file got
+// it wrong in a comment that claimed "make e2e-up is a prefix of nothing
+// else". It is a prefix of `e2e-up-remote`, and `e2e-k8s-up` of
+// `e2e-k8s-up-remote` — both real targets in the Makefile, and both bring a
+// live estate up. Under a substring test `make e2e-up-remote` reads as
+// `make e2e-up`, which is wrong in both directions at once: it would satisfy
+// the assertion that the compose job provisions an estate while that estate
+// actually went to another machine, and it would slip past the guard that
+// keeps a second Business Edition activation out of the kubernetes job —
+// the one thing the two-job split exists to prevent.
+//
+// Tokenising on whitespace and the shell separators that can abut a command
+// is enough here: these are `run:` blocks of a workflow this repository
+// owns, not arbitrary shell, and a target reached any other way (a variable,
+// a wrapper script) would not be recognisable to any check short of running
+// make itself.
+func runsMakeTarget(script, target string) bool {
+	fields := strings.FieldsFunc(script, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == ';' || r == '&' || r == '|' || r == '(' || r == ')'
+	})
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "make" && fields[i+1] == target {
+			return true
+		}
+	}
+	return false
 }
 
 // TestUnit_E2EWorkflow_EveryJobReleasesTheLicenceOnEveryPath pins the

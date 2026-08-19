@@ -2044,7 +2044,7 @@ of the ten values has been probed against a server.
 `resourcecontrols.resourceControlCreatePayload`'s `Type` property describes
 the enum one way:
 
-```
+```text
 Type of Resource. Valid values are: 1 - container, 2 - service
 3 - volume, 4 - network, 5 - secret, 6 - stack, 7 - config, 8 - custom template, 9 - azure-container-group
 ```
@@ -2052,7 +2052,7 @@ Type of Resource. Valid values are: 1 - container, 2 - service
 `portainer.ResourceControl`'s own `Type` property, in the same document,
 describes it another:
 
-```
+```text
 Type of Docker resource. Valid values are: 1- container, 2 -service
 3 - volume, 4 - secret, 5 - stack, 6 - config or 7 - custom template
 ```
@@ -2065,7 +2065,7 @@ The referenced schema itself, `portainer.ResourceControlType`, carries **no
 description at all** — only the enum and its variable names. Those names are
 the tie-breaker, and they side with the create payload:
 
-```
+```text
 enum:             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 x-enum-varnames:  ["_", "ContainerResourceControl", "ServiceResourceControl",
                    "VolumeResourceControl", "NetworkResourceControl",
@@ -2529,7 +2529,7 @@ on every execution path, on all three surfaces) checks arguments against it.
 So the natural spelling is refused *by this project*, before any request is
 built:
 
-```
+```text
 resource_controls.create: validating root: unexpected additional properties ["subResourceIds"]
 ```
 
@@ -2716,7 +2716,7 @@ domain exists; `test/e2e/suite/gpu_kubernetes_test.go`'s
 passes — a pod that *requests* `nvidia.com/gpu: 1` still fails at container
 creation:
 
-```
+```text
 unresolvable CDI devices k8s.device-plugin.nvidia.com/gpu=<uuid>
 ```
 

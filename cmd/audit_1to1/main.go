@@ -9,8 +9,9 @@
 // in api/coverage-allowlist.yaml; anything else is reported by name and
 // fails the run.
 //
-// With 104 of 442 Business-Edition and 82 of 252 Community-Edition
-// operations covered (wave 2 stage A's teams and team_memberships domains;
+// With 108 of 442 Business-Edition and 86 of 252 Community-Edition
+// operations covered (the endpoint_groups, teams, team_memberships, roles
+// and resource_controls domains;
 // api/coverage-baseline.yaml is the committed record, and the figure here
 // goes stale by design between waves — treat this sentence as an order of
 // magnitude, never as the source of truth), plain run (what `make

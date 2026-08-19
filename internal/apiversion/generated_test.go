@@ -119,18 +119,25 @@ func TestOperationIDIndex_CoversNearlyEveryOperation(t *testing.T) {
 // all. The name comes from internal/specnaming's explicit table, applied by
 // applySyntheticIDs; this test fails if that table entry is removed, if the
 // pass stops running, or if it lands in only one edition.
-func TestGeneratedTable_RouteNoDocumentNames_ResolvesInBothEditions(t *testing.T) {
+// One subtest per edition, so a table that resolves the name on one edition
+// and not the other reports which one rather than leaving a reader to count
+// the failures. Its five neighbours in this file predate the
+// TestUnit_Scenario_ExpectedResult convention AGENTS.md states and still
+// carry the older TestGeneratedTable_/TestByOperationID_ shapes; renaming
+// them is not this change's business, but new tests follow the convention.
+func TestUnit_GeneratedTable_RouteNoDocumentNames_ResolvesInBothEditions(t *testing.T) {
 	for _, e := range []edition.Edition{edition.CE, edition.EE} {
-		op, ok := ByOperationID(e, "EndpointGroupInspect")
-		if !ok {
-			t.Errorf("%s: EndpointGroupInspect missing from the operationId index; an action carrying it cannot be declared at all", e)
-			continue
-		}
-		if op.Method != http.MethodGet || op.Path != "/endpoint_groups/{id}" {
-			t.Errorf("%s: EndpointGroupInspect resolved to %+v, want GET /endpoint_groups/{id}", e, op)
-		}
-		if !Available(e, op, "2.44.0") {
-			t.Errorf("%s: the generated table reports GET /endpoint_groups/{id} unavailable on 2.44.0, where both editions serve it", e)
-		}
+		t.Run(string(e), func(t *testing.T) {
+			op, ok := ByOperationID(e, "EndpointGroupInspect")
+			if !ok {
+				t.Fatalf("%s: EndpointGroupInspect missing from the operationId index; an action carrying it cannot be declared at all", e)
+			}
+			if op.Method != http.MethodGet || op.Path != "/endpoint_groups/{id}" {
+				t.Errorf("%s: EndpointGroupInspect resolved to %+v, want GET /endpoint_groups/{id}", e, op)
+			}
+			if !Available(e, op, "2.44.0") {
+				t.Errorf("%s: the generated table reports GET /endpoint_groups/{id} unavailable on 2.44.0, where both editions serve it", e)
+			}
+		})
 	}
 }
