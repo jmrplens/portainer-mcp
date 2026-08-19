@@ -151,7 +151,17 @@ func firstDockerEnvironmentID(t *testing.T, ed string) int {
 	return 0
 }
 
-// serverFor returns the provisioned server for an edition name.
+// serverFor returns the provisioned server for an edition name, skipping —
+// with a named reason — when this estate provisioned no such leg.
+//
+// A skip rather than the t.Fatalf it used to be, for the same reason
+// fixtureClient skips: since CI began bringing the compose legs and the
+// Kubernetes leg up in two separate jobs (one Business Edition licence
+// between them, see .github/workflows/e2e.yml), an estate can legitimately
+// lack either compose leg, and a test asking for one that was never
+// provisioned has measured nothing — which is a skip, not a failure. The
+// caller reaches here through Sessions.Editions()'s catalog-derived axis,
+// so it asks for editions this estate may well not have, by design.
 func serverFor(t *testing.T, ed string) harness.Server {
 	t.Helper()
 	for _, leg := range estate.Legs() {
@@ -159,7 +169,7 @@ func serverFor(t *testing.T, ed string) harness.Server {
 			return leg.Server
 		}
 	}
-	t.Fatalf("no provisioned server for edition %q", ed)
+	t.Skipf("no provisioned server for edition %q: %s", ed, provisioningHint(ed))
 	return harness.Server{}
 }
 

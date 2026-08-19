@@ -156,30 +156,7 @@ first.
 
 ---
 
-## 5. A missing Business leg disappears instead of skipping visibly
-
-`Sessions.Editions()` (`test/e2e/suite/sessions_test.go`) derives its list
-from the sessions actually built, so on an estate provisioned without a
-Business Edition licence it returns `["CE"]`. A domain suite ranging over it
-never names an EE subtest at all. `Sessions.For` skips loudly for a leg that
-was asked for and is missing; `Editions()` removes the asking.
-
-The consequence: a contributor without a licence gets a green run that
-measured roughly half of what the output appears to claim, with nothing in
-the output saying so.
-
-**What closing it requires:** the run has to name what it did not measure,
-in its own output, where a reader of the log will see it. The straightforward
-version is to range the matrix over the editions the *catalog* declares
-rather than over the sessions that happened to be built, and let
-`Sessions.For` skip each absent one visibly — one `--- SKIP` line per
-edition per suite, which is exactly the signal that is missing today. That is
-also more faithful to how `businessOnlySpecs` already derives its list from
-the catalog instead of from a hand-maintained parallel one.
-
----
-
-## 6. `Usage` is empty for all 109 actions
+## 5. `Usage` is empty for all 109 actions
 
 `toolutil.ActionSpec.Usage` — "one or two sentences of model-facing guidance
 on when to reach for this action" — is assigned nowhere in

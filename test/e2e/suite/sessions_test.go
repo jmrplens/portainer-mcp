@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -46,13 +47,18 @@ type Sessions struct {
 
 // newSessions builds every session the matrix needs from a loaded estate.
 //
-// It builds a normal session per surface for the Community Edition leg
-// (always present) and, when the estate carries one, the Business Edition
-// leg. Read-only and safe-mode sessions are built once per surface against
-// the Community Edition leg only: For's edition axis exists to let a
-// licence-less contributor skip Business Edition suites, but the mode a
-// session runs in does not depend on which edition backs it, and building
-// against CE keeps that guaranteed present.
+// It builds a normal session per surface for each compose leg the estate
+// actually carries. Read-only and safe-mode sessions are built once per
+// surface against the Community Edition leg only: For's edition axis exists
+// to let a licence-less contributor skip Business Edition suites, but the
+// mode a session runs in does not depend on which edition backs it, and CE
+// is the leg any compose estate carries.
+//
+// "Any compose estate" is the load-bearing qualifier, and it used to read
+// "always present". CI provisions the compose legs and the Kubernetes leg in
+// two separate jobs, so an estate carrying only the Kubernetes leg is now a
+// normal shape and builds no read-only or safe-mode session at all — see
+// ReadOnly, which skips rather than fails in exactly that case.
 //
 // A Business Edition safe-mode session is the one exception, built only when
 // a licence was provisioned: it exists specifically to exercise a
@@ -84,18 +90,28 @@ func newSessions(e harness.Estate) (*Sessions, error) {
 		}
 	}
 
-	for _, surface := range surfaceNames {
-		ro, err := buildSession(e.CE, config.ToolSurface(surface), true, false, false, logger)
-		if err != nil {
-			return nil, fmt.Errorf("build %s read-only session: %w", surface, err)
-		}
-		s.readOnly[surface] = ro
+	// Guarded on the Community Edition leg actually being present, which it no
+	// longer always is: CI provisions the compose legs and the Kubernetes leg
+	// in two separate jobs (one licence, one Portainer instance at a time —
+	// see .github/workflows/e2e.yml), so the Kubernetes job's estate carries
+	// no compose leg at all. Building these unguarded against a zero
+	// harness.Server would fail newSessions outright, and TestMain turns that
+	// into an exit(1) before a single test runs — a whole suite reporting
+	// nothing rather than a suite skipping visibly.
+	if e.HasCommunityEdition() {
+		for _, surface := range surfaceNames {
+			ro, err := buildSession(e.CE, config.ToolSurface(surface), true, false, false, logger)
+			if err != nil {
+				return nil, fmt.Errorf("build %s read-only session: %w", surface, err)
+			}
+			s.readOnly[surface] = ro
 
-		sm, err := buildSession(e.CE, config.ToolSurface(surface), false, true, false, logger)
-		if err != nil {
-			return nil, fmt.Errorf("build %s safe-mode session: %w", surface, err)
+			sm, err := buildSession(e.CE, config.ToolSurface(surface), false, true, false, logger)
+			if err != nil {
+				return nil, fmt.Errorf("build %s safe-mode session: %w", surface, err)
+			}
+			s.safeMode[surface] = sm
 		}
-		s.safeMode[surface] = sm
 	}
 
 	if e.HasBusinessEdition() {
@@ -176,25 +192,37 @@ func (s *Sessions) Close() {
 	}
 }
 
-// Editions returns the name of every edition this Sessions actually built —
-// "CE" always, "EE" only when a licence was provisioned — sorted for
-// deterministic iteration.
+// Editions returns the name of every edition a domain suite is expected to
+// exercise — the editions the action catalog itself declares actions for,
+// read from wiring.AllSpecs, sorted for deterministic iteration. It does not
+// read this Sessions at all, which is the point, and is why its receiver is
+// unnamed.
 //
-// This is task 7b's derived replacement for the []string{"CE", "EE"} literal
-// that used to appear, unchanged, at the top of every per-domain suite
-// (system_test.go, tags_test.go, registries_test.go and this file's own
-// matrix test below): rather than a second list a P3 domain would have to
-// keep in sync with whatever newSessions actually built, a domain suite
-// ranges over this — the single source of truth for "which editions can
-// actually be asked for a session" — the same way businessOnlySpecs derives
-// its list from the catalog instead of maintaining a parallel one by hand.
-func (s *Sessions) Editions() []string {
+// It used to answer "the editions that were actually built", derived from
+// byKey. That was task 7b's replacement for a []string{"CE", "EE"} literal
+// repeated at the top of every per-domain suite, and it fixed the problem it
+// was aimed at — but it introduced another: an estate with no Business
+// Edition leg made every EE subtest cease to exist rather than skip. A suite
+// that ranges over nothing passes, silently, and its output is
+// indistinguishable from a run that measured that edition and found it
+// correct. That was carried in docs/open-follow-ups.md until this change
+// closed it.
+//
+// CI's split into two sequential jobs (see .github/workflows/e2e.yml) turned
+// that from an inconvenience into a trap: each job now sees half an estate by
+// design, so a derived-from-what-was-built axis would have both jobs report a
+// full green pass between them while neither measured the other's half.
+//
+// Ranging over the catalog instead is the fix that follow-up prescribed for
+// itself, and it is still derived rather than hand-maintained: an edition no action
+// is declared for cannot appear here, and one declared for a third edition
+// would appear without anything being edited. Sessions.For turns each edition
+// this estate lacks into a named, visible skip — one "--- SKIP" line per
+// edition per suite, which is exactly the signal that was missing.
+func (*Sessions) Editions() []string {
 	seen := map[string]bool{}
-	for key := range s.byKey {
-		_, ed, ok := strings.Cut(key, "/")
-		if ok {
-			seen[ed] = true
-		}
+	for _, spec := range wiring.AllSpecs() {
+		seen[string(spec.Edition)] = true
 	}
 	editions := make([]string, 0, len(seen))
 	for ed := range seen {
@@ -206,35 +234,72 @@ func (s *Sessions) Editions() []string {
 
 // For returns the session for one surface and edition, skipping when that
 // edition is not part of the estate. A contributor without the Business
-// Edition licence must still be able to run the Community Edition suites.
+// Edition licence must still be able to run the Community Edition suites, and
+// — since the CI split described on Editions — a job that provisioned only
+// the Kubernetes leg must still be able to run the whole suite and have it
+// say, out loud, what it did not measure.
+//
+// The skip message names the command that would provision the missing leg,
+// because the two reasons an edition is absent have different remedies: no
+// Business Edition licence in .env (nothing to do but supply one), or a
+// compose estate that was never brought up at all.
 func (s *Sessions) For(t *testing.T, surface, edition string) *mcp.ClientSession {
 	t.Helper()
 	session, ok := s.byKey[surface+"/"+edition]
 	if !ok {
-		t.Skipf("no %s session for %s: that edition is not provisioned in this estate", surface, edition)
+		t.Skipf("no %s session for %s: that edition is not provisioned in this estate (%s)",
+			surface, edition, provisioningHint(edition))
 	}
 	return session
 }
 
-// ReadOnly returns the read-only-mode session for surface. Unlike For, this
-// never skips: every estate carries a Community Edition leg, and that is
-// what a read-only session is built against, so its absence is a harness
-// defect rather than an unprovisioned edition.
+// provisioningHint names what would have provisioned the edition an absent
+// session was asked for, for the skip messages above. It is deliberately not
+// a claim about why this particular run lacks it — the estate cannot tell
+// "no licence" apart from "compose leg never started" from a missing map
+// entry alone — only about what provisions it at all.
+func provisioningHint(edition string) string {
+	if edition == "EE" {
+		return "`make e2e-up` with a PORTAINER_LICENSE in .env provisions it"
+	}
+	return "`make e2e-up` provisions it"
+}
+
+// ReadOnly returns the read-only-mode session for surface, skipping when
+// this estate has no Community Edition leg — the leg every read-only and
+// safe-mode session is built against — and failing when it has one and the
+// session is missing anyway.
+//
+// The two cases must not be collapsed. "No compose leg was provisioned" is
+// an ordinary shape since CI's split into two jobs (see Editions): the
+// Kubernetes job's estate has none, and these suites have to say so rather
+// than fail. "The estate has a Community Edition leg and newSessions still
+// did not build this session" is a harness defect, and turning that into a
+// skip would let a broken harness look like an unprovisioned leg — the exact
+// substitution this whole change is about, in the opposite direction.
 func (s *Sessions) ReadOnly(t *testing.T, surface string) *mcp.ClientSession {
 	t.Helper()
 	session, ok := s.readOnly[surface]
 	if !ok {
+		if !estate.HasCommunityEdition() {
+			t.Skipf("no %s read-only session: this estate provisions no Community Edition leg "+
+				"(`make e2e-up` provisions it), and read-only mode is exercised against that leg", surface)
+		}
 		t.Fatalf("no read-only session was built for surface %q", surface)
 	}
 	return session
 }
 
-// SafeMode returns the safe-mode session for surface. See ReadOnly: it never
-// skips, for the same reason.
+// SafeMode returns the safe-mode session for surface. See ReadOnly: it skips
+// and fails for the same two distinct reasons.
 func (s *Sessions) SafeMode(t *testing.T, surface string) *mcp.ClientSession {
 	t.Helper()
 	session, ok := s.safeMode[surface]
 	if !ok {
+		if !estate.HasCommunityEdition() {
+			t.Skipf("no %s safe-mode session: this estate provisions no Community Edition leg "+
+				"(`make e2e-up` provisions it), and safe mode is exercised against that leg", surface)
+		}
 		t.Fatalf("no safe-mode session was built for surface %q", surface)
 	}
 	return session
@@ -397,6 +462,93 @@ func TestSessions_EveryProvisionedSurfaceListsItsTools(t *testing.T) {
 					t.Errorf("%s/%s published %d tools: %v", ed, surface, len(res.Tools), names)
 				}
 			})
+		}
+	}
+}
+
+// TestUnit_Editions_NamesEveryCatalogEditionEvenWhenNoneWereBuilt is the
+// guard on the visible-skip fix: the edition axis every domain suite ranges
+// over must come from what the catalog declares, never from what this
+// particular estate happened to provision.
+//
+// It asks a Sessions that built nothing at all, because that is the one
+// question that separates the two derivations no matter which estate the
+// suite is run against. The implementation this replaced answered "no
+// editions" here, and a domain suite ranging over no editions runs no
+// subtests, reports nothing, and passes — the silent half-measurement the
+// CI split would otherwise have made routine on both of its jobs at once.
+//
+// The second assertion guards the derivation rather than the call: an axis
+// read from wiring.AllSpecs is only as wide as the specs declare, so if the
+// catalog ever stopped declaring a Business Edition action this would shrink
+// back to ["CE"] and take every EE subtest with it, silently. That is the
+// same assumption edition_test.go's businessOnlySpecs already refuses to
+// leave unstated.
+func TestUnit_Editions_NamesEveryCatalogEditionEvenWhenNoneWereBuilt(t *testing.T) {
+	t.Parallel()
+
+	built := (&Sessions{byKey: map[string]*mcp.ClientSession{}}).Editions()
+	if len(built) == 0 {
+		t.Fatal("Editions() on a Sessions that built nothing = [], want the editions the catalog declares: " +
+			"a suite ranging over this would run no subtests and pass by measuring nothing")
+	}
+
+	want := map[string]bool{"CE": true, "EE": true}
+	for _, ed := range built {
+		delete(want, ed)
+	}
+	if len(want) != 0 {
+		t.Errorf("Editions() = %v, missing %v: the catalog declares actions for both editions "+
+			"(see businessOnlySpecs in edition_test.go), so both must appear on the axis", built, want)
+	}
+
+	// And the live Sessions must answer identically to the empty one: the
+	// axis is a property of the catalog, not of this estate.
+	if live := sessions.Editions(); !reflect.DeepEqual(live, built) {
+		t.Errorf("sessions.Editions() = %v, want %v: the axis still depends on what this estate provisioned", live, built)
+	}
+}
+
+// TestSessions_For_AnAbsentEditionSkipsVisibly is the other half of the same
+// fix, checked against whatever estate this run actually has: every edition
+// on the axis must produce a subtest, and that subtest must either run or
+// skip — never silently fail to exist.
+//
+// It reads the outcome through t.Cleanup rather than the bool t.Run returns,
+// which cannot tell a skip from a pass: Skipf ends the subtest's goroutine,
+// so a cleanup registered first is the only thing that still observes
+// t.Skipped() afterwards.
+//
+// On a fully provisioned compose estate every row runs and this proves the
+// axis is not skipping things that are present. On a half estate — either CI
+// job, or any contributor without a licence — the rows for the missing leg
+// skip, and the run's own output names them. That difference, visible in the
+// log, is the whole point.
+func TestSessions_For_AnAbsentEditionSkipsVisibly(t *testing.T) {
+	editions := sessions.Editions()
+	if len(editions) == 0 {
+		t.Fatal("sessions.Editions() is empty: this test would pass by running nothing")
+	}
+
+	for _, ed := range editions {
+		provisioned := ed == "CE" && estate.HasCommunityEdition() ||
+			ed == "EE" && estate.HasBusinessEdition()
+
+		var skipped bool
+		ran := t.Run(ed, func(t *testing.T) {
+			t.Cleanup(func() { skipped = t.Skipped() })
+			session := sessions.For(t, "dynamic", ed)
+			if session == nil {
+				t.Fatalf("For(dynamic, %s) returned a nil session without skipping", ed)
+			}
+		})
+		if !ran {
+			t.Errorf("the %s row failed; it must either run against a provisioned leg or skip with a named reason", ed)
+			continue
+		}
+		if skipped == provisioned {
+			t.Errorf("the %s row skipped = %v on an estate where that leg provisioned = %v: "+
+				"a provisioned leg must be measured and an absent one must say so", ed, skipped, provisioned)
 		}
 	}
 }

@@ -336,7 +336,13 @@ func TestDocker_ContainerGpusInspect_AgainstARealContainer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	srv := estate.CE
+	// serverFor, not estate.CE directly: it skips with a named reason on an
+	// estate that provisioned no Community Edition leg, which is the shape
+	// CI's Kubernetes job runs with (see .github/workflows/e2e.yml). Read
+	// straight off estate.CE, this test instead failed on the "estate has no
+	// docker environment" line below — a red run blaming a missing
+	// environment for a leg that was never provisioned at all.
+	srv := serverFor(t, "CE")
 	envID, ok := srv.Environment(harness.EnvironmentDocker)
 	if !ok {
 		t.Fatalf("estate has no %q environment", harness.EnvironmentDocker)

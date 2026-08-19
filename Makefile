@@ -87,8 +87,21 @@ e2e-licence-release:
 # Swarm service or an asynchronous webhook to converge. 15m left under three
 # minutes of headroom on the machine the suite was written on, which is not
 # enough for a slower or busier CI runner.
+#
+# -v is not decoration. Without it `go test` prints nothing for a skipped
+# test, and since CI provisions the compose legs and the Kubernetes leg in
+# two separate jobs (one Business Edition licence, one Portainer instance at
+# a time — see .github/workflows/e2e.yml), each job runs against half an
+# estate on purpose and skips the other half's suites. A silent skip and a
+# pass look identical in a non-verbose log, which is precisely the
+# half-measured green run docs/open-follow-ups.md carried as an open item
+# until this change closed it.
+#
+# TestMain prints a summary of which legs this estate has either way; -v is
+# what makes each individual "--- SKIP ... that edition is not provisioned"
+# line readable next to it.
 test-e2e:
-	go test -tags e2e -timeout 30m -count=1 ./test/e2e/suite/...
+	go test -tags e2e -v -timeout 30m -count=1 ./test/e2e/suite/...
 
 # audit-e2e-gaps reports which catalog actions no e2e test references. It is
 # informational, not a CI gate, until P7: with the catalog in early phases of

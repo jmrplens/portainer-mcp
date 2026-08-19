@@ -2243,14 +2243,18 @@ func TestSafeMode_Stacks_MutatingActionsArePreviewedAndNothingChanges(t *testing
 	fixtures := map[string]stacksSafeModeFixture{}
 	baselineNames := map[string]string{}
 	baselineFiles := map[string]string{}
-	for _, ed := range []string{"CE", "EE"} {
-		srv := estate.CE
-		if ed == "EE" {
-			if !estate.HasBusinessEdition() {
-				continue
-			}
-			srv = estate.EE
+	// Ranges over the catalog's own edition axis and builds a fixture only for
+	// the legs this estate actually carries. Both legs are optional now: the
+	// Business Edition one always was (no licence, no leg), and the Community
+	// Edition one became so when CI split the compose legs and the Kubernetes
+	// leg into two jobs sharing one licence — see .github/workflows/e2e.yml.
+	// A missing fixture is not silently absent: every row below skips by name
+	// when `fixtures[ed]` has no entry.
+	for _, ed := range sessions.Editions() {
+		if !estateCarriesLeg(ed) {
+			continue
 		}
+		srv := serverFor(t, ed)
 		envID, ok := srv.Environment(harness.EnvironmentDocker)
 		if !ok {
 			t.Fatalf("the %s server has no %q environment", ed, harness.EnvironmentDocker)

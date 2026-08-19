@@ -109,16 +109,43 @@ func rawClientFor(ed string) (*portainer.Client, error) {
 	return client, nil
 }
 
+// fixtureClient returns the fixture client for leg ed, skipping — with a
+// named reason — when this estate carries no leg by that name, and failing
+// only when a leg it does carry cannot produce a client.
+//
+// The absence check reads estate.Legs() rather than naming "EE" as the one
+// edition that might be missing, which is what it used to do. That special
+// case was written when every estate began with `make e2e-up` and a
+// Community Edition leg was therefore guaranteed; CI now brings the compose
+// legs and the Kubernetes leg up in two separate jobs (one Business Edition
+// licence, one Portainer instance at a time — see
+// .github/workflows/e2e.yml), so "CE" is exactly as absent-able as "EE", and
+// the old shape turned that into a t.Fatalf: a red run reporting a harness
+// error, where the truthful answer is a skip naming the leg that was never
+// provisioned.
 func fixtureClient(t *testing.T, ed string) *portainer.Client {
 	t.Helper()
-	if ed == "EE" && !estate.HasBusinessEdition() {
-		t.Skipf("no Business Edition server in this estate")
+	if !estateCarriesLeg(ed) {
+		t.Skipf("no %s server in this estate: %s", ed, provisioningHint(ed))
 	}
 	client, err := rawClientFor(ed)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	return client
+}
+
+// estateCarriesLeg reports whether the estate provisioned a leg named ed,
+// asking Estate.Legs() — the same derivation rawClientFor looks the server up
+// in, so a skip here and a "no %s server in this estate" error there can
+// never disagree about what exists.
+func estateCarriesLeg(ed string) bool {
+	for _, leg := range estate.Legs() {
+		if leg.Name == ed {
+			return true
+		}
+	}
+	return false
 }
 
 // createTag creates an environment tag named name on edition ed's server and
@@ -727,7 +754,10 @@ func TestCleanupOrphans_RefusesAnEstateWithoutARecordedInstanceID(t *testing.T) 
 	// if the guard itself stops firing. No InstanceID is recorded on this
 	// Server, which the guard rejects before ever attempting to reach the
 	// (unreachable) host.
-	e := harness.Estate{CE: harness.Server{BaseURL: "https://not-ours.example.invalid"}}
+	e := harness.Estate{CE: harness.Server{
+		BaseURL: "https://not-ours.example.invalid",
+		Creds:   harness.Credentials{APIKey: "ce-key"},
+	}}
 	err := cleanupOrphans(context.Background(), e)
 	if err == nil {
 		t.Fatal("cleanupOrphans accepted an estate whose CE server carries no recorded instance id")
@@ -777,7 +807,13 @@ func TestCleanupOrphans_CallsEveryRegisteredSweeper(t *testing.T) {
 		}},
 	}
 
-	e := harness.Estate{CE: harness.Server{BaseURL: server.URL, InstanceID: "matching-instance-id"}}
+	// The API key is part of what makes this a provisioned leg: Estate.Legs()
+	// — which composeLegs, and therefore cleanupOrphans, derives from —
+	// requires both a base URL and a key before it will report a leg at all.
+	e := harness.Estate{CE: harness.Server{
+		BaseURL: server.URL, InstanceID: "matching-instance-id",
+		Creds: harness.Credentials{APIKey: "ce-key"},
+	}}
 	if err := cleanupOrphans(context.Background(), e); err != nil {
 		t.Fatalf("cleanupOrphans() error = %v", err)
 	}
@@ -795,7 +831,7 @@ func TestCleanupOrphans_CallsEveryRegisteredSweeper(t *testing.T) {
 func TestComposeLegs_ExcludesKubernetes(t *testing.T) {
 	t.Parallel()
 	e := harness.Estate{
-		CE:         harness.Server{Edition: "CE", BaseURL: "http://ce"},
+		CE:         harness.Server{Edition: "CE", BaseURL: "http://ce", Creds: harness.Credentials{APIKey: "ce-key"}},
 		EE:         harness.Server{Edition: "EE", BaseURL: "http://ee", Creds: harness.Credentials{APIKey: "ee-key"}},
 		Kubernetes: harness.Server{Edition: "Kubernetes", BaseURL: "https://k8s", Creds: harness.Credentials{APIKey: "k8s-key"}},
 	}

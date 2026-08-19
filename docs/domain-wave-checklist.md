@@ -147,6 +147,25 @@ running. The lock is only a guard, though — the licence's own one-instance
 limit is the real constraint underneath it, and holds regardless of whether
 the lock is in place.
 
+**In CI the lock cannot help at all**, and this is the part that is easy to
+get wrong. `test/e2e/.licence.lock` is a file on one runner's own
+filesystem: it refuses a second activation by the run that holds it and is
+blind to every other runner and every other workflow run. So
+`.github/workflows/e2e.yml` serialises the two legs a second way, and both
+mechanisms are load bearing:
+
+- the Kubernetes job declares `needs: compose`, so the two legs never run at
+  the same time on two runners (removing that to "parallelise" reintroduces
+  exactly the double activation this section is about, with every test still
+  green);
+- the workflow declares a repository-wide `concurrency` group with
+  `cancel-in-progress: false`, so two pull requests cannot each hold the
+  licence, and a queued run is never cancelled mid-estate — a cancellation
+  races its own teardown and can strand the key.
+
+`test/e2e/harness/e2e_workflow_test.go` pins both, plus each job's
+`if: always()` teardown, against the committed workflow file.
+
 ## The model, in one paragraph
 
 A domain is scaffolded once, from the vendored specification, by

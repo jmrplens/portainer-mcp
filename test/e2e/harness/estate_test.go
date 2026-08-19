@@ -69,7 +69,13 @@ func TestEstate_HasBusinessEdition_FalseWithoutCredentials(t *testing.T) {
 	}
 }
 
-func TestLoadEstate_MissingCommunityEdition_ReturnsInformativeError(t *testing.T) {
+// TestLoadEstate_NoLegAtAll_ReturnsInformativeError is the surviving half of
+// what used to be TestLoadEstate_MissingCommunityEdition_ReturnsInformativeError.
+// The rule it pins narrowed deliberately — see LoadEstate's own comment and
+// the test immediately below — but the property that matters did not: an
+// estate naming no server whatsoever is still a refusal, so a suite is never
+// handed an empty world to pass against.
+func TestLoadEstate_NoLegAtAll_ReturnsInformativeError(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "estate.json")
 	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
@@ -77,10 +83,65 @@ func TestLoadEstate_MissingCommunityEdition_ReturnsInformativeError(t *testing.T
 	}
 	_, err := LoadEstate(path)
 	if err == nil {
-		t.Fatal("LoadEstate() error = nil, want an error for an estate with no CE server")
+		t.Fatal("LoadEstate() error = nil, want an error for an estate that provisions no server at all")
 	}
-	if !strings.Contains(err.Error(), "Community Edition") {
+	if !strings.Contains(err.Error(), "no server at all") {
 		t.Errorf("error = %q, want it to name what is missing", err)
+	}
+}
+
+// TestUnit_LoadEstate_AcceptsAKubernetesOnlyEstate pins the shape the CI
+// split (see Estate.HasCommunityEdition) made normal: the Kubernetes job
+// provisions its leg on a runner where `make e2e-up` never ran, so the
+// estate file it writes and then reads back names no compose leg.
+//
+// This is not a cosmetic relaxation. k3d-down.sh releases the Business
+// Edition licence through cmd/provision's releaseKubernetesLicence, which
+// loads the estate before it can name the server to release against, and
+// treats a load failure as "nothing to release" — deliberately, so a
+// best-effort teardown never aborts. Refusing this shape therefore did not
+// produce a red build; it produced a silently stranded licence on a server
+// `k3d cluster delete` then destroyed.
+func TestUnit_LoadEstate_AcceptsAKubernetesOnlyEstate(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "estate.json")
+	k8sOnly := Estate{Kubernetes: Server{
+		Edition: "Kubernetes", BaseURL: "https://10.0.0.2:30777",
+		Creds: Credentials{APIKey: "k8s-key"},
+	}}
+	if err := k8sOnly.SaveTo(path); err != nil {
+		t.Fatalf("SaveTo() error = %v", err)
+	}
+	got, err := LoadEstate(path)
+	if err != nil {
+		t.Fatalf("LoadEstate() on a Kubernetes-only estate error = %v, want it accepted", err)
+	}
+	if !got.HasKubernetes() {
+		t.Error("LoadEstate() lost the Kubernetes leg it was given")
+	}
+	if got.HasCommunityEdition() {
+		t.Error("LoadEstate() invented a Community Edition leg the file never named")
+	}
+}
+
+// TestUnit_HasCommunityEdition_RequiresBothTheURLAndTheKey mirrors
+// TestEstate_HasBusinessEdition_FalseWithoutCredentials: a leg recorded with
+// a base URL and no API key is a leg nothing can call, and reporting it
+// present would hand every caller a client that only fails on its first
+// request.
+func TestUnit_HasCommunityEdition_RequiresBothTheURLAndTheKey(t *testing.T) {
+	t.Parallel()
+	var e Estate
+	if e.HasCommunityEdition() {
+		t.Error("HasCommunityEdition() = true on an estate with no CE server at all")
+	}
+	e.CE = Server{BaseURL: "http://ce"} // present but unprovisioned
+	if e.HasCommunityEdition() {
+		t.Error("HasCommunityEdition() = true for a server with no API key")
+	}
+	e.CE.Creds.APIKey = "k"
+	if !e.HasCommunityEdition() {
+		t.Error("HasCommunityEdition() = false for a fully provisioned Community Edition server")
 	}
 }
 
@@ -185,7 +246,7 @@ func TestSyncEdgeEnv_NoEdge_RemovesStaleFile(t *testing.T) {
 	if err := WriteEdgeEnv(path, "stale-uuid", "stale-key", 3); err != nil {
 		t.Fatalf("WriteEdgeEnv() error = %v", err)
 	}
-	e := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}}
+	e := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}}}
 	if err := SyncEdgeEnv(e, path); err != nil {
 		t.Fatalf("SyncEdgeEnv() error = %v", err)
 	}
@@ -347,14 +408,30 @@ func TestServer_WithEnvironment_CarriesMoreThanOneDockerEnvironment(t *testing.T
 func TestEstate_Legs_DerivesFromWhatWasActuallyProvisioned(t *testing.T) {
 	t.Parallel()
 
-	ceOnly := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}}
+	// Carries an API key, unlike the version of this fixture written before
+	// the CI split: CE is now derived through HasCommunityEdition like every
+	// other leg, so a base URL alone no longer describes a leg anything can
+	// reach — see Estate.Legs' own comment.
+	ceOnly := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}}}
 	legs := ceOnly.Legs()
 	if len(legs) != 1 || legs[0].Name != "CE" {
 		t.Fatalf("Legs() on a Community-only estate = %+v, want exactly one leg named CE", legs)
 	}
 
+	// The shape the CI split made normal, and the one this derivation used to
+	// get wrong: an estate whose only leg is the Kubernetes one must report
+	// exactly that leg, not a phantom CE leg with an empty base URL that
+	// every caller would then try to build a client against.
+	k8sOnly := Estate{Kubernetes: Server{
+		Edition: "Kubernetes", BaseURL: "https://k8s", Creds: Credentials{APIKey: "k8s-key"},
+	}}
+	legs = k8sOnly.Legs()
+	if len(legs) != 1 || legs[0].Name != "Kubernetes" {
+		t.Fatalf("Legs() on a Kubernetes-only estate = %+v, want exactly one leg named Kubernetes", legs)
+	}
+
 	full := Estate{
-		CE:         Server{Edition: "CE", BaseURL: "http://ce"},
+		CE:         Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}},
 		EE:         Server{Edition: "EE", BaseURL: "http://ee", Creds: Credentials{APIKey: "ee-key"}},
 		Kubernetes: Server{Edition: "Kubernetes", BaseURL: "https://k8s", Creds: Credentials{APIKey: "k8s-key"}},
 	}
@@ -415,7 +492,7 @@ func TestUnit_Estate_GPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "estate.json")
 	want := GPU{Name: "NVIDIA GeForce RTX 4060", CDIDevice: "nvidia.com/gpu=all"}
-	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, GPU: want}
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}}, GPU: want}
 	if err := seed.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo() error = %v", err)
 	}
@@ -465,7 +542,7 @@ func TestUnit_Estate_SwarmServiceIDSurvivesTheRoundTripThroughDisk(t *testing.T)
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "estate.json")
 	const want = "wxyhlanc3nqz"
-	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, SwarmServiceID: want}
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}}, SwarmServiceID: want}
 	if err := seed.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo() error = %v", err)
 	}
@@ -521,7 +598,7 @@ func TestUnit_HasKubernetesGPU_IsIndependentOfTheComposeLegsGPU(t *testing.T) {
 func TestUnit_Estate_KubernetesGPUSurvivesTheRoundTripThroughDisk(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "estate.json")
-	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce"}, KubernetesGPU: true}
+	seed := Estate{CE: Server{Edition: "CE", BaseURL: "http://ce", Creds: Credentials{APIKey: "ce-key"}}, KubernetesGPU: true}
 	if err := seed.SaveTo(path); err != nil {
 		t.Fatalf("SaveTo() error = %v", err)
 	}

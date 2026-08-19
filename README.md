@@ -148,6 +148,14 @@ make e2e-down        # tear the compose estate down
 `make e2e-k8s-down` additionally need `k3d`, `kubectl` and `helm` on `PATH` — the scripts fail with
 a named message if any is missing rather than doing something partial.
 
+Either leg can be brought up on its own: `make e2e-k8s-up` with no compose estate provisions a
+Kubernetes-only one, and the suite runs against whatever it finds. A leg that is absent is never
+silently ignored — `make test-e2e` prints which legs the estate provisions and which are **absent**,
+and every suite that needs a missing one skips by name (`go test` is run with `-v` for exactly that
+reason). With one Business Edition licence permitting one Portainer instance at a time, bringing up
+one leg at a time is the normal way to work; `test/e2e/.licence.lock` refuses the second activation
+if you forget.
+
 ### Running the estate on another machine
 
 The estate normally runs on the Docker daemon of the machine you are on. Set one key in the
@@ -264,6 +272,14 @@ reason, and the build does not go red for a secret a contributor cannot supply. 
 available, the key is written to `.env` from the environment, never as a
 command-line argument or an echoed value, and the file is removed on every exit path, including a
 failed run.
+
+That workflow runs the two legs as **two sequential jobs** — the compose estate first, then the
+Kubernetes leg, with `needs:` between them — and the whole workflow is behind a `concurrency` group
+so only one run holds the licence at a time across the repository. Both exist for the same reason:
+the licence permits one instance, and `test/e2e/.licence.lock` is a file on one runner's own
+filesystem, so it cannot see another runner. Ordering, not the lock, is what keeps two live
+Portainer servers from activating the same key. Each job therefore measures half an estate and says
+so in its own log; between them the two halves are covered.
 
 ### Security
 
