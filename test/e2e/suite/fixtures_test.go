@@ -446,7 +446,11 @@ func isOrphanEligible(name string, now time.Time) bool {
 // Its callers are the two that need "what was actually provisioned" and
 // nothing else: cleanupOrphans and newSessions. A TEST must range over
 // composeLegsUnderTest instead — see that function for why an empty or short
-// slice here is a silence a test cannot afford.
+// slice here is a silence a test cannot afford. That is not left to whoever
+// reads this comment: test/e2e/harness/suite_leg_axis_test.go walks this
+// package's own AST and fails, naming the file, function and line, on any
+// call to composeLegs from outside the short list of functions allowed to
+// make it.
 //
 // The Kubernetes leg is excluded here, not in Estate.Legs() itself: it
 // deploys a self-signed certificate that this test process has no pinned CA
