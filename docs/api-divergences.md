@@ -2034,6 +2034,66 @@ only asks whether a route exists. Unlike §6.8 it is not even a verb
 question — the route is served, answers `200`, and simply sends a different
 shape from the one documented. Only decoding the answer finds it.
 
+### 6.10 `ResourceControlType` is described by two contradictory tables, and the catalog publishes the one the machine-readable evidence supports
+
+**Evidence: vendored spec**, both editions, 2026-08-19 (wave 2 stage A,
+`resource_controls`). No live measurement is needed to establish the
+contradiction — it is between two parts of the same document — and only one
+of the ten values has been probed against a server.
+
+`resourcecontrols.resourceControlCreatePayload`'s `Type` property describes
+the enum one way:
+
+```
+Type of Resource. Valid values are: 1 - container, 2 - service
+3 - volume, 4 - network, 5 - secret, 6 - stack, 7 - config, 8 - custom template, 9 - azure-container-group
+```
+
+`portainer.ResourceControl`'s own `Type` property, in the same document,
+describes it another:
+
+```
+Type of Docker resource. Valid values are: 1- container, 2 -service
+3 - volume, 4 - secret, 5 - stack, 6 - config or 7 - custom template
+```
+
+They agree on 1, 2 and 3 and disagree on everything above: the second table
+has no `network`, so every value from 4 up is shifted down by one, and it
+stops at 7 where the first reaches 9.
+
+The referenced schema itself, `portainer.ResourceControlType`, carries **no
+description at all** — only the enum and its variable names. Those names are
+the tie-breaker, and they side with the create payload:
+
+```
+enum:             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+x-enum-varnames:  ["_", "ContainerResourceControl", "ServiceResourceControl",
+                   "VolumeResourceControl", "NetworkResourceControl",
+                   "SecretResourceControl", "StackResourceControl",
+                   "ConfigResourceControl", "CustomTemplateResourceControl",
+                   "ContainerGroupResourceControl"]
+```
+
+`NetworkResourceControl` is 4, `SecretResourceControl` is 5, and the enum
+runs to 9 — the create payload's table exactly. So the evidence is two to
+one, not a coin toss, and `oapi-codegen` bakes the same reading into the
+generated constants (`PortainerResourceControlTypeNetworkResourceControl = 4`).
+
+**What the catalog publishes:** the create payload's table, in
+`resource_controls.create`'s `type` description and in its `EnumParams`
+constraint of 1 to 9. That is also the table `internal/tools/resource_controls`
+enforces before any call is made — a value outside 1-9 is refused by the
+action's own schema, naming the enum, and never reaches Portainer.
+
+**What is actually measured:** type `3` (volume) only, end to end on both
+editions, through all three tool surfaces. Types 1, 2 and 4 through 9 were not
+probed: doing so would have meant creating a container, network, secret and
+config on the shared estate for no assertion the wave needed. So this entry
+records a documentation defect and the reasoning behind the choice, not a
+behavioural measurement — if a future wave probes the upper half of the range
+and finds Portainer disagreeing with `x-enum-varnames`, that belongs in §2 and
+this entry should point at it.
+
 ## 7. Adjacent constraint, not an API divergence
 
 Worth knowing when choosing parameter types for a new domain, though it is a

@@ -61,11 +61,42 @@
 //
 // None of those calls reached Portainer. The third is the one a model will
 // meet by accident: the create payload's SubResourceIDs property becomes the
-// wire name "subResourceIdS", with a capital S, under the catalog-wide
-// naming rule internal/specnaming holds (the same rule that produces
-// "tagIdS" in endpoint_groups and endpoints). The natural spelling
-// "subResourceIds" is refused by this action's own schema before any call is
-// made, so the create narrative gives the exact spelling.
+// published wire name "subResourceIdS", with a capital S. The natural
+// spelling "subResourceIds" is refused by this action's own schema before any
+// call is made, so the create narrative gives the exact spelling.
+//
+// That capital S is a catalog-wide defect in bodyJSONTag, not something this
+// domain chose, and it is worth naming precisely because the obvious guess is
+// wrong: the rule does NOT live in internal/specnaming, which holds only the
+// parameter/body collision rule and the synthetic-operationId rule and
+// contains neither function involved. The derivation, confirmed by running
+// the two functions over the real names:
+//
+//	SubResourceIDs  splitWords=["Sub" "Resource" "ID" "s"]  goFieldName="SubResourceIDs"  bodyJSONTag="subResourceIdS"
+//	TagIDs          splitWords=["Tag" "ID" "s"]             goFieldName="TagIDs"          bodyJSONTag="tagIdS"
+//	TagIds          splitWords=["Tag" "Ids"]                goFieldName="TagIDs"          bodyJSONTag="tagIds"
+//
+// splitWords is right: a fully-matched initialism run leaves the pluralising
+// "s" as its own word. goFieldName special-cases that lone "s"
+// (isPluralSuffixWord), and its own doc comment at
+// cmd/gen_action_inputs/naming.go already spells out the exact failure being
+// avoided — "this lone 's' upper-cases to 'S', rendering 'TagIDS'".
+// bodyJSONTag has no such branch: its loop is title(w) for every word after
+// the first, so "s" becomes "S". The fix landed in one function and not its
+// neighbour. Both live in cmd/gen_action_inputs/naming.go and are mirrored in
+// internal/specdiff/naming.go, and the two copies must be changed together —
+// TestUnit_WireNames_MatchSpecdiffOnEveryRealOperation pins them to each
+// other over every operation in both vendored documents.
+//
+// Note the third line above: the defect fires only when the wire name spells
+// the initialism in full. "TagIds" renders correctly as "tagIds"; "TagIDs"
+// does not. Five published fields across three domains are affected today —
+// subResourceIdS here, tagIdS twice in endpoint_groups, and tagIdS plus
+// endpointIdS in endpoints, the last two already on main. Renaming one
+// domain's field in isolation is not the fix: it would make
+// cmd/audit_spec_drift report one field added and one removed on an operation
+// nobody touched, which is the bogus-allowlist trap that test's own doc
+// comment warns about (measured — see this task's report).
 package resource_controls
 
 import (
@@ -98,15 +129,16 @@ func narrative(operationID string) toolutil.ActionNarrative {
 		return toolutil.ActionNarrative{
 			Title: "Restrict one resource to chosen users or teams",
 			Description: "Creates the access control over ONE Docker or Kubernetes resource, naming who may see and use it. KEEP THE Id THIS RETURNS: nothing in this catalog, and no route on the Portainer server, reads a resource control back — GET /resource_controls and GET /resource_controls/{id} both answer 405 Method Not Allowed (measured on both editions) — so this response is the only place the new control's Id is ever published, and resource_controls.update and resource_controls.delete both take that id and nothing else. A control is otherwise visible only inline on the resource it guards, and only for resources this catalog can read: stacks.list, stacks.inspect, custom_templates.list and custom_templates.inspect carry a ResourceControl field. Over a container, volume, network, secret or config it is not observable through this catalog at all once created. " +
-				"resourceId must be PORTAINER'S identifier for the resource, which is not always its name, and getting it wrong fails silently: Portainer does not check that the named resource exists, so a create over a name nothing has answers 200 and stores a control that governs nothing (measured on Community). For a Docker volume the identifier is the volume name with a node/cluster suffix — creating a volume through Portainer answered ResourceID \"myvolume_dcm81sn24aeeuf36q9cbktjkw\" — and Portainer had already auto-created a control keyed on exactly that string, so a create naming it is refused 409 \"A resource control is already associated to this resource\". One resource holds at most one control: when a resource already has one, use resource_controls.update with its id rather than creating a second. For a stack the identifier is the stack NAME. " +
+				"resourceId must be PORTAINER'S identifier for the resource, which is not always its name, and getting it wrong fails silently: Portainer does not check that the named resource exists, so a create over a name nothing has answers 200 and stores a control that governs nothing (measured on Community). For a Docker volume the identifier is the volume name with a node/cluster suffix — creating a volume through Portainer answered ResourceID \"myvolume_dcm81sn24aeeuf36q9cbktjkw\" — and Portainer had already auto-created a control keyed on exactly that string, so a create naming it is refused 409 \"A resource control is already associated to this resource\". One resource holds at most one control: when a resource already has one, use resource_controls.update with its id rather than creating a second. For a stack the vendored document states the identifier is the stack NAME rather than its numeric id — that one is quoted from the specification and was NOT measured here, unlike every other claim in this paragraph. " +
 				"type is required and this action's own schema accepts only 1 to 9 — a value outside that range is refused here, naming the enum, before Portainer is called. 1 container, 2 service, 3 volume, 4 network, 5 secret, 6 stack, 7 config, 8 custom template, 9 azure container group. " +
 				"At least one grant must actually be ON, or Portainer refuses the call with 400 \"Invalid payload: must specify Users, Teams, Public or AdministratorsOnly\" (measured on both editions): send a non-empty users, a non-empty teams, public true, or administratorsOnly true. Sending them all as false or empty is refused too — a control that grants nobody anything cannot be created. users takes user identifiers and teams takes team identifiers from teams.list. " +
-				"The optional list of sub-resources is spelled subResourceIdS, with a capital S — that is the field name this action publishes, and the natural spelling subResourceIds is refused by this action's own schema with `unexpected additional properties [\"subResourceIds\"]` without ever reaching Portainer.",
+				"The optional list of sub-resources is spelled subResourceIdS, with a capital S — that is the field name this action publishes, and the natural spelling subResourceIds is refused by this action's own schema with `unexpected additional properties [\"subResourceIds\"]` without ever reaching Portainer. THIS IS THE ONLY PLACE SUB-RESOURCES CAN BE SET: resource_controls.update publishes no sub-resource field and Portainer ignores one on that route, so the list is fixed at creation and immutable afterwards (measured). It is not wiped by a later update either, so there is never a reason to delete and re-create a control in order to keep it.",
 		}
 	case "ResourceControlUpdate":
 		return toolutil.ActionNarrative{
 			Title: "Replace who may access one controlled resource",
-			Description: "Changes who may access the resource one existing control guards, addressed by that CONTROL's own id — never by the resource. This is a REPLACE, not a partial update: every field omitted is cleared, not preserved. Measured on both editions, a control holding users [1] and public true, updated with public true alone, came back with UserAccesses empty; send the full intended set of users, teams, public and administratorsOnly every time, including the parts that are not changing. " +
+			Description: "Changes who may access the resource one existing control guards, addressed by that CONTROL's own id — never by the resource. This is a REPLACE across THE FOUR FIELDS IT TAKES, and those four only: users, teams, public and administratorsOnly. Any of the four you omit is cleared, not preserved — measured on both editions, a control holding users [1] and teams [T] came back with UserAccesses and TeamAccesses both empty after an update carrying public alone — so send the full intended set of all four every time, including the parts that are not changing. " +
+				"SubResourceIds is NOT one of those four and is NOT wiped: it survives an update untouched (measured — a control created with sub-resources [\"sub-a\",\"sub-b\"] still reported both after an update carrying only public). It also cannot be changed here at all: this action publishes no sub-resource field, so sending subResourceIdS is refused by its own schema with `unexpected additional properties [\"subResourceIdS\"]` before Portainer is called, and Portainer ignores the field on this route even when it is sent directly. Sub-resources are fixed at resource_controls.create and are immutable afterwards. Do NOT delete and re-create a control to change or preserve them: deleting one widens access to the resource in the meantime, and it is never necessary here. " +
 				"At least one grant must be ON in the result, or Portainer refuses with 400 \"Invalid payload: must specify Users, Teams, Public or AdministratorsOnly\" (measured on both editions) — an update carrying only empty users and teams is refused, so a control cannot be emptied into granting nobody anything. To take access away entirely, use resource_controls.delete instead. " +
 				"You need the control's id, and this catalog has no way to look one up: nothing lists or inspects resource controls, and Portainer answers 405 to GET /resource_controls and GET /resource_controls/{id} (measured on both editions). Take the id from resource_controls.create's response, or from the ResourceControl field of the resource itself where this catalog can read it — stacks.list, stacks.inspect, custom_templates.list, custom_templates.inspect. An id no control has answers 404. " +
 				"The response carries the whole stored control, and it is the only direct confirmation of what landed, so read it rather than assuming: an update quietly clearing a grant it was not asked about looks identical to a successful one otherwise. Repeating an identical update is safe — it converges on the same state, measured on both editions.",

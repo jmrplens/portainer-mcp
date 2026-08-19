@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jmrplens/portainer-mcp/internal/portainer"
+	apigen "github.com/jmrplens/portainer-mcp/internal/portainer/gen"
 	"github.com/jmrplens/portainer-mcp/internal/tools/resource_controls"
 	"github.com/jmrplens/portainer-mcp/internal/toolutil"
 	"github.com/jmrplens/portainer-mcp/test/e2e/harness"
@@ -420,15 +421,22 @@ func TestResourceControls_NoReadRouteExists(t *testing.T) {
 // pins the one refusal in this domain that comes from the CATALOG rather
 // than from Portainer, and that a model will meet by accident.
 //
-// The create payload's SubResourceIDs property becomes the wire name
-// "subResourceIdS", capital S, under the catalog-wide naming rule
-// internal/specnaming holds — the same rule that produces "tagIdS" in
-// endpoint_groups and endpoints. The natural spelling "subResourceIds" is
+// The create payload's SubResourceIDs property becomes the published wire
+// name "subResourceIdS", capital S. The natural spelling "subResourceIds" is
 // refused by this action's own schema, before any call is made, so
-// resource_controls.create's narrative gives the exact spelling. This is
-// what makes that sentence a tested promise rather than a guess: if the
-// naming rule ever changes, the published name changes with it and the
-// narrative silently starts lying.
+// resource_controls.create's narrative gives the exact spelling. This is what
+// makes that sentence a tested promise rather than a guess: if the naming
+// rule ever changes, the published name changes with it and the narrative
+// silently starts lying.
+//
+// The capital S comes from bodyJSONTag in cmd/gen_action_inputs/naming.go,
+// mirrored in internal/specdiff/naming.go — NOT from internal/specnaming,
+// which holds only the parameter/body collision rule and the
+// synthetic-operationId rule and contains neither function. splitWords
+// correctly emits ["Sub" "Resource" "ID" "s"]; goFieldName special-cases the
+// lone trailing "s" and bodyJSONTag does not, so title("s") renders "S".
+// internal/tools/resource_controls' package doc carries the full derivation
+// and the five affected fields across three domains.
 //
 // Both halves are asserted, and the pair is the point. The refusal alone
 // would still hold if the field vanished from the schema entirely; the
@@ -533,6 +541,58 @@ var resourceControlsSafeModeMutations = []struct {
 	}},
 }
 
+// assertNoControlGoverns fails when any resource control already governs
+// resourceID, and it has to establish that indirectly: there is no route that
+// reads a control back, so "does one exist for this resource?" cannot be
+// asked directly on any layer.
+//
+// What it uses instead is the 409 the create route answers when a resource
+// already holds a control ("A resource control is already associated to this
+// resource", measured on Community). A raw create against the id therefore
+// answers 409 if something is there and 200 if nothing is, and the 200 case
+// leaves a control of its own that is deleted again immediately.
+//
+// This exists for exactly one caller: the safe-mode create row, whose input
+// names resourceID+"-safe" rather than the volume's own id. A leak from that
+// row writes a control the volume witness cannot see, because a volume holds
+// at most one control and the leaked one hangs off a different resource id.
+// Without this the row was pinned only by total non-interception.
+//
+// Raw throughout, deliberately: proving that resource_controls.create did not
+// run must not itself go through resource_controls.create.
+func assertNoControlGoverns(t *testing.T, ed, resourceID, why string) {
+	t.Helper()
+	client := fixtureClient(t, ed)
+	ctx, cancel := context.WithTimeout(t.Context(), portainer.DefaultCallTimeout)
+	defer cancel()
+
+	administratorsOnly := true
+	resp, err := client.API.ResourceControlCreateWithResponse(ctx, apigen.ResourceControlCreateJSONRequestBody{
+		ResourceID:         resourceID,
+		Type:               apigen.PortainerResourceControlTypeVolumeResourceControl,
+		AdministratorsOnly: &administratorsOnly,
+	})
+	if err != nil {
+		t.Fatalf("probing whether a control governs %q: %v", resourceID, err)
+	}
+
+	switch resp.StatusCode() {
+	case http.StatusConflict:
+		t.Errorf("a resource control already governs %q: %s", resourceID, why)
+	case http.StatusOK:
+		// Nothing was there. Remove the probe's own control again, so this
+		// assertion leaves the estate exactly as it found it.
+		if resp.JSON200 == nil || resp.JSON200.Id == nil {
+			t.Fatalf("the probe create for %q answered 200 with no Id, so it cannot be cleaned up: %s", resourceID, resp.Body)
+		}
+		if err := deleteResourceControlRaw(ctx, ed, *resp.JSON200.Id); err != nil {
+			t.Fatalf("removing the probe control %d for %q: %v", *resp.JSON200.Id, resourceID, err)
+		}
+	default:
+		t.Fatalf("probing whether a control governs %q: HTTP %d: %s", resourceID, resp.StatusCode(), resp.Body)
+	}
+}
+
 // TestSafeMode_ResourceControls_MutatingActionsArePreviewedAndNothingChanges
 // proves tools.Execute intercepts every mutating action in this domain
 // before its handler runs: the answer is a preview naming the action and the
@@ -542,12 +602,20 @@ var resourceControlsSafeModeMutations = []struct {
 //
 // Every row's would-be effect is observable, deliberately:
 //
-//   - create names a resource id nothing controls, so a leak creates a
-//     control the volume's witness would not show but which would survive
-//     into the estate; the assertion that catches it is that the victim
-//     control is the ONLY one on this volume and is unchanged.
-//   - update asks for public true against a control that is
-//     administratorsOnly true and public false, so a leak flips both.
+//   - create names a resource id nothing controls, and that id is NOT the
+//     volume's own — it is resourceID+"-safe". So a leak here writes a
+//     control the volume's witness structurally cannot see: a volume carries
+//     at most one control, and the leaked one would hang off a different
+//     resource id entirely. An earlier revision of this comment claimed the
+//     witness caught it anyway, via an assertion that the victim control is
+//     the only one on the volume; no such assertion existed and none could,
+//     so the row was pinned only by total non-interception. That hole is now
+//     closed by assertNoControlGoverns below, which probes the leaked id
+//     directly.
+//   - update asks for public true against a control that is public false and
+//     administratorsOnly false — the flags Portainer gives an auto-created
+//     one (measured: {Public:false, AdministratorsOnly:false,
+//     UserAccesses:[{UserId:1,AccessLevel:1}]}) — so a leak flips Public.
 //   - delete targets that same real control, so a leak removes it and the
 //     volume comes back carrying none.
 //
@@ -565,10 +633,10 @@ func TestSafeMode_ResourceControls_MutatingActionsArePreviewedAndNothingChanges(
 				volumeName := uniqueName("rc-safe")
 				resourceID := createVolumeFixture(t, "CE", volumeName)
 
-				// The victim is the control Portainer auto-created with the
-				// volume, made administratorsOnly-false/public-false by
-				// construction — which is what the update row's "public
-				// true" has somewhere to move to.
+				// The victim is the control Portainer auto-created with
+				// the volume, which arrives public-false and
+				// administratorsOnly-false — which is what the update row's
+				// "public true" has somewhere to move to.
 				before := rawVolumeControl(t, "CE", volumeName)
 				if before == nil {
 					t.Fatalf("volume %q carries no resource control: every row here needs a victim to leave unchanged", volumeName)
@@ -627,6 +695,16 @@ func TestSafeMode_ResourceControls_MutatingActionsArePreviewedAndNothingChanges(
 						t.Errorf("control %d reads %s %v (present=%v), want %v (present=%v): safe mode let %s through",
 							controlID, field, got, gotOK, want, wantOK, mutation.action)
 					}
+				}
+
+				// And the leak the volume's own witness cannot see: a row
+				// whose input names a resource id of its own would, if it
+				// executed, leave a control hanging off that id rather than
+				// off this volume. Only the create row does, and this is the
+				// assertion that pins it.
+				if leaked, ok := input["resourceId"].(string); ok {
+					assertNoControlGoverns(t, "CE", leaked,
+						fmt.Sprintf("safe mode let %s through: it created one over the id its input named", mutation.action))
 				}
 			})
 		}

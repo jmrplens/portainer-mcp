@@ -237,6 +237,7 @@ func narrative(operationID string) toolutil.ActionNarrative {
 			Title: "Update an environment",
 			Description: "Changes an existing environment's name, url, group, tags, access policies or TLS settings and returns it. " +
 				"Every field is optional and an omitted field is left alone, so this is a partial update rather than a replacement. " +
+				"userAccessPolicies and teamAccessPolicies each map an identifier to a RoleId, and those role identifiers come from roles.list — read it first. Portainer does not validate RoleId on the sibling endpoint_groups route (measured on Business Edition: a policy naming RoleId 99, an id no role has, was accepted with 200 and stored verbatim); the same was NOT probed on this route, because doing so would have left an access policy on a shared estate environment. Treat a RoleId from roles.list as the only safe one either way. On Community Edition roles.list answers an empty array, roles being a Business Edition feature. " +
 				"status moves the environment between 1 (up) and 2 (down) by hand, which is not the same as the environment actually being reachable — Portainer's own health check overwrites it on the next snapshot. " +
 				"The kubernetes subtree carries the cluster's stored configuration and snapshots; sending it back unchanged is normal, and its four performanceMetrics values are refused rather than silently rounded if they cannot be sent exactly. " +
 				"changeWindow, deploymentOptions, edge and statusMessage require Business Edition and are absent from a Community catalog. " +
