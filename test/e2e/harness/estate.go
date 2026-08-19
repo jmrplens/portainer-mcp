@@ -457,7 +457,7 @@ func LoadEstate(path string) (Estate, error) {
 // harness's own scripts (a temp file k3d-up.sh wrote, for instance), not from
 // anything an adversary controls. It is a general-purpose read, unlike
 // LoadEstate, which additionally knows the shape of an Estate and refuses one
-// missing a Community Edition server.
+// that provisions no server at all.
 func ReadTrustedFile(path string) ([]byte, error) {
 	cleaned := filepath.Clean(path)
 	if err := rejectEscapingPath("trusted file", path, cleaned); err != nil {

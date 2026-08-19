@@ -438,16 +438,22 @@ func isOrphanEligible(name string, now time.Time) bool {
 	return now.Sub(time.Unix(0, nanos)) >= orphanMinAge
 }
 
-// composeLegs returns e's ordinary compose-provisioned legs (CE always, EE
-// when licensed) — Estate.Legs() filtered to drop the Kubernetes leg, when
-// present.
+// composeLegs returns e's ordinary compose-provisioned legs — Estate.Legs()
+// filtered to drop the Kubernetes leg, when present. Either compose leg can
+// be missing: EE without a licence, CE on the Kubernetes-only estate CI's
+// second job provisions.
+//
+// Its callers are the two that need "what was actually provisioned" and
+// nothing else: cleanupOrphans and newSessions. A TEST must range over
+// composeLegsUnderTest instead — see that function for why an empty or short
+// slice here is a silence a test cannot afford.
 //
 // The Kubernetes leg is excluded here, not in Estate.Legs() itself: it
 // deploys a self-signed certificate that this test process has no pinned CA
 // to verify (see buildSession's skipTLSVerify doc and
 // kubernetes_test.go), so a plain portainer.New(&config.Config{URL: ...})
-// against it — what both of this function's callers (cleanupOrphans and
-// newSessions) build — would fail on every call with a certificate error,
+// against it — what both of those callers build — would fail on every call
+// with a certificate error,
 // not the specific TLS handling that leg actually needs. This is a genuine
 // technical constraint on how this leg is reached, not a re-introduction of
 // the hardcoded-axis problem Estate.Legs() itself exists to close: fixing it
@@ -459,6 +465,75 @@ func composeLegs(e harness.Estate) []harness.Leg {
 	var legs []harness.Leg
 	for _, leg := range e.Legs() {
 		if leg.Name == "Kubernetes" {
+			continue
+		}
+		legs = append(legs, leg)
+	}
+	return legs
+}
+
+// composeLegsUnderTest is what a *test* ranges over, in place of composeLegs.
+//
+// composeLegs answers "which compose legs did this estate provision", which
+// is the right question for cleanupOrphans and newSessions and the wrong one
+// for a test: ranging directly over it means an absent leg contributes no
+// iteration, so no subtest is ever named, and the test lands in the pass
+// column having executed nothing. On a Kubernetes-only estate — the shape
+// CI's own Kubernetes job runs, see .github/workflows/e2e.yml — that slice is
+// EMPTY, and every test ranging over it reported `--- PASS ... (0.00s)` with
+// no subtest at all. Seventeen did, measured under `go test -json`, including
+// two with "Kubernetes" in their names.
+//
+// That is the same defect Sessions.Editions() was changed to close, in a
+// fourth place: a green run measuring a fraction of what it appears to. The
+// same fix applies — range over the axis the catalog declares, not over what
+// happened to be provisioned — with one addition this shape needs. A caller
+// here consumes harness.Leg values (leg.Server, leg.Name) outside the
+// subtests it goes on to create, often to look an environment id up once per
+// leg rather than once per surface, so handing it a leg with a zero Server
+// would only move the failure. Instead this returns exactly the provisioned
+// legs, and emits, for each declared edition the estate lacks, a subtest that
+// does nothing but skip with a named reason. The absence becomes a line in
+// the log instead of a silence, and the caller's own loop body is unchanged.
+//
+// The EE direction matters as much as the CE one and was already broken
+// before the CI split: a contributor with no licence got no EE subtest from
+// any of these tests, and nothing said so.
+func composeLegsUnderTest(t *testing.T) []harness.Leg {
+	t.Helper()
+	return composeLegAxis(composeLegs(estate), sessions.Editions(), func(ed string) {
+		t.Run(ed, func(t *testing.T) {
+			t.Skipf("no %s leg in this estate: %s", ed, provisioningHint(ed))
+		})
+	})
+}
+
+// composeLegAxis is the decision composeLegsUnderTest makes, with the
+// *testing.T taken out of it: given the legs actually provisioned and the
+// editions the catalog declares, it returns the provisioned ones in declared
+// order and calls reportAbsent once per declared edition that is missing.
+//
+// Split out, and taking reportAbsent as a parameter rather than calling
+// t.Run directly, for the reason cmd/gen_action_inputs' resolveActionName
+// takes its lookup as one: a test driven only through the real estate and
+// the real t.Run could not observe which editions were reported absent — the
+// testing package exposes no way to ask a parent which subtests it created —
+// so the emission would be pinned by nothing. Here a test passes a recording
+// closure and asserts exactly that. What remains untestable this way is the
+// one line that turns a reported name into a skipping subtest, which the live
+// half-estate runs measure instead, by counting tests that finish with no
+// descendants at all.
+func composeLegAxis(provisioned []harness.Leg, declared []string, reportAbsent func(edition string)) []harness.Leg {
+	byName := map[string]harness.Leg{}
+	for _, leg := range provisioned {
+		byName[leg.Name] = leg
+	}
+
+	var legs []harness.Leg
+	for _, ed := range declared {
+		leg, ok := byName[ed]
+		if !ok {
+			reportAbsent(ed)
 			continue
 		}
 		legs = append(legs, leg)
@@ -823,9 +898,80 @@ func TestCleanupOrphans_CallsEveryRegisteredSweeper(t *testing.T) {
 	}
 }
 
+// TestUnit_ComposeLegAxis_ReportsEveryDeclaredEditionItCannotReturn is the
+// guard on the fourth "derive the axis from what was provisioned" site.
+//
+// The three tables below are the three shapes a real estate takes. The middle
+// one is the one that was silently broken for as long as this suite has
+// existed: a contributor with no licence got no EE subtest out of any of the
+// twenty-two tests that range over this, and nothing said so. The last is the
+// one CI's Kubernetes job creates, where the slice is empty and the loop body
+// never runs at all — measured under `go test -json`: seventeen tests
+// reported PASS in 0.00s with zero descendants, two of them with "Kubernetes"
+// in their names, in the Kubernetes job's own log.
+//
+// reportAbsent is asserted on directly, not merely "len(returned) is right":
+// an implementation that returned the right legs and reported nothing would
+// satisfy every count here and leave the absence invisible again, which is
+// the entire defect.
+func TestUnit_ComposeLegAxis_ReportsEveryDeclaredEditionItCannotReturn(t *testing.T) {
+	t.Parallel()
+
+	ce := harness.Leg{Name: "CE", Server: harness.Server{BaseURL: "http://ce"}}
+	ee := harness.Leg{Name: "EE", Server: harness.Server{BaseURL: "http://ee"}}
+	declared := []string{"CE", "EE"}
+
+	tests := []struct {
+		name        string
+		provisioned []harness.Leg
+		wantLegs    []string
+		wantAbsent  []string
+	}{
+		{
+			name:        "the full compose estate: nothing to report",
+			provisioned: []harness.Leg{ce, ee},
+			wantLegs:    []string{"CE", "EE"},
+		},
+		{
+			name:        "no licence: the EE half must be named, not dropped",
+			provisioned: []harness.Leg{ce},
+			wantLegs:    []string{"CE"},
+			wantAbsent:  []string{"EE"},
+		},
+		{
+			name:        "CI's Kubernetes job: no compose leg at all",
+			provisioned: nil,
+			wantAbsent:  []string{"CE", "EE"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var absent []string
+			got := composeLegAxis(tc.provisioned, declared, func(ed string) {
+				absent = append(absent, ed)
+			})
+
+			var names []string
+			for _, leg := range got {
+				names = append(names, leg.Name)
+			}
+			if !reflect.DeepEqual(names, tc.wantLegs) {
+				t.Errorf("composeLegAxis() returned legs %v, want %v", names, tc.wantLegs)
+			}
+			if !reflect.DeepEqual(absent, tc.wantAbsent) {
+				t.Errorf("composeLegAxis() reported absent %v, want %v: an edition it cannot return "+
+					"and does not report is a subtest that never exists, and a test that passes having "+
+					"run nothing", absent, tc.wantAbsent)
+			}
+		})
+	}
+}
+
 // TestComposeLegs_ExcludesKubernetes proves composeLegs' one deliberate
 // deviation from Estate.Legs(): a fully provisioned estate's Kubernetes leg
-// must not appear, because neither of composeLegs' callers can reach it
+// must not appear, because neither of its two non-test callers can reach it
 // (self-signed certificate, no pinned CA in this process — see composeLegs'
 // own doc), while both compose legs must.
 func TestComposeLegs_ExcludesKubernetes(t *testing.T) {

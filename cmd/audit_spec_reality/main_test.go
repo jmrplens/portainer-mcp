@@ -221,3 +221,66 @@ func TestUnit_ReadFileIn_RefusesToEscapeDir(t *testing.T) {
 		t.Fatal("readFileIn() = nil error, want it to refuse a name that escapes dir")
 	}
 }
+
+// kubernetesOnlyEstateJSON is estateJSON's counterpart for the shape CI's
+// Kubernetes job provisions: a legitimately loadable estate (harness.
+// LoadEstate accepts it — see TestUnit_LoadEstate_AcceptsAKubernetesOnlyEstate)
+// that carries no compose leg for this audit to probe at all. The base URL
+// points nowhere reachable on purpose: nothing here should ever dial it,
+// because this tool deliberately does not audit the Kubernetes leg.
+func kubernetesOnlyEstateJSON(t *testing.T) string {
+	t.Helper()
+	doc := map[string]any{
+		"kubernetes": map[string]any{
+			"edition": "Kubernetes", "base_url": "https://127.0.0.1:1",
+			"credentials": map[string]any{"APIKey": "k8s-key"},
+		},
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal estate fixture: %v", err)
+	}
+	return string(data)
+}
+
+// TestUnit_Run_KubernetesOnlyEstate_SaysSoAndRefusesToReport pins both
+// guards this audit gained when a Kubernetes-only estate became a legitimate
+// shape (CI provisions the compose legs and the Kubernetes leg in two
+// separate jobs — see .github/workflows/e2e.yml).
+//
+// Before them, run() probed the Community Edition leg unconditionally and
+// failed with "audit CE leg: ..." — a connection error naming the wrong
+// cause, for a leg that was never provisioned rather than one that is broken.
+//
+// Two properties, deliberately asserted together because either alone is
+// satisfied by the wrong implementation: the report must SAY the Community
+// Edition leg was not probed, exactly as it already does for an absent
+// Business Edition leg; and run() must RETURN AN ERROR rather than emit a
+// report of nothing, because this audit exists to compare a live server
+// against the vendored documents and "there was no server" is a reason it
+// could not run. A version that only printed the notice would produce a
+// clean-looking, entirely vacuous report; one that only errored would leave
+// the reader guessing why.
+func TestUnit_Run_KubernetesOnlyEstate_SaysSoAndRefusesToReport(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFixture(t, dir, "estate.json", kubernetesOnlyEstateJSON(t))
+	writeFixture(t, dir, "ce-1.0.0.json", oneOpSpec)
+	writeFixture(t, dir, "ee-1.0.0.json", oneOpSpec)
+
+	var out strings.Builder
+	err := run(&out, filepath.Join(dir, "estate.json"), dir, "1.0.0", 2*time.Second)
+	if err == nil {
+		t.Fatalf("run() error = nil on an estate with no compose leg, want a refusal rather than a report of nothing\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "no compose leg to probe") {
+		t.Errorf("run() error = %q, want it to name the absent legs as the reason", err)
+	}
+	if !strings.Contains(out.String(), "no Community Edition leg in this estate") {
+		t.Errorf("run() output = %q, want it to say plainly that the CE leg was not probed", out.String())
+	}
+	if strings.Contains(out.String(), "CE leg: 1 documented operation") {
+		t.Errorf("run() output = %q, want no CE audit section: this estate carries no Community Edition server", out.String())
+	}
+}

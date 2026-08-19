@@ -224,9 +224,12 @@ func assertActionFails(t *testing.T, s *mcp.ClientSession, surface, action strin
 // (docs/domain-wave-checklist.md's Step 5: "a name it reports as
 // unreferenced is a real gap in this step, not a tool defect").
 //
-// It loops over composeLegs(estate) rather than a hardcoded edition string,
-// per that same step's own instruction not to hardcode a
-// []string{"CE","EE"} literal: docker.dashboard is declared edition.CE
+// It loops over composeLegsUnderTest(t) rather than a hardcoded edition
+// string, per that same step's own instruction not to hardcode a
+// []string{"CE","EE"} literal -- and over that rather than composeLegs
+// directly, so an edition this estate does not provision skips by name
+// instead of contributing no iteration at all (see that function's doc):
+// docker.dashboard is declared edition.CE
 // (available on both editions -- edition.Includes), and both the Community
 // and, when licensed, Business Edition legs proxy the SAME underlying dind
 // daemon through their own "docker" environment, so both must answer it.
@@ -239,7 +242,7 @@ func assertActionFails(t *testing.T, s *mcp.ClientSession, surface, action strin
 // signal that the response shape regressed -- not an artefact of an empty
 // environment this assertion could mistake for a bug.
 func TestDocker_Dashboard_ReturnsRealCounters(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID, ok := leg.Server.Environment(harness.EnvironmentDocker)
 		if !ok {
 			t.Fatalf("%s: estate has no %q environment", leg.Name, harness.EnvironmentDocker)
@@ -269,7 +272,7 @@ func TestDocker_Dashboard_ReturnsRealCounters(t *testing.T) {
 // least one real image with a known tag exists on this environment, on
 // every host this runs on, whether or not HasSwarm() is true here.
 func TestDocker_ImagesList_ReturnsRealImages(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID, ok := leg.Server.Environment(harness.EnvironmentDocker)
 		if !ok {
 			t.Fatalf("%s: estate has no %q environment", leg.Name, harness.EnvironmentDocker)
@@ -349,7 +352,7 @@ func TestDocker_ContainerGpusInspect_AgainstARealContainer(t *testing.T) {
 	}
 	containerID := createDockerContainer(ctx, t, srv, envID)
 
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		legEnvID, ok := leg.Server.Environment(harness.EnvironmentDocker)
 		if !ok {
 			t.Fatalf("%s: estate has no %q environment", leg.Name, harness.EnvironmentDocker)

@@ -368,7 +368,7 @@ func recordedDockerHost(t *testing.T) string {
 // separate servers with their own template database, so each (leg, surface)
 // pair creates and destroys its own template.
 func TestCustomTemplates_InlineTemplateLifecycle_CreatesReadsUpdatesAndDeletes(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -488,7 +488,7 @@ func customTemplateListed(listed []map[string]any, id int, title string) bool {
 // quietly went away — and if Portainer ever starts accepting the comma
 // form, that subtest fails and §6.7 needs revisiting.
 func TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		composeTitle := uniqueName("template-list-compose")
 		swarmTitle := uniqueName("template-list-swarm")
 		composeID := createCustomTemplateFixtureOfType(t, leg.Name, composeTitle, 2)
@@ -562,7 +562,7 @@ func TestCustomTemplates_List_ReturnsSeveralStackTypesInOneCall(t *testing.T) {
 // upgrade — at which point the constant would stop being merely mechanical
 // and would need a caller-supplied value instead.
 func TestCustomTemplates_CreateFile_StoresTheUploadedStackFile(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -615,7 +615,7 @@ func TestCustomTemplates_CreateFile_StoresTheUploadedStackFile(t *testing.T) {
 // anything, or that cloned some other repository, fails it — where an
 // assertion on the response's own Id or Title would not.
 func TestCustomTemplates_CreateRepository_ClonesTheEstatesGitRepository(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -671,7 +671,7 @@ func TestCustomTemplates_CreateRepository_ClonesTheEstatesGitRepository(t *testi
 // agreeing, which is the thing an allow-listed schema divergence has to keep
 // being checked for.
 func TestCustomTemplates_CreateRepository_AcceptsAKubernetesTypeTemplate(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -711,7 +711,7 @@ func TestCustomTemplates_CreateRepository_AcceptsAKubernetesTypeTemplate(t *test
 // raw read is what proves the tool-surface absence is redaction rather than
 // a server that simply had nothing to return.
 func TestCustomTemplates_CreateRepository_DropsTheStoredGitUsername(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				t.Parallel()
@@ -807,7 +807,7 @@ func TestCustomTemplates_CreateRepository_DropsTheStoredGitUsername(t *testing.T
 // already replaced. The repository is separate from the read-only one every
 // other test clones precisely so these pushes cannot disturb them.
 func TestCustomTemplates_GitFetch_ReplacesTheStoredFileWithTheRemotesNewCommit(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
 				session := sessions.For(t, surface, leg.Name)

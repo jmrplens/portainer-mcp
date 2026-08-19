@@ -583,7 +583,7 @@ func stackListed(listed []map[string]any, id int) bool {
 // that removed the record and orphaned the containers, or one that stopped
 // the containers and kept the record.
 func TestStacks_ComposeStackLifecycle_CreatesReadsUpdatesStopsStartsAndDeletes(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
@@ -700,7 +700,7 @@ func TestStacks_SwarmStackFromInlineContent_DeploysARealSwarmService(t *testing.
 	if !estate.HasSwarm() {
 		t.Skip("no confirmed swarm leg on this estate's docker daemon: run `make e2e-up` on a host where `docker swarm init` succeeds")
 	}
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		swarmID := swarmClusterID(t, leg.Server, envID)
 		for _, surface := range surfaceNames {
@@ -760,7 +760,7 @@ func TestStacks_CreateFromUploadedFile_StoresTheUploadedStackFile(t *testing.T) 
 	if !estate.HasSwarm() {
 		t.Skip("no confirmed swarm leg on this estate's docker daemon: stacks.create_docker_swarm_file needs one")
 	}
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		swarmID := swarmClusterID(t, leg.Server, envID)
 		for _, surface := range surfaceNames {
@@ -847,7 +847,7 @@ func TestStacks_CreateFromGitRepository_ClonesTheEstatesGitRepository(t *testing
 	if !estate.HasSwarm() {
 		t.Skip("no confirmed swarm leg on this estate's docker daemon: stacks.create_docker_swarm_repository needs one")
 	}
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		swarmID := swarmClusterID(t, leg.Server, envID)
 		for _, surface := range surfaceNames {
@@ -937,7 +937,7 @@ func assertClonedFromTheFixture(t *testing.T, created map[string]any, action str
 // read is what proves the tool-surface absence is redaction rather than a
 // server that simply had nothing to return.
 func TestStacks_CreateFromGitRepository_DropsTheStoredGitUsername(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
@@ -1020,7 +1020,7 @@ func TestStacks_CreateFromGitRepository_DropsTheStoredGitUsername(t *testing.T) 
 // stored stack file is byte-identical to what it was before the call. A
 // handler that quietly redeployed would still satisfy the first.
 func TestStacks_UpdateGit_ChangesTheStoredGitConfigurationWithoutRedeploying(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
@@ -1087,7 +1087,7 @@ func TestStacks_UpdateGit_ChangesTheStoredGitConfigurationWithoutRedeploying(t *
 // uses, and Go runs sequential top-level tests one at a time, so the two
 // never overlap either.
 func TestStacks_GitRedeploy_DeploysTheCommitPushedSinceTheStackWasCreated(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
@@ -1164,7 +1164,7 @@ func TestStacks_GitRedeploy_DeploysTheCommitPushedSinceTheStackWasCreated(t *tes
 // Edition leg has no second Docker environment of its own, and an action
 // available on both editions must be exercised on both.
 func TestStacks_Migrate_MovesTheStackToTheBodyEndpointNotTheQueryOne(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		sourceEnv := dockerEnvID(t, leg)
 		// One target environment per leg, shared by the three surfaces,
 		// rather than one per surface. Each surface migrates its own stack
@@ -1253,7 +1253,7 @@ func TestStacks_Migrate_MovesTheStackToTheBodyEndpointNotTheQueryOne(t *testing.
 // "0" — so asserting on it proves the integer really travelled rather than
 // being dropped by a type mismatch nothing else in this domain would catch.
 func TestStacks_Associate_ReparentsAStackOrphanedByARemovedEnvironment(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		homeEnv := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			// Deliberately NOT parallel across surfaces, unlike the rest of
@@ -1338,7 +1338,7 @@ func TestStacks_List_FiltersComposeByEnvironmentAndSwarmBySwarmIdSeparately(t *t
 	if !estate.HasSwarm() {
 		t.Skip("no confirmed swarm leg on this estate's docker daemon: this test needs a real swarm stack to tell the two filters apart")
 	}
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		swarmID := swarmClusterID(t, leg.Server, envID)
 
@@ -1468,7 +1468,7 @@ func createSwarmStackFixture(t *testing.T, ed string, envID int, swarmID, name s
 // stays pinned where it can still be observed: the unit test on the query
 // string this handler emits, and §3.9's recorded exchange.
 func TestStacks_DeleteKubernetesByName_SucceedsWithTheUndocumentedNamespaceParameter(t *testing.T) {
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			t.Run(leg.Name+"/"+surface, func(t *testing.T) {
@@ -1551,7 +1551,7 @@ func TestStacks_KubernetesCreates_AreRefusedByADockerEnvironment(t *testing.T) {
 		},
 	}
 
-	for _, leg := range composeLegs(estate) {
+	for _, leg := range composeLegsUnderTest(t) {
 		envID := dockerEnvID(t, leg)
 		for _, surface := range surfaceNames {
 			for _, tc := range cases {

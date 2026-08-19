@@ -43,6 +43,7 @@ type workflowFile struct {
 	} `yaml:"concurrency"`
 	Jobs map[string]struct {
 		Needs yaml.Node `yaml:"needs"` // a scalar or a sequence, per GitHub's schema
+		If    string    `yaml:"if"`
 		Steps []struct {
 			Name string `yaml:"name"`
 			If   string `yaml:"if"`
@@ -154,6 +155,21 @@ func TestUnit_E2EWorkflow_KubernetesJobWaitsForTheComposeJob(t *testing.T) {
 		t.Errorf("the kubernetes job needs %v, want it to include %q: without that ordering both jobs "+
 			"activate the same single-instance Business Edition licence at the same time, and "+
 			"test/e2e/.licence.lock cannot see across two runners", needs, "compose")
+	}
+
+	// And no job-level `if:`. The obvious "improvement" on the ordering above
+	// is `if: always()`, so a red compose job still lets the Kubernetes leg be
+	// tested. It is not safe: a compose job can fail *during* its own
+	// teardown — one of the paths its `|| true` exists for — and starting a
+	// second estate against a licence that may still be attached to the first
+	// is the collision the ordering exists to prevent. The comment in the
+	// workflow says so; this is what stops the comment from being the only
+	// thing that does. Every other claim in that block is pinned; this one was
+	// not.
+	if k8s.If != "" {
+		t.Errorf("the kubernetes job carries `if: %s`, want none: a compose job that failed may have "+
+			"failed inside its own teardown, and this job must not bring up a second estate against a "+
+			"licence that could still be attached", k8s.If)
 	}
 }
 
